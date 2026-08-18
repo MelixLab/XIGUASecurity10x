@@ -51,6 +51,10 @@ mod diagnostic_log;
 // 文件防护模块
 mod file_protection;
 
+// 网络防护模块（纯用户态系统代理拦截，独立 netproxy 子进程）
+#[cfg(not(feature = "ms_store"))]
+mod network_protection;
+
 // R3 勒索软件防护模块
 mod ransomware_protection;
 mod popup_interceptor;
@@ -961,7 +965,7 @@ fn force_secure_desktop_fullscreen(win: &tauri::WebviewWindow) {
 /// ShowWindow 可跨线程直接操作 HWND，立即生效，主线程多忙都不受影响——
 /// 这才真正对齐 AVMain 的 TaskDialog（当前线程直接操作，不依赖任何事件循环）。
 #[cfg(windows)]
-fn win32_hide_window(win: &tauri::WebviewWindow) {
+pub(crate) fn win32_hide_window(win: &tauri::WebviewWindow) {
     let hwnd_raw = match win.hwnd() {
         Ok(h) => h.0 as *mut std::ffi::c_void,
         Err(e) => {
@@ -989,7 +993,7 @@ fn win32_hide_window(win: &tauri::WebviewWindow) {
 }
 
 #[cfg(not(windows))]
-fn win32_hide_window(win: &tauri::WebviewWindow) {
+pub(crate) fn win32_hide_window(win: &tauri::WebviewWindow) {
     let _ = win.hide();
 }
 
@@ -3592,7 +3596,7 @@ async fn send_av_driver_decision(
 /// - logical_w / logical_h: 窗口逻辑尺寸（物理像素自动按 DPI 缩放）
 /// - bottom_right: true=右下角定位, false=屏幕居中定位
 #[cfg(windows)]
-fn win32_show_window(
+pub(crate) fn win32_show_window(
     win: &tauri::WebviewWindow,
     logical_w: f64,
     logical_h: f64,
@@ -3688,7 +3692,7 @@ fn win32_show_window(
 }
 
 #[cfg(not(windows))]
-fn win32_show_window(win: &tauri::WebviewWindow, _logical_w: f64, _logical_h: f64, _bottom_right: bool) {
+pub(crate) fn win32_show_window(win: &tauri::WebviewWindow, _logical_w: f64, _logical_h: f64, _bottom_right: bool) {
     let _ = win.show();
     let _ = win.set_focus();
 }
@@ -10202,6 +10206,10 @@ fn cleanup_before_exit(app: &tauri::AppHandle) {
         // 2. 停止 EDR 监控
         stop_edr_monitoring();
 
+        // 2b. 停止网络防护（还原系统代理；独立线程执行，不阻塞退出；子进程也有看门狗兜底）
+        #[cfg(not(feature = "ms_store"))]
+        network_protection::stop_on_exit();
+
         // 3. 停止 WMI 进程监控
         let _ = stop_process_watcher();
 
@@ -11063,6 +11071,14 @@ pub fn run() {
             file_protection::get_file_protection_events,
             file_protection::start_file_protection,
             file_protection::stop_file_protection,
+            #[cfg(not(feature = "ms_store"))]
+            network_protection::set_network_protection_enabled,
+            #[cfg(not(feature = "ms_store"))]
+            network_protection::get_network_protection_state,
+            #[cfg(not(feature = "ms_store"))]
+            network_protection::get_network_protection_events,
+            #[cfg(not(feature = "ms_store"))]
+            network_protection::trigger_network_block_test,
             ransomware_protection::set_ransomware_protection_enabled,
             ransomware_protection::get_ransomware_protection_state,
             ransomware_protection::estimate_ransomware_backup_size,
@@ -11145,6 +11161,12 @@ pub fn run() {
             on_tray_menu_event(app, &event);
         })
         .setup(|app| {
+            // 网络防护：启动时崩溃恢复 + 上次状态自动恢复
+            #[cfg(not(feature = "ms_store"))]
+            {
+                network_protection::init_on_startup(app.handle().clone());
+            }
+
             // AVModel 看门狗线程在后台启动，监控 AVModel 进程
             // AVModel 本身的启动在 set_driver_protection(true) 中，先于 Agent 启动
             #[cfg(not(feature = "ms_store"))]

@@ -1737,6 +1737,103 @@ class ProtectionTypeManager {
   }
 }
 
+// Network Protection Manager - 网络防护管理器
+// 后端通过独立 netproxy 进程设置系统代理并拦截恶意域名（纯用户态，无需驱动）。
+// 前端只负责开关状态与事件监听；开关状态以主程序（get_network_protection_state）为准。
+class NetworkProtectionManager {
+  private enabled: boolean = false;
+  private rulesCount: number = 0;
+  private blockedTotal: number = 0;
+  private eventUnlisten: (() => void) | null = null;
+  private onStateChangeCallback: ((enabled: boolean) => void) | null = null;
+
+  constructor() {
+    this.loadState();
+  }
+
+  private async loadState(): Promise<void> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const state: any = await invoke('get_network_protection_state');
+      this.enabled = !!state?.enabled;
+      this.rulesCount = state?.rules_count || 0;
+      this.blockedTotal = state?.blocked_total || 0;
+      if (this.enabled) {
+        this.startListening();
+      }
+      console.log('[NetworkProtection] State loaded:', state);
+    } catch (e) {
+      console.error('[NetworkProtection] Failed to load state:', e);
+      this.enabled = false;
+    }
+  }
+
+  // 返回最终生效状态；失败抛出异常（由调用方回滚 UI 并提示）
+  async setEnabled(enabled: boolean): Promise<boolean> {
+    const { invoke } = await import('@tauri-apps/api/core');
+    const state: any = await invoke('set_network_protection_enabled', { enabled });
+    this.enabled = !!state?.enabled;
+    this.rulesCount = state?.rules_count || 0;
+    this.blockedTotal = state?.blocked_total || 0;
+    if (this.enabled) {
+      this.startListening();
+    } else {
+      this.stopListening();
+    }
+    if (this.onStateChangeCallback) {
+      this.onStateChangeCallback(this.enabled);
+    }
+    return this.enabled;
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  getRulesCount(): number {
+    return this.rulesCount;
+  }
+
+  getBlockedTotal(): number {
+    return this.blockedTotal;
+  }
+
+  setOnStateChange(callback: (enabled: boolean) => void): void {
+    this.onStateChangeCallback = callback;
+  }
+
+  private async startListening(): Promise<void> {
+    if (this.eventUnlisten) return;
+    try {
+      const { listen } = await import('@tauri-apps/api/event');
+      this.eventUnlisten = await listen('network-protection-event', (event) => {
+        const payload: any = event.payload;
+        this.blockedTotal++;
+        console.log('[NetworkProtection] Blocked:', payload?.domain, payload?.category, 'by', payload?.process);
+      });
+    } catch (e) {
+      console.error('[NetworkProtection] Failed to start event listener:', e);
+    }
+  }
+
+  private stopListening(): void {
+    if (this.eventUnlisten) {
+      try { this.eventUnlisten(); } catch (e) { /* ignore */ }
+      this.eventUnlisten = null;
+    }
+  }
+
+  // 测试命令：模拟一次拦截，验证弹窗/日志链路（开发调试用）
+  async triggerTest(domain: string): Promise<void> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('trigger_network_block_test', { domain });
+    } catch (e) {
+      console.error('[NetworkProtection] Test trigger failed:', e);
+    }
+  }
+}
+
 // 防护配置接口
 interface ProtectionConfig {
   boot?: boolean;
@@ -3135,6 +3232,7 @@ class App {
   private driverLaunchHintManager: DriverLaunchHintManager;
   private basicProtectionManager: BasicProtectionManager;
   private fileProtectionManager: FileProtectionManager;
+  private networkProtectionManager: NetworkProtectionManager;
   private auxiliaryCloudScanManager: AuxiliaryCloudScanManager;
   private scanSensitivity: string = 'high';
   public puaProtectionEnabled: boolean = false;
@@ -3268,6 +3366,7 @@ class App {
     this.driverLaunchHintManager = new DriverLaunchHintManager();
     this.basicProtectionManager = new BasicProtectionManager();
     this.fileProtectionManager = new FileProtectionManager();
+    this.networkProtectionManager = new NetworkProtectionManager();
     this.auxiliaryCloudScanManager = new AuxiliaryCloudScanManager();
     this.silentModeManager = new SilentModeManager();
     this.notificationModeManager = new NotificationModeManager();
@@ -9953,6 +10052,15 @@ class App {
               </div>
               <input type="checkbox" class="setting-checkbox" id="file-protection-checkbox" ${this.fileProtectionManager.isEnabled() ? 'checked' : ''}>
             </div>
+
+            <!-- 网络防护设置（纯用户态系统代理，无需驱动） -->
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">网络防护</div>
+                <div class="setting-desc">通过本地系统代理拦截恶意域名连接（钓鱼/诈骗/恶意软件），纯用户态实现无需驱动；命中后右下角提示并记录到时间线</div>
+              </div>
+              <input type="checkbox" class="setting-checkbox" id="network-protection-checkbox" ${this.networkProtectionManager.isEnabled() ? 'checked' : ''}>
+            </div>
             `}
 
             ${this.isMsStore ? '' : `
@@ -12275,6 +12383,36 @@ class App {
       } catch (err) {
         console.error('[Settings] Failed to toggle file protection:', err);
         checkbox.checked = !checkbox.checked;
+      }
+    });
+
+    // 网络防护开关事件（纯用户态系统代理拦截恶意域名）
+    document.getElementById('network-protection-checkbox')?.addEventListener('change', async (e) => {
+      const checkbox = e.target as HTMLInputElement;
+      // 操作期间禁用开关，避免重复点击
+      checkbox.disabled = true;
+      try {
+        if (!checkbox.checked) {
+          const confirmed = await this.requestSecureConfirm(
+            '关闭网络防护',
+            '您确定要关闭网络防护吗？关闭后系统代理将被还原，恶意域名连接将不再被拦截。',
+            'disable_network_protection'
+          );
+          if (!confirmed) {
+            checkbox.checked = true; // 回滚开关状态
+            checkbox.disabled = false;
+            return;
+          }
+        }
+        const applied = await this.networkProtectionManager.setEnabled(checkbox.checked);
+        checkbox.checked = applied; // 以后端实际生效状态为准
+        this.addLog(applied ? 'INFO' : 'WARNING', applied ? '网络防护已启用' : '网络防护已关闭');
+      } catch (err) {
+        console.error('[Settings] Failed to toggle network protection:', err);
+        checkbox.checked = !checkbox.checked;
+        alert('网络防护切换失败：' + ((err as any)?.toString?.()?.split('\n')[0] || '请稍后重试'));
+      } finally {
+        checkbox.disabled = false;
       }
     });
 

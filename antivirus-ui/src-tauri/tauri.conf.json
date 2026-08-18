@@ -126,6 +126,7 @@
       "../sandbox-progress.html": "sandbox-progress.html",
       "../secure-confirm.html": "secure-confirm.html",
       "../../rulers": "rulers",
+      "../../netproxy/target/release/netproxy.exe": "Driver/netproxy.exe",
       "../../Sandboxie-Plus-x64-v1.18.1.exe": "Sandboxie-Plus-x64-v1.18.1.exe"
     },
     "windows": {
