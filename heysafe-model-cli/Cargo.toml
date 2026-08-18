@@ -1,0 +1,25 @@
+[package]
+name = "heysafe-model-cli"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.80"
+description = "HeySafe 本地 ML 模型独立调用器：给 PE 打恶意概率/家族/判决"
+
+[[bin]]
+name = "model-cli"
+path = "src/main.rs"
+
+[dependencies]
+# PE 解析（特征提取用）。版本与 HeySafe 引擎一致，保证特征 bit 级兼容。
+goblin = "0.9"
+# 字符串特征的正则集。
+regex = "1"
+# 读取 xz 压缩模型（纯 Rust，无 C 依赖）。
+lzma-rs = "0.3"
+
+# 性能档：单文件推理含特征提取 ~250ms，批量按核心数并行。
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "unwind"   # main.rs 用 catch_unwind 兜畸形 PE，必须 unwind 而非 abort

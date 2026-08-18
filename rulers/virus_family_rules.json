@@ -1,0 +1,883 @@
+{
+  "version": "2.1",
+  "description": "统一恶意软件检测规则库 v2.1 - 行为类别 + 静态签名 + 启发式规则",
+  "behavior_categories": [
+    {
+      "name": "MBR/Disk",
+      "high": ["PhysicalDrive", "DeviceIoControl", "NtRaiseHardError"],
+      "medium": ["WriteFile", "ReadFile"]
+    },
+    {
+      "name": "Ransomware/Crypto",
+      "high": ["CryptEncrypt", "CryptDecrypt", "CryptGenKey", "CryptReleaseContext"],
+      "medium": ["CryptAcquireContext", "CryptCreateHash", "CryptHashData"]
+    },
+    {
+      "name": "RAT/Network",
+      "high": ["socket", "connect", "listen", "bind", "accept", "recv", "send", "WSASocket", "WSAStartup"],
+      "medium": ["InternetOpen", "InternetConnect", "HttpSendRequest", "URLDownloadToFile", "gethostbyname", "sendto", "recvfrom"]
+    },
+    {
+      "name": "Keylogger",
+      "high": ["SetWindowsHookEx", "GetAsyncKeyState"],
+      "medium": ["GetForegroundWindow", "GetKeyboardState", "GetKeyState"]
+    },
+    {
+      "name": "Persistence",
+      "high": ["CurrentVersion\\Run", "CreateService"],
+      "medium": ["RegCreateKey", "RegSetValue", "RegOpenKey"]
+    },
+    {
+      "name": "AntiDebug",
+      "high": ["IsDebuggerPresent", "CheckRemoteDebuggerPresent", "NtQueryInformationProcess", "ZwQueryInformationProcess"],
+      "medium": ["VirtualProtect", "WriteProcessMemory", "ReadProcessMemory"]
+    },
+    {
+      "name": "ProcessManip",
+      "high": ["CreateRemoteThread", "Toolhelp32Snapshot"],
+      "medium": ["OpenProcess", "TerminateProcess", "Process32Next", "Module32Next"]
+    },
+    {
+      "name": "Dropper",
+      "high": ["FindResource", "SizeofResource", "LoadResource", "LockResource"],
+      "medium": ["CreateFile", "WriteFile", "MoveFile", "CopyFile", "DeleteFile"]
+    },
+    {
+      "name": "UAC/Privilege",
+      "high": ["AdjustTokenPrivileges", "LookupPrivilegeValue", "SeShutdownPrivilege", "SeDebugPrivilege", "SeTakeOwnershipPrivilege"],
+      "medium": ["ZwQuerySystemInformation", "NtQuerySystemInformation"]
+    },
+    {
+      "name": "Wallpaper/Lock",
+      "high": ["BlockInput", "LockWorkStation"],
+      "medium": ["SystemParametersInfo"]
+    },
+    {
+      "name": "Registry",
+      "high": [],
+      "medium": ["RegDeleteKey", "RegEnumKey", "RegQueryValue"]
+    },
+    {
+      "name": "FileScan",
+      "high": [],
+      "medium": ["FindFirstFile", "FindNextFile", "GetFileAttributes", "SetFileAttributes"]
+    },
+    {
+      "name": "Injector",
+      "high": ["NtUnmapViewOfSection", "NtCreateThreadEx", "QueueUserAPC"],
+      "medium": ["VirtualAllocEx", "SetThreadContext", "ResumeThread"]
+    },
+    {
+      "name": "Cryptominer",
+      "high": [],
+      "medium": ["CryptEnumProviders", "CryptGetProvParam", "BCryptOpenAlgorithmProvider", "BCryptGenerateSymmetricKey"]
+    }
+  ],
+  "signatures": [
+    {
+      "name": "Trojan/AVKill",
+      "malware_type": "Trojan",
+      "family": "AVKill",
+      "behavior_req": {},
+      "unique_strings": ["msmpeng.exe", "mssense.exe", "senseir.exe", "wsc_proxy"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "PUA:Win32/PyInstaller",
+      "malware_type": "PUA",
+      "family": "PyInstaller",
+      "behavior_req": {},
+      "unique_strings": ["PYINSTALLER", "MEIPASS", "_MEIPASS2_"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/REMCOS",
+      "malware_type": "Trojan",
+      "family": "RemcosRAT",
+      "behavior_req": {"RAT/Network": 3},
+      "unique_strings": ["ornithodelph", "Remcos"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Worm/Ramnit",
+      "malware_type": "Worm",
+      "family": "Ramnit",
+      "behavior_req": {},
+      "unique_strings": ["DropFileName", "Scripting.FileSystemObject", "Ramnit"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/VIDAR",
+      "malware_type": "Trojan",
+      "family": "Vidar",
+      "behavior_req": {},
+      "unique_strings": ["VIDAR", "RuntimeBroker.exe", "VidarStealer"],
+      "packer": null,
+      "compiler": ".NET"
+    },
+    {
+      "name": "Trojan/Spark",
+      "malware_type": "Trojan",
+      "family": "Spark",
+      "behavior_req": {"MBR/Disk": 1, "Persistence": 1},
+      "unique_strings": ["SparkClient", "SparkRAT"],
+      "packer": null,
+      "compiler": ".NET"
+    },
+    {
+      "name": "Trojan/StoneCutter",
+      "malware_type": "Trojan",
+      "family": "StoneCutter",
+      "behavior_req": {"MBR/Disk": 1, "Persistence": 1},
+      "unique_strings": ["StoneCutter", "space.bilibili.com", "ixigua.com"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/RaptorVirus",
+      "malware_type": "Trojan",
+      "family": "RaptorVirus",
+      "behavior_req": {"MBR/Disk": 2, "AntiDebug": 1, "ProcessManip": 2, "UAC/Privilege": 2, "Persistence": 1},
+      "unique_strings": ["KillMicropoint", "RaptorVirus", "EndTask"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/SmileGhost",
+      "malware_type": "Trojan",
+      "family": "SmileGhost",
+      "behavior_req": {"MBR/Disk": 1, "Persistence": 1, "Keylogger": 1},
+      "unique_strings": ["www.eyuyan.com", "SmileGhost"],
+      "packer": null,
+      "compiler": "易语言"
+    },
+    {
+      "name": "Trojan/RogueInstaller",
+      "malware_type": "Trojan",
+      "family": "RogueInstaller",
+      "behavior_req": {"RAT/Network": 1, "Keylogger": 1, "Persistence": 1},
+      "unique_strings": ["Rogue_Installer"],
+      "packer": null,
+      "compiler": ".NET"
+    },
+    {
+      "name": "Trojan/Weidows",
+      "malware_type": "Trojan",
+      "family": "Weidows",
+      "behavior_req": {},
+      "unique_strings": ["xiaoxiaodianzi7785.icoc.ws", "Weidows"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/VineMEMZ",
+      "malware_type": "Trojan",
+      "family": "VineMEMZ",
+      "behavior_req": {},
+      "unique_strings": ["VineMEMZ", "VineMEMZ_Destory"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/SystemKiller",
+      "malware_type": "Trojan",
+      "family": "SystemKiller",
+      "behavior_req": {},
+      "unique_strings": ["SystemKiller"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Packed/Themida",
+      "malware_type": "Packed",
+      "family": "KillDisk",
+      "behavior_req": {},
+      "unique_strings": [],
+      "packer": "Themida",
+      "compiler": null
+    },
+    {
+      "name": "Trojan/Radiance",
+      "malware_type": "Trojan",
+      "family": "KillDisk",
+      "behavior_req": {},
+      "unique_strings": ["youtube.com/@camellia-y7x"],
+      "packer": "Themida",
+      "compiler": null
+    },
+    {
+      "name": "Trojan/Unfixable",
+      "malware_type": "Trojan",
+      "family": "Unfixable",
+      "behavior_req": {},
+      "unique_strings": [],
+      "packer": "Themida",
+      "compiler": null
+    },
+    {
+      "name": "Trojan/LockBit",
+      "malware_type": "Trojan",
+      "family": "LockBit",
+      "behavior_req": {"Ransomware/Crypto": 3},
+      "unique_strings": ["LockBit", "unlock_help", "!LockBit", "LockBit_Black"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/BlackCat",
+      "malware_type": "Trojan",
+      "family": "ALPHV",
+      "behavior_req": {"Ransomware/Crypto": 2},
+      "unique_strings": ["ALPHV", "BlackCat", "66118F62AD6F3A6B"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/AkiraRansom",
+      "malware_type": "Trojan",
+      "family": "Akira",
+      "behavior_req": {"Ransomware/Crypto": 2},
+      "unique_strings": ["akira", ".akira"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/BlackBasta",
+      "malware_type": "Trojan",
+      "family": "BlackBasta",
+      "behavior_req": {"Ransomware/Crypto": 2},
+      "unique_strings": ["BlackBasta", "basta"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/RansomHub",
+      "malware_type": "Trojan",
+      "family": "RansomHub",
+      "behavior_req": {"Ransomware/Crypto": 2},
+      "unique_strings": ["RansomHub", ".ransomhub"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/Clop",
+      "malware_type": "Trojan",
+      "family": "Clop",
+      "behavior_req": {"Ransomware/Crypto": 2},
+      "unique_strings": ["Clop", "C l o p"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/Rhysida",
+      "malware_type": "Trojan",
+      "family": "Rhysida",
+      "behavior_req": {"Ransomware/Crypto": 2},
+      "unique_strings": ["Rhysida", ".rhysida"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/AgentTesla",
+      "malware_type": "Trojan",
+      "family": "AgentTesla",
+      "behavior_req": {"Keylogger": 1, "RAT/Network": 1},
+      "unique_strings": ["AgentTesla", "agentesla", "TeslaWeb", "agentesla.com"],
+      "packer": null,
+      "compiler": ".NET"
+    },
+    {
+      "name": "Trojan/NanoCore",
+      "malware_type": "Trojan",
+      "family": "NanoCore",
+      "behavior_req": {"RAT/Network": 2},
+      "unique_strings": ["NanoCore", "NanoCoreRAT", "UI_3232"],
+      "packer": null,
+      "compiler": ".NET"
+    },
+    {
+      "name": "Trojan/AsyncRAT",
+      "malware_type": "Trojan",
+      "family": "AsyncRAT",
+      "behavior_req": {"RAT/Network": 2},
+      "unique_strings": ["AsyncRAT", "AsyncRATClient", "Stub_"],
+      "packer": null,
+      "compiler": ".NET"
+    },
+    {
+      "name": "Trojan/XWorm",
+      "malware_type": "Trojan",
+      "family": "XWorm",
+      "behavior_req": {"RAT/Network": 2, "Keylogger": 1},
+      "unique_strings": ["XWorm", "XWormV2", "XWorm_"],
+      "packer": null,
+      "compiler": ".NET"
+    },
+    {
+      "name": "Trojan/Gh0stRAT",
+      "malware_type": "Trojan",
+      "family": "Gh0stRAT",
+      "behavior_req": {"RAT/Network": 2},
+      "unique_strings": ["Gh0st", "Gh0stRAT"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/VenomRAT",
+      "malware_type": "Trojan",
+      "family": "VenomRAT",
+      "behavior_req": {"RAT/Network": 2},
+      "unique_strings": ["VenomRAT", "VenomRATClient"],
+      "packer": null,
+      "compiler": ".NET"
+    },
+    {
+      "name": "Trojan/LummaStealer",
+      "malware_type": "Trojan",
+      "family": "LummaStealer",
+      "behavior_req": {},
+      "unique_strings": ["Lumma-Client", "LummaStealer"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/RedLineStealer",
+      "malware_type": "Trojan",
+      "family": "RedLine",
+      "behavior_req": {},
+      "unique_strings": ["RedLine", "RedLine Stealer", "ClientLogs"],
+      "packer": null,
+      "compiler": ".NET"
+    },
+    {
+      "name": "Trojan/Formbook",
+      "malware_type": "Trojan",
+      "family": "Formbook",
+      "behavior_req": {"Keylogger": 1, "RAT/Network": 1},
+      "unique_strings": ["FormBook", "Formbook"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/SocGholish",
+      "malware_type": "Trojan",
+      "family": "SocGholish",
+      "behavior_req": {"RAT/Network": 1},
+      "unique_strings": ["SocGholish", "FakeUpdates", "Chrome_Update"],
+      "packer": null,
+      "compiler": "JavaScript"
+    },
+    {
+      "name": "Trojan/PlayRansom",
+      "malware_type": "Trojan",
+      "family": "Play",
+      "behavior_req": {"Ransomware/Crypto": 2},
+      "unique_strings": ["Play", ".play"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/SilverFox",
+      "malware_type": "Trojan",
+      "family": "SilverFox",
+      "behavior_req": {"RAT/Network": 2},
+      "unique_strings": ["SilverFox", "SwimSnake", "ValleyThief"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/RaccoonStealer",
+      "malware_type": "Trojan",
+      "family": "RaccoonStealer",
+      "behavior_req": {},
+      "unique_strings": ["RaccoonStealer", "RaccoonV2", "Raccoon_Stealer"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/StealC",
+      "malware_type": "Trojan",
+      "family": "StealC",
+      "behavior_req": {},
+      "unique_strings": ["StealC", "StealC_"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/XLoader",
+      "malware_type": "Trojan",
+      "family": "XLoader",
+      "behavior_req": {"RAT/Network": 1, "Keylogger": 1},
+      "unique_strings": ["XLoader", "XLoader_v8"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/LokiBot",
+      "malware_type": "Trojan",
+      "family": "LokiBot",
+      "behavior_req": {},
+      "unique_strings": ["LokiBot", "Loki", "loki_bot"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/QakBot",
+      "malware_type": "Trojan",
+      "family": "QakBot",
+      "behavior_req": {"RAT/Network": 1},
+      "unique_strings": ["QakBot", "Qbot", "QakDll"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/IcedID",
+      "malware_type": "Trojan",
+      "family": "IcedID",
+      "behavior_req": {"RAT/Network": 2},
+      "unique_strings": ["IcedID", "IcedID_BokBot"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/Emotet",
+      "malware_type": "Trojan",
+      "family": "Emotet",
+      "behavior_req": {"RAT/Network": 2},
+      "unique_strings": ["Emotet", "Emodownload"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/TrickBot",
+      "malware_type": "Trojan",
+      "family": "TrickBot",
+      "behavior_req": {"RAT/Network": 2},
+      "unique_strings": ["TrickBot", "TrickLoader"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/BumbleBee",
+      "malware_type": "Trojan",
+      "family": "BumbleBee",
+      "behavior_req": {"RAT/Network": 1},
+      "unique_strings": ["BumbleBee", "BumbleBee_Loader"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/PurpleFox",
+      "malware_type": "Trojan",
+      "family": "PurpleFox",
+      "behavior_req": {"RAT/Network": 1},
+      "unique_strings": ["PurpleFox", "PurpleFox_Rootkit"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/PlugX",
+      "malware_type": "Trojan",
+      "family": "PlugX",
+      "behavior_req": {"RAT/Network": 2},
+      "unique_strings": ["PlugX", "PlugX_RAT"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/DarkComet",
+      "malware_type": "Trojan",
+      "family": "DarkComet",
+      "behavior_req": {"RAT/Network": 2, "Keylogger": 1},
+      "unique_strings": ["DarkComet", "Dark_Comet", "DC_RAT"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/PonyStealer",
+      "malware_type": "Trojan",
+      "family": "PonyStealer",
+      "behavior_req": {},
+      "unique_strings": ["Pony", "PonyStealer", "Pony_2.0"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/AZORult",
+      "malware_type": "Trojan",
+      "family": "AZORult",
+      "behavior_req": {},
+      "unique_strings": ["AZORult", "AZORult_Stealer"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/SmokeLoader",
+      "malware_type": "Trojan",
+      "family": "SmokeLoader",
+      "behavior_req": {},
+      "unique_strings": ["SmokeLoader", "Smoke_Ldr"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/NjRAT",
+      "malware_type": "Trojan",
+      "family": "NjRAT",
+      "behavior_req": {"RAT/Network": 2},
+      "unique_strings": ["NjRAT", "njRAT", "Bladabindi"],
+      "packer": null,
+      "compiler": ".NET"
+    },
+    {
+      "name": "Trojan/QuasarRAT",
+      "malware_type": "Trojan",
+      "family": "QuasarRAT",
+      "behavior_req": {"RAT/Network": 2},
+      "unique_strings": ["Quasar", "QuasarRAT", "Quasar_"],
+      "packer": null,
+      "compiler": ".NET"
+    },
+    {
+      "name": "Trojan/DCRAT",
+      "malware_type": "Trojan",
+      "family": "DCRAT",
+      "behavior_req": {"RAT/Network": 2},
+      "unique_strings": ["DCRAT", "DarkCrystal", "DC_RAT_"],
+      "packer": null,
+      "compiler": ".NET"
+    },
+    {
+      "name": "Trojan/DarkKomet",
+      "malware_type": "Trojan",
+      "family": "DarkKomet",
+      "behavior_req": {"RAT/Network": 2},
+      "unique_strings": ["DarkKomet", "Dark_Komet"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/RomComRAT",
+      "malware_type": "Trojan",
+      "family": "RomCom",
+      "behavior_req": {"RAT/Network": 2, "Ransomware/Crypto": 1},
+      "unique_strings": ["RomCom", "RomComRAT"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/Androxgh0st",
+      "malware_type": "Trojan",
+      "family": "Androxgh0st",
+      "behavior_req": {"RAT/Network": 2},
+      "unique_strings": ["Androxgh0st", "AndroxGh0st"],
+      "packer": null,
+      "compiler": "Python"
+    },
+    {
+      "name": "Trojan/TeleGrab",
+      "malware_type": "Trojan",
+      "family": "TeleGrab",
+      "behavior_req": {"RAT/Network": 1},
+      "unique_strings": ["TeleGrab", "TelegramGrabber"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/ZPHP",
+      "malware_type": "Trojan",
+      "family": "ZPHP",
+      "behavior_req": {"RAT/Network": 1},
+      "unique_strings": ["ZPHP", "zphp_shell"],
+      "packer": null,
+      "compiler": "PHP"
+    },
+    {
+      "name": "Trojan/Jinupd",
+      "malware_type": "Trojan",
+      "family": "Jinupd",
+      "behavior_req": {},
+      "unique_strings": ["Jinupd", "Jinupd_Loader"],
+      "packer": null,
+      "compiler": "JavaScript"
+    },
+    {
+      "name": "Trojan/PhantomStealer",
+      "malware_type": "Trojan",
+      "family": "PhantomStealer",
+      "behavior_req": {},
+      "unique_strings": ["PhantomStealer", "Phantom_Stealer"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/SnakeStealer",
+      "malware_type": "Trojan",
+      "family": "SnakeStealer",
+      "behavior_req": {},
+      "unique_strings": ["SnakeStealer", "Snake_Stealer"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/StrelaStealer",
+      "malware_type": "Trojan",
+      "family": "StrelaStealer",
+      "behavior_req": {},
+      "unique_strings": ["Strela", "StrelaStealer"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/NetSupport",
+      "malware_type": "Trojan",
+      "family": "NetSupport",
+      "behavior_req": {"RAT/Network": 2},
+      "unique_strings": ["NetSupport", "NetSupport_RAT"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/Farfli",
+      "malware_type": "Trojan",
+      "family": "Farfli",
+      "behavior_req": {"RAT/Network": 2},
+      "unique_strings": ["Farfli", "Farfli_RAT"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/AcreedStealer",
+      "malware_type": "Trojan",
+      "family": "AcreedStealer",
+      "behavior_req": {},
+      "unique_strings": ["Acreed", "AcreedStealer"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/Zeus",
+      "malware_type": "Trojan",
+      "family": "Zeus",
+      "behavior_req": {"RAT/Network": 2},
+      "unique_strings": ["Zeus", "Zbot", "NTOS"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/Conti",
+      "malware_type": "Trojan",
+      "family": "Conti",
+      "behavior_req": {"Ransomware/Crypto": 2},
+      "unique_strings": ["Conti", "ContiV2"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/REvil",
+      "malware_type": "Trojan",
+      "family": "REvil",
+      "behavior_req": {"Ransomware/Crypto": 2},
+      "unique_strings": ["REvil", "Sodinokibi"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/DarkSide",
+      "malware_type": "Trojan",
+      "family": "DarkSide",
+      "behavior_req": {"Ransomware/Crypto": 2},
+      "unique_strings": ["DarkSide", "Darkside_Ransom"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/HiveRansom",
+      "malware_type": "Trojan",
+      "family": "Hive",
+      "behavior_req": {"Ransomware/Crypto": 2},
+      "unique_strings": ["Hive", ".hive"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/Trigona",
+      "malware_type": "Trojan",
+      "family": "Trigona",
+      "behavior_req": {"Ransomware/Crypto": 2},
+      "unique_strings": ["Trigona", ".trigona"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/RoyalRansom",
+      "malware_type": "Trojan",
+      "family": "Royal",
+      "behavior_req": {"Ransomware/Crypto": 2},
+      "unique_strings": ["Royal", ".royal"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/BlackMatter",
+      "malware_type": "Trojan",
+      "family": "BlackMatter",
+      "behavior_req": {"Ransomware/Crypto": 2},
+      "unique_strings": ["BlackMatter", "Black_Matter"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Worm/WannaCry",
+      "malware_type": "Worm",
+      "family": "WannaCry",
+      "behavior_req": {"Ransomware/Crypto": 1},
+      "unique_strings": ["WannaCry", "WNcry", "WannaCrypt"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Worm/Mirai",
+      "malware_type": "Worm",
+      "family": "Mirai",
+      "behavior_req": {},
+      "unique_strings": ["Mirai", "Mirai_Bot"],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Worm/Gafgyt",
+      "malware_type": "Worm",
+      "family": "Gafgyt",
+      "behavior_req": {},
+      "unique_strings": ["Gafgyt", "Gafgyt_Bot"],
+      "packer": null,
+      "compiler": null
+    }
+  ],
+  "heuristics": [
+    {
+      "condition": {"MBR/Disk": 2},
+      "exclude": [],
+      "result": {
+        "name": "HEUR:Trojan/KillDisk",
+        "family": "KillDisk",
+        "score": 40,
+        "detail": "启发式: MBR破坏行为"
+      }
+    },
+    {
+      "condition": {"Ransomware/Crypto": 2},
+      "exclude": ["MBR/Disk"],
+      "result": {
+        "name": "HEUR:Trojan/Ransom",
+        "family": "Generic",
+        "score": 35,
+        "detail": "启发式: 加密行为（至少2个加密API调用）"
+      }
+    },
+    {
+      "condition": {"RAT/Network": 3},
+      "exclude": [],
+      "result": {
+        "name": "HEUR:Trojan/RAT",
+        "family": "Generic",
+        "score": 40,
+        "detail": "启发式: 远程控制行为（至少3个网络API调用）"
+      }
+    },
+    {
+      "condition": {"Keylogger": 2},
+      "exclude": [],
+      "result": {
+        "name": "HEUR:Trojan/Keylogger",
+        "family": "Generic",
+        "score": 40,
+        "detail": "启发式: 键盘记录行为"
+      }
+    },
+    {
+      "condition": {"Dropper": 3},
+      "exclude": [],
+      "result": {
+        "name": "HEUR:Trojan/Dropper",
+        "family": "Generic",
+        "score": 40,
+        "detail": "启发式: 释放器行为"
+      }
+    },
+    {
+      "packer": "Themida",
+      "result": {
+        "name": "Packed/Themida",
+        "family": "KillDisk",
+        "score": 30,
+        "detail": "启发式: Themida加壳"
+      }
+    },
+    {
+      "condition": {"AntiDebug": 2},
+      "exclude": [],
+      "result": {
+        "name": "HEUR:Trojan/Agent",
+        "family": "Generic",
+        "score": 30,
+        "detail": "启发式: 反调试行为"
+      }
+    },
+    {
+      "condition_or": {"RAT/Network": 1, "Persistence": 1},
+      "exclude": [],
+      "result": {
+        "name": "HEUR:Trojan/Agent",
+        "family": "Generic",
+        "score": 25,
+        "detail": "启发式: 网络通信或持久化行为"
+      }
+    },
+    {
+      "condition": {"ProcessManip": 2, "UAC/Privilege": 1},
+      "exclude": ["RAT/Network", "MBR/Disk", "Ransomware/Crypto"],
+      "result": {
+        "name": "HEUR:Trojan/AVKill",
+        "family": "Generic",
+        "score": 35,
+        "detail": "启发式: 进程操作+提权行为（排除杀毒软件正常行为）"
+      }
+    },
+    {
+      "condition": {"Injector": 2},
+      "exclude": ["RAT/Network"],
+      "result": {
+        "name": "HEUR:Trojan/Injector",
+        "family": "Generic",
+        "score": 35,
+        "detail": "启发式: 进程注入行为"
+      }
+    },
+    {
+      "condition": {"RAT/Network": 1, "Persistence": 1, "Registry": 2},
+      "exclude": [],
+      "result": {
+        "name": "HEUR:Backdoor/Generic",
+        "family": "Generic",
+        "score": 30,
+        "detail": "启发式: 网络通信+持久化+注册表操作"
+      }
+    },
+    {
+      "condition": {"Cryptominer": 2, "RAT/Network": 1},
+      "exclude": [],
+      "result": {
+        "name": "HEUR:Trojan/CoinMiner",
+        "family": "Generic",
+        "score": 35,
+        "detail": "启发式: 加密货币挖矿行为"
+      }
+    }
+  ]
+}

@@ -1,0 +1,15862 @@
+import { invoke } from "@tauri-apps/api/core";
+import "./styles.css";
+import { translations, Language, Translations } from "./locales";
+import { engineManager, ScanResult, updateManager, UpdateInfo } from "./engines";
+
+// Localization management
+class LocalizationManager {
+  private currentLang: Language = 'zh-CN';
+  private t: Translations = translations['zh-CN'];
+
+  constructor() {
+    const saved = localStorage.getItem('language') as Language;
+    if (saved && translations[saved]) {
+      this.setLanguage(saved);
+    }
+  }
+
+  setLanguage(lang: Language) {
+    this.currentLang = lang;
+    this.t = translations[lang];
+    localStorage.setItem('language', lang);
+  }
+
+  getLanguage(): Language {
+    return this.currentLang;
+  }
+
+  getTranslations(): Translations {
+    return this.t;
+  }
+
+  format(key: keyof Translations, params?: Record<string, string | number>): string {
+    let text = this.t[key] as string;
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        text = text.replace(`{${key}}`, String(value));
+      });
+    }
+    return text;
+  }
+}
+
+// Theme management
+class ThemeManager {
+  private currentTheme: string = 'blue';
+  private currentThemeMode: string = 'colorful';
+  private themes = ['blue', 'purple', 'green', 'orange', 'pink', 'teal'];
+  private themeModes = ['classic', 'colorful', 'dark'];
+
+  constructor() {
+    const savedTheme = localStorage.getItem('theme');
+    const savedMode = localStorage.getItem('themeMode');
+    if (savedTheme) {
+      this.currentTheme = savedTheme;
+    }
+    if (savedMode && this.themeModes.includes(savedMode)) {
+      this.currentThemeMode = savedMode;
+    }
+    this.applyTheme();
+  }
+
+  setTheme(theme: string) {
+    this.currentTheme = theme;
+    this.applyTheme();
+    localStorage.setItem('theme', theme);
+  }
+
+  getTheme(): string {
+    return this.currentTheme;
+  }
+
+  getThemes(): string[] {
+    return this.themes;
+  }
+
+  setThemeMode(mode: string) {
+    if (this.themeModes.includes(mode)) {
+      this.currentThemeMode = mode;
+      this.applyTheme();
+      localStorage.setItem('themeMode', mode);
+    }
+  }
+
+  getThemeMode(): string {
+    return this.currentThemeMode;
+  }
+
+  getThemeModes(): string[] {
+    return this.themeModes;
+  }
+
+  private applyTheme() {
+    // 设置颜色主题
+    document.documentElement.setAttribute('data-theme', this.currentTheme);
+    // 设置主题模式
+    document.documentElement.setAttribute('data-theme-mode', this.currentThemeMode);
+  }
+}
+
+// 辅助云查询开关管理器
+// 原理：常规扫描先走本地引擎；只有本地判定为威胁时，才调用云端哈希库鉴定是否在白名单中
+class AuxiliaryCloudScanManager {
+  private enabled: boolean = false;
+  private storageKey: string = 'auxiliary_cloud_scan_enabled';
+
+  constructor() {
+    this.loadState();
+  }
+
+  private loadState(): void {
+    try {
+      const stored = localStorage.getItem(this.storageKey);
+      if (stored !== null) {
+        this.enabled = stored === 'true';
+      }
+      // 默认关闭（避免改变现有扫描行为）
+    } catch (e) {
+      console.error('Failed to load auxiliary cloud scan state:', e);
+      this.enabled = false;
+    }
+  }
+
+  async setEnabled(enabled: boolean): Promise<void> {
+    this.enabled = enabled;
+    try {
+      localStorage.setItem(this.storageKey, String(enabled));
+    } catch (e) {
+      console.error('Failed to set auxiliary cloud scan:', e);
+    }
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  refreshState(): void {
+    this.loadState();
+  }
+}
+
+// 日志上传管理器
+// 把主程序最近日志/行为时间线上传到远端日志收集服务（地址内置，不暴露给用户）
+class LogUploadManager {
+  private enabled: boolean = true;
+  private deviceName: string = '';
+  private consentKey: string = 'log_upload_consent_shown';
+  private enabledKey: string = 'log_upload_enabled';
+  private initialized: boolean = false;
+  private uploadTimer: number | null = null;
+  private pendingLogs: any[] = [];
+  private lastUploadedLogs: Set<string> = new Set();
+
+  constructor() {
+    this.loadState();
+  }
+
+  private loadState(): void {
+    try {
+      const enabledStored = localStorage.getItem(this.enabledKey);
+      // 默认开启；仅当用户明确关闭过才保持关闭
+      this.enabled = enabledStored !== 'false';
+    } catch (e) {
+      console.error('Failed to load log upload state:', e);
+    }
+  }
+
+  async init(): Promise<void> {
+    if (this.initialized) return;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      this.deviceName = (await invoke<string>('get_log_upload_device_name').catch(() => ''));
+      const rustEnabled = await invoke<boolean>('get_log_upload_enabled').catch(() => this.enabled);
+      this.enabled = rustEnabled;
+      localStorage.setItem(this.enabledKey, String(this.enabled));
+      await this.syncToRust();
+      this.startUploadTimer();
+      this.initialized = true;
+
+      // 首次启动时上传历史时间线和 EDR 报告日志（带去重，仅执行一次）
+      if (this.enabled && !localStorage.getItem('log_upload_historical_done')) {
+        await invoke('upload_historical_logs_command').catch(() => {});
+        localStorage.setItem('log_upload_historical_done', 'true');
+      }
+    } catch (e) {
+      console.error('Failed to init log upload manager:', e);
+    }
+  }
+
+  async syncToRust(): Promise<void> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('set_log_upload_enabled', { enabled: this.enabled }).catch(() => {});
+    } catch (e) {
+      console.error('Failed to sync log upload settings to Rust:', e);
+    }
+  }
+
+  async setEnabled(enabled: boolean): Promise<void> {
+    this.enabled = enabled;
+    try {
+      localStorage.setItem(this.enabledKey, String(enabled));
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('set_log_upload_enabled', { enabled }).catch(() => {});
+    } catch (e) {
+      console.error('Failed to set log upload enabled:', e);
+    }
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  getDeviceName(): string {
+    return this.deviceName;
+  }
+
+  hasConsentBeenShown(): boolean {
+    try {
+      return localStorage.getItem(this.consentKey) === 'true';
+    } catch (e) {
+      return false;
+    }
+  }
+
+  markConsentShown(): void {
+    try {
+      localStorage.setItem(this.consentKey, 'true');
+    } catch (e) {
+      console.error('Failed to mark consent shown:', e);
+    }
+  }
+
+  /// 收集一条最近日志（由 App.addLog 调用）
+  collectRecentLog(level: string, message: string): void {
+    if (!this.enabled) return;
+    const entry = {
+      timestamp: new Date().toISOString(),
+      category: 'app',
+      function: level,
+      summary: message,
+      action: 'info',
+      result: 'success',
+    };
+    this.pendingLogs.push(entry);
+  }
+
+  /// 收集一条行为时间线事件
+  collectTimelineEvent(event: any): void {
+    if (!this.enabled) return;
+    const entry = {
+      timestamp: event.timestamp || new Date().toISOString(),
+      category: 'timeline',
+      function: event.event_type || 'event',
+      summary: event.title || 'Timeline event',
+      details: {
+        description: event.description,
+        process_name: event.process_name,
+        result: event.result,
+      },
+      action: 'info',
+      result: event.result || 'success',
+    };
+    this.pendingLogs.push(entry);
+  }
+
+  /// 收集一条 EDR 拦截事件
+  collectEdrEvent(log: string, processName: string, pid: number, code: string, report: any): void {
+    if (!this.enabled) return;
+    const details: any = {
+      code: code,
+      process_name: processName,
+      pid: pid,
+    };
+    // raw_log 仅在较小时保留，避免 payload 过大
+    if (log && log.length < 5120) {
+      details.raw_log = log;
+    }
+    if (report) {
+      details.report_code = report.report_code;
+      details.process_name = report.process_name || processName;
+      details.process_path = report.process_path;
+      details.pid = report.pid || pid;
+      details.parent_pid = report.parent_pid;
+      details.parent_path = report.parent_path;
+      details.command_line = report.command_line;
+      details.total_score = report.total_score;
+      details.threshold = report.threshold;
+      details.file_writes = report.file_writes;
+      details.file_deletes = report.file_deletes;
+      details.registry_mods = report.registry_mods;
+      details.inject_attempts = report.inject_attempts;
+      details.suspicious_cmds = report.suspicious_cmds;
+      details.memory_rwx = report.memory_rwx;
+      details.remote_threads = report.remote_threads;
+      details.image_loads = report.image_loads;
+      details.result = report.result;
+      if (report.timeline && report.timeline.length > 0) {
+        details.behavior = report.timeline;
+      }
+      details.classification = report.classification;
+      details.score = report.score ?? report.total_score;
+    }
+    const entry: any = {
+      timestamp: new Date().toISOString(),
+      category: 'edr',
+      function: 'EDR拦截',
+      summary: `EDR 拦截: ${processName} (PID: ${pid})`,
+      details,
+      action: 'Blocked',
+      result: 'success',
+    };
+    this.pendingLogs.push(entry);
+  }
+
+  private startUploadTimer(): void {
+    if (this.uploadTimer) return;
+    this.uploadTimer = window.setInterval(() => {
+      this.flushPendingLogs();
+    }, 10000);
+  }
+
+  private async flushPendingLogs(): Promise<void> {
+    if (!this.enabled || this.pendingLogs.length === 0) return;
+
+    // 去重：避免完全相同的消息反复上传
+    const uniqueLogs: any[] = [];
+    const seen = new Set<string>();
+    for (const log of this.pendingLogs) {
+      const key = `${log.timestamp}-${log.summary}`;
+      if (!seen.has(key) && !this.lastUploadedLogs.has(key)) {
+        seen.add(key);
+        uniqueLogs.push(log);
+      }
+    }
+    this.pendingLogs = [];
+    if (uniqueLogs.length === 0) return;
+
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('upload_recent_logs_command', { entries: uniqueLogs }).catch(() => {});
+      for (const log of uniqueLogs) {
+        this.lastUploadedLogs.add(`${log.timestamp}-${log.summary}`);
+      }
+      // 限制去重集合大小
+      if (this.lastUploadedLogs.size > 200) {
+        const iter = this.lastUploadedLogs.values();
+        for (let i = 0; i < this.lastUploadedLogs.size - 200; i++) {
+          const val = iter.next().value;
+          if (val) this.lastUploadedLogs.delete(val);
+        }
+      }
+    } catch (e) {
+      console.error('Failed to upload recent logs:', e);
+    }
+  }
+}
+
+// 云端深度分析（自动沙箱）开关管理器
+class CloudDeepAnalysisManager {
+  private enabled: boolean = true;
+  private storageKey: string = 'cloud_deep_analysis_enabled';
+
+  constructor() {
+    this.loadState();
+  }
+
+  private loadState(): void {
+    try {
+      const stored = localStorage.getItem(this.storageKey);
+      if (stored !== null) {
+        this.enabled = stored === 'true';
+      }
+    } catch (e) {
+      console.error('Failed to load cloud deep analysis state:', e);
+      this.enabled = true;
+    }
+  }
+
+  async setEnabled(enabled: boolean): Promise<void> {
+    this.enabled = enabled;
+    try {
+      localStorage.setItem(this.storageKey, String(enabled));
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('set_cloud_deep_analysis_enabled', { enabled }).catch(() => {});
+    } catch (e) {
+      console.error('Failed to set cloud deep analysis:', e);
+    }
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  refreshState(): void {
+    this.loadState();
+  }
+}
+
+// 通知模式管理器：开启后驱动/基础防护拦截只发系统通知，不弹拦截窗口
+class NotificationModeManager {
+  private enabled: boolean = false;
+  private storageKey: string = 'notification_mode_enabled';
+
+  constructor() {
+    this.loadState();
+  }
+
+  private loadState(): void {
+    try {
+      const stored = localStorage.getItem(this.storageKey);
+      if (stored !== null) {
+        this.enabled = stored === 'true';
+      }
+    } catch (e) {
+      console.error('Failed to load notification mode state:', e);
+      this.enabled = false;
+    }
+  }
+
+  async setEnabled(enabled: boolean): Promise<void> {
+    this.enabled = enabled;
+    try {
+      localStorage.setItem(this.storageKey, String(enabled));
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('set_notification_mode_enabled', { enabled }).catch(() => {});
+    } catch (e) {
+      console.error('Failed to set notification mode:', e);
+    }
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  refreshState(): void {
+    this.loadState();
+  }
+}
+
+// Silent Mode Manager
+class SilentModeManager {
+  private enabled: boolean = false;
+
+  constructor() {
+    this.loadState();
+  }
+
+  private async loadState() {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      this.enabled = await invoke('get_silent_mode_enabled');
+    } catch (e) {
+      console.error('Failed to load silent mode state:', e);
+      this.enabled = false; // 默认关闭
+    }
+  }
+
+  async setEnabled(enabled: boolean): Promise<void> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('set_silent_mode_enabled', { enabled });
+      this.enabled = enabled;
+    } catch (e) {
+      console.error('Failed to set silent mode:', e);
+    }
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  async refreshState(): Promise<void> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      this.enabled = await invoke('get_silent_mode_enabled');
+    } catch (e) {
+      console.error('Failed to refresh silent mode state:', e);
+    }
+  }
+}
+
+// Basic Protection Manager - 基础防护管理器（R3级别进程监控）
+class BasicProtectionManager {
+  private enabled: boolean = false;
+  private processStartedUnlisten: (() => void) | null = null;
+  private pidCleanupInterval: number | null = null;
+  private scannedPids: Set<number> = new Set();
+  // 正在扫描中的文件路径（防止 WMI 重复事件导致重复扫描）
+  private scanningPaths: Set<string> = new Set();
+  // 按进程路径缓存“已判定为 CLEAN”的结果，避免同一文件短时间内反复扫描；命中威胁时会移出缓存
+  private cleanProcessPaths: Map<string, number> = new Map();
+  private readonly CLEAN_PATH_CACHE_TTL = 10_000; // 10 秒内同一文件不重复扫描
+  private onThreatDetectedCallback: ((processPath: string, threatName: string) => void) | null = null;
+  private isMonitoring: boolean = false;
+  private stateLoaded: boolean = false; // 状态是否加载完成
+  private onStateLoadedCallbacks: (() => void)[] = []; // 状态加载完成回调
+  public cloudHashManager: CloudHashManager | null = null; // 云端哈希管理器引用（由App设置）
+  public auxiliaryCloudScanManager: AuxiliaryCloudScanManager | null = null; // 辅助云查询管理器引用（由App设置）
+  private storageKey: string = 'basic_protection_enabled';
+  private cloudPrimaryFailed: boolean = false; // 云端主服务器是否已超时，后续直接走兜底
+  private whitelistedProcesses: string[] = []; // 缓存的白名单进程名
+  constructor() {
+    this.loadState();
+  }
+
+  private loadState() {
+    console.log('[BasicProtection] - loadState() called');
+    try {
+      const stored = localStorage.getItem(this.storageKey);
+      this.enabled = stored !== null ? stored === 'true' : true;
+      console.log(`[BasicProtection] - loadState: stored="${stored}", enabled=${this.enabled}`);
+      this.stateLoaded = true;
+      // 如果已启用，自动开始监控
+      if (this.enabled) {
+        this.startMonitoring();
+      } else {
+        console.log('[BasicProtection] - loadState: disabled, not starting monitoring');
+      }
+      // 触发状态加载完成回调
+      this.onStateLoadedCallbacks.forEach(cb => cb());
+      this.onStateLoadedCallbacks = [];
+    } catch (e) {
+      console.error('[BasicProtection] - Failed to load state:', e);
+      this.enabled = true; // 默认开启
+      this.stateLoaded = true;
+    }
+  }
+
+  // 等待状态加载完成
+  async waitForStateLoaded(): Promise<void> {
+    if (this.stateLoaded) return;
+    return new Promise(resolve => {
+      this.onStateLoadedCallbacks.push(resolve);
+    });
+  }
+
+  setEnabled(enabled: boolean): void {
+    try {
+      localStorage.setItem(this.storageKey, String(enabled));
+      this.enabled = enabled;
+      
+      if (enabled) {
+        this.startMonitoring();
+      } else {
+        this.stopMonitoring();
+      }
+      
+      console.log('[BasicProtection] Protection enabled:', enabled);
+    } catch (e) {
+      console.error('[BasicProtection] - Failed to set enabled:', e);
+      // 即使存储失败，也要确保本地状态和监控停止一致
+      this.enabled = enabled;
+      if (!enabled) {
+        this.stopMonitoring();
+      }
+    }
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  // 设置威胁检测回调
+  setOnThreatDetectedCallback(callback: (processPath: string, threatName: string) => void) {
+    this.onThreatDetectedCallback = callback;
+  }
+
+  // 已拦截的文件路径集合（用于锁定文件）
+  private lockedFiles: Set<string> = new Set();
+
+  // 开始监控进程
+  private async startMonitoring() {
+    if (this.isMonitoring) return;
+
+    this.isMonitoring = true;
+    this.cloudPrimaryFailed = false;
+
+    // 加载白名单进程名缓存
+    this.loadWhitelistedProcesses();
+
+    console.log('[BasicProtection] - Starting WMI process monitoring...');
+
+    const { invoke } = await import('@tauri-apps/api/core');
+
+    // 启动 WMI 事件监听（零 CPU 占用空闲）
+    await invoke('start_process_watcher');
+
+    // 监听进程启动事件——事件驱动，不轮询
+    const { listen } = await import('@tauri-apps/api/event');
+    this.processStartedUnlisten = await listen<{ pid: number; name: string; path: string | null }>('process-started', (event) => {
+      this.handleNewProcess(event.payload);
+    });
+
+    // 每 30 秒轻量清理过期 PID（只用 EnumProcesses，不 OpenProcess）
+    this.pidCleanupInterval = window.setInterval(async () => {
+      this.pruneCleanPathCache();
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const pids: number[] = await invoke('get_running_pids') || [];
+        const runningPids = new Set(pids);
+        for (const pid of this.scannedPids) {
+          if (!runningPids.has(pid)) {
+            this.scannedPids.delete(pid);
+          }
+        }
+      } catch {
+        // 清理失败不影响主逻辑
+      }
+    }, 30_000);
+  }
+
+  // 清理过期的 CLEAN 路径缓存
+  private pruneCleanPathCache(): void {
+    const now = Date.now();
+    for (const [path, ts] of this.cleanProcessPaths) {
+      if (now - ts > this.CLEAN_PATH_CACHE_TTL) {
+        this.cleanProcessPaths.delete(path);
+      }
+    }
+  }
+
+  // 排除系统/可信进程，只按完整路径过滤，避免恶意软件通过改名绕过
+  private isSystemOrTrustedProcess(process: { pid: number; path: string; name: string }): boolean {
+    const lowerPath = process.path.toLowerCase();
+    // 去掉盘符，统一按目录结构匹配
+    const normalizedPath = lowerPath.replace(/^[a-z]:/, '');
+
+    // 自身进程
+    if (normalizedPath.includes('xiguasecurity') || normalizedPath.includes('xigua security')) {
+      return true;
+    }
+
+    // 系统目录：只有真正来自这些目录的进程才放行
+    const systemDirs = [
+      '\\windows\\system32',
+      '\\windows\\syswow64',
+      '\\windows\\immersivecontrolpanel',
+      '\\windows\\sysnative',
+      '\\programdata\\microsoft\\',
+      '\\windows defender\\',
+      '\\windows\\explorer.exe',
+    ];
+    if (systemDirs.some(d => normalizedPath.startsWith(d))) return true;
+
+    // 已安装的软件目录（依赖文件防护监控新写入的可执行文件）
+    if (normalizedPath.startsWith('\\program files\\') || normalizedPath.startsWith('\\program files (x86)\\')) {
+      return true;
+    }
+
+    return false;
+  }
+
+  // 停止监控
+  private async stopMonitoring() {
+    if (!this.isMonitoring) return;
+    
+    this.isMonitoring = false;
+    console.log('[BasicProtection] - Stopping process monitoring...');
+    
+    // 停止 WMI 事件监听
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('stop_process_watcher');
+    } catch {}
+    
+    // 移除事件监听
+    if (this.processStartedUnlisten) {
+      this.processStartedUnlisten();
+      this.processStartedUnlisten = null;
+    }
+
+    if (this.pidCleanupInterval) {
+      clearInterval(this.pidCleanupInterval);
+      this.pidCleanupInterval = null;
+    }
+
+    this.scannedPids.clear();
+    this.cleanProcessPaths.clear();
+  }
+
+  // 事件驱动的进程处理——由 WMI 事件触发，无轮询
+  private async handleNewProcess(event: { pid: number; name: string; path: string | null }) {
+    if (!this.isMonitoring || !this.enabled) return;
+    
+    // 已扫描过的 PID 跳过
+    if (this.scannedPids.has(event.pid)) return;
+    this.scannedPids.add(event.pid);
+    
+    // 没有路径信息则无法扫描
+    if (!event.path) return;
+
+    const lowerPath = event.path.toLowerCase();
+    const now = Date.now();
+    
+    // 已锁定的威胁文件 → 立即终止
+    if (this.lockedFiles.has(lowerPath)) {
+      console.log('[BasicProtection] URGENT: Locked file detected:', event.name);
+      await this.terminateProcess(event.pid, event.name);
+      if (this.onThreatDetectedCallback) {
+        this.onThreatDetectedCallback(event.path, '已锁定的威胁文件');
+      }
+      return;
+    }
+    
+    // 系统/可信进程 → 跳过
+    if (this.isSystemOrTrustedProcess({ pid: event.pid, path: event.path, name: event.name })) {
+      return;
+    }
+    
+    // 在 CLEAN 缓存中 → 跳过
+    const lastClean = this.cleanProcessPaths.get(lowerPath);
+    if (lastClean && (now - lastClean) < this.CLEAN_PATH_CACHE_TTL) {
+      return;
+    }
+    
+    // 白名单进程名 → 跳过
+    const nameLower = event.name.toLowerCase();
+    if (this.whitelistedProcesses.some(wp => nameLower === wp.toLowerCase()) ||
+        this.whitelistProcesses.some(wp => nameLower === wp.toLowerCase())) {
+      console.log('[BasicProtection] Whitelisted process skipped:', event.name);
+      this.markClean(event.path);
+      return;
+    }
+
+    // 文件路径去重：防止同一文件短时间内被多次扫描（如 WMI 重复事件）
+    if (this.scanningPaths.has(lowerPath)) {
+      console.log('[BasicProtection] Already scanning this path, skipping:', event.path);
+      return;
+    }
+    this.scanningPaths.add(lowerPath);
+
+    console.log('[BasicProtection] New process detected:', event.name, 'Path:', event.path);
+    
+    // 执行进程扫描（完成后清理路径锁）
+    try {
+      await this.scanProcess({ pid: event.pid, path: event.path, name: event.name });
+    } finally {
+      this.scanningPaths.delete(lowerPath);
+    }
+  }
+
+  // 加载白名单进程名缓存（从后端拉取）
+  private async loadWhitelistedProcesses() {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      this.whitelistedProcesses = await invoke('get_whitelist_processes_command');
+    } catch (e) {
+      console.error('[BasicProtection] - Failed to load whitelist processes:', e);
+      this.whitelistedProcesses = [];
+    }
+  }
+
+  // 公开：重新加载白名单进程名（用户添加/删除后调用）
+  public async reloadWhitelistedProcesses() {
+    await this.loadWhitelistedProcesses();
+    console.log('[BasicProtection] - Whitelist reloaded, count:', this.whitelistedProcesses.length);
+  }
+
+  // 白名单进程列表（进程名）
+  private whitelistProcesses: string[] = [
+    'predict_onnx.exe',  // 截图程序，误报白名单
+  ];
+
+  // 扫描单个进程：纯靠速度，在恶意程序启动前完成判定并终止
+  private async scanProcess(process: { pid: number; path: string; name: string }) {
+    // 已关闭防护则立即放弃
+    if (!this.isMonitoring || !this.enabled) return;
+
+    // 进程名白名单
+    const processNameLower = process.name.toLowerCase();
+    if (this.whitelistedProcesses.some(white => processNameLower === white.toLowerCase()) ||
+        this.whitelistProcesses.some(white => processNameLower === white.toLowerCase())) {
+      console.log('[BasicProtection] - Whitelisted process skipped:', process.name);
+      this.markClean(process.path);
+      return;
+    }
+
+    try {
+      // 已锁定威胁文件：立即终止，不扫描
+      if (this.lockedFiles.has(process.path.toLowerCase())) {
+        console.log('[BasicProtection] Locked file detected, terminating immediately:', process.name);
+        await this.terminateProcess(process.pid, process.name);
+        if (this.onThreatDetectedCallback) {
+          this.onThreatDetectedCallback(process.path, '已锁定的威胁文件');
+        }
+        return;
+      }
+
+      console.log('[BasicProtection] - Scanning process:', process.name, 'Path:', process.path);
+
+      const { invoke } = await import('@tauri-apps/api/core');
+      const useAuxiliaryCloud = this.auxiliaryCloudScanManager?.isEnabled() || false;
+
+      // 云端哈希库优先检测（如果启用，且未启用辅助云查询）- 带超时，不可用则快速跳过
+      if (this.cloudHashManager?.isEnabled() && !useAuxiliaryCloud) {
+        try {
+          const fallbackUrl = 'https://cloudapi.xiguastudio.top';
+          const urls = this.cloudPrimaryFailed
+            ? [fallbackUrl]
+            : [localStorage.getItem('cloud_hash_url') || 'https://cloudapi.xiguastudio.top'];
+          const apiKey = localStorage.getItem('cloud_hash_key') || 'scan_dcc33b100b8a485fb099a5dce4c4f486';
+
+          const hashes: (string | null)[] = await invoke('calculate_file_hashes_command', { filePaths: [process.path] });
+          const hash = hashes?.[0];
+
+          if (hash) {
+            let cloudResult: any = null;
+
+            for (const url of urls) {
+              try {
+                cloudResult = await Promise.race([
+                  invoke<any>('cloud_hash_check_command', { serverUrl: url, apiKey, request: { hash } }),
+                  new Promise<null>((resolve) => setTimeout(() => {
+                    console.log(`[BasicProtection] - Cloud hash timeout (${url}), ${url === urls[0] ? 'trying fallback...' : 'skipping'}`);
+                    resolve(null);
+                  }, 5000))
+                ]);
+                if (cloudResult) break;
+              } catch (e) {
+                console.warn(`[BasicProtection] - Cloud hash failed (${url}):`, e);
+              }
+              if (url === urls[0] && !cloudResult) {
+                this.cloudPrimaryFailed = true;
+              }
+            }
+
+            if (cloudResult) {
+              console.log('[BasicProtection] Cloud hash check:', process.name, '- result:', cloudResult.result, cloudResult.family || '');
+
+              // 云端白名单命中 → 直接跳过，不拦截
+              if (cloudResult.result === 'white') {
+                console.log('[BasicProtection] Cloud whitelist matched, skipping:', process.name);
+                this.markClean(process.path);
+                return;
+              }
+
+              // 云端黑名单命中 → 立即终止
+              if (cloudResult.result === 'black') {
+                const threatName = cloudResult.family || 'CloudHash';
+                console.log('[BasicProtection] - Cloud blacklist matched, blocking:', process.name, '->', threatName);
+
+                this.cleanProcessPaths.delete(process.path.toLowerCase());
+                this.lockedFiles.add(process.path.toLowerCase());
+                await this.terminateProcess(process.pid, process.name);
+
+                if (this.onThreatDetectedCallback) {
+                  this.onThreatDetectedCallback(process.path, threatName);
+                }
+                return;
+              }
+              // 未命中（unknown）→ 继续本地扫描
+            }
+          }
+        } catch (e) {
+          console.error('[BasicProtection] Cloud hash check failed:', process.name, e);
+        }
+      }
+
+      // 脚本文件永远不走主引擎/机器学习引擎，仅由脚本扫描引擎处理
+      const isScript = (window as any).appInstance?.isScriptFile?.(process.path) || false;
+      if (isScript) {
+        const scriptScanEnabled = (window as any).appInstance?.scriptScanManager?.isEnabled() || false;
+        if (scriptScanEnabled) {
+          try {
+            console.log('[BasicProtection] - Scanning script process:', process.path);
+            const scriptResult = await invoke<any>('scan_script_file_command', { filePath: process.path });
+            console.log('[BasicProtection] - Script scan result:', process.path, scriptResult);
+            if (scriptResult && scriptResult.is_malicious) {
+              const threatName = scriptResult.virus_family || 'Trojan.Win32.BAT.Generic';
+              this.cleanProcessPaths.delete(process.path.toLowerCase());
+              this.lockedFiles.add(process.path.toLowerCase());
+              await this.terminateProcess(process.pid, process.name);
+              if (this.onThreatDetectedCallback) {
+                this.onThreatDetectedCallback(process.path, threatName);
+              }
+              return;
+            }
+          } catch (e) {
+            console.error('[BasicProtection] - Script scan error:', process.path, e);
+          }
+        } else {
+          console.log('[BasicProtection] - Script scan disabled, skipping script process:', process.path);
+        }
+        this.markClean(process.path);
+        return;
+      }
+
+      const result: { isThreat: boolean; threatName?: string; confidence?: number; result?: string; processName?: string } = await Promise.race([
+        invoke('scan_file_basic', {
+          filePath: process.path,
+          pid: process.pid,
+          puaEnabled: localStorage.getItem('pua_protection_enabled') === 'true',
+        }) as Promise<{ isThreat: boolean; threatName?: string; confidence?: number; result?: string; processName?: string }>,
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('scan_file_basic timeout')), 5000))
+      ]);
+
+      // 可疑文件拦截：后端已处理并弹出窗口
+      if (result.result === 'SUSPICIOUS') {
+        return;
+      }
+
+      if (result.isThreat && result.threatName) {
+        // PUA 捆绑软件：后端已处理并弹窗
+        if (result.result === 'PUA') {
+          return;
+        }
+
+        console.log('[BasicProtection] Local engine detected threat:', process.name, '->', result.threatName);
+
+        // 辅助云查询：本地检出威胁后，再查云端哈希库白名单
+        if (useAuxiliaryCloud && this.cloudHashManager) {
+          try {
+            const hashes: (string | null)[] = await invoke('calculate_file_hashes_command', { filePaths: [process.path] });
+            const hash = hashes?.[0];
+            if (hash) {
+              const cloudResult = await this.cloudHashManager.forceCheckHash(hash);
+              console.log('[BasicProtection] Auxiliary cloud query result:', process.name, cloudResult?.result);
+              if (cloudResult && cloudResult.result === 'white') {
+                console.log('[BasicProtection] 命中云端:', process.name);
+                this.markClean(process.path);
+                return;
+              }
+            }
+          } catch (e) {
+            console.error('[BasicProtection] Auxiliary cloud hash check failed:', process.name, e);
+          }
+        }
+
+        this.cleanProcessPaths.delete(process.path.toLowerCase());
+        this.lockedFiles.add(process.path.toLowerCase());
+        await this.terminateProcess(process.pid, process.name);
+
+        if (this.onThreatDetectedCallback) {
+          this.onThreatDetectedCallback(process.path, result.threatName);
+        }
+      } else {
+        // 非威胁、非可疑、非 PUA：加入短期 CLEAN 缓存
+        this.markClean(process.path);
+      }
+    } catch (e) {
+      console.error('[BasicProtection] - Failed to scan process:', process.name, e);
+    }
+  }
+
+  // 终止进程 — 驱动防护开启时优先使用驱动强制终止
+  private async terminateProcess(pid: number, processName: string): Promise<void> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+
+      // 先检查驱动防护是否开启
+      let driverEnabled = false;
+      try {
+        driverEnabled = await invoke<boolean>('get_driver_protection');
+      } catch { /* ignore */ }
+
+      let killed = false;
+
+      // 方法1：驱动杀（按 PID）
+      if (driverEnabled) {
+        try {
+          await invoke('kill_process_via_driver', { pid });
+          console.log('[BasicProtection] Terminated via driver:', processName, 'PID:', pid);
+          killed = true;
+        } catch (e) {
+          console.warn('[BasicProtection] Driver kill failed (PID may be stale), trying user-mode:', e);
+        }
+      }
+
+      // 方法2：用户态杀（按 PID）—— 驱动杀失败或未开启时使用
+      if (!killed) {
+        try {
+          await invoke('terminate_process', { pid });
+          console.log('[BasicProtection] Terminated via user-mode:', processName, 'PID:', pid);
+          killed = true;
+        } catch (e) {
+          console.warn('[BasicProtection] User-mode kill failed (PID may be stale), trying by name:', e);
+        }
+      }
+
+      // 方法3：按进程名 kill（兜底——PID 可能因扫描延迟而失效）
+      if (!killed) {
+        try {
+            const nameWithoutExt = processName.replace(/\.exe$/i, '');
+            await invoke('kill_process_by_name_command', { processName: nameWithoutExt });
+            console.log('[BasicProtection] Terminated by name:', processName);
+        } catch (e) {
+          console.error('[BasicProtection] - Failed to terminate process by name:', processName, e);
+        }
+      }
+    } catch (e) {
+      console.error('[BasicProtection] - Failed to terminate process:', processName, e);
+    }
+  }
+
+  // 标记文件路径为短期 CLEAN 缓存，避免同一文件反复扫描
+  private markClean(filePath: string): void {
+    this.cleanProcessPaths.set(filePath.toLowerCase(), Date.now());
+  }
+
+  refreshState(): void {
+    try {
+      const stored = localStorage.getItem(this.storageKey);
+      const wasEnabled = this.enabled;
+      this.enabled = stored !== null ? stored === 'true' : true;
+
+      // 状态变化时启动/停止监控
+      if (this.enabled && !wasEnabled) {
+        this.startMonitoring();
+      } else if (!this.enabled && wasEnabled) {
+        this.stopMonitoring();
+      }
+    } catch (e) {
+      console.error('[BasicProtection] - Failed to refresh state:', e);
+    }
+  }
+}
+
+// 文件防护事件载荷（与后端 FileProtectionEvent 字段保持一致）
+interface FileProtectionEventPayload {
+  id: string;
+  path: string;
+  kind: string;
+  timestamp: string;
+  threat_name?: string;
+}
+
+// R3 勒索软件防护事件载荷（与后端 RansomwareEvent 字段保持一致）
+interface RansomwareEventPayload {
+  id: string;
+  path: string;
+  process_name: string;
+  timestamp: string;
+  backed_up: boolean;
+}
+
+interface RansomwareDetectionPayload {
+  detected: boolean;
+  process_name: string;
+  event_count: number;
+  time_window_secs: number;
+  affected_files: RansomwareEventPayload[];
+  timestamp: string;
+}
+
+// 勒索软件回滚结果（与后端 RollbackResult 字段保持一致）
+interface RansomwareRollbackResult {
+  path: string;
+  success: boolean;
+  message: string;
+}
+
+// 勒索软件备份进度/估算（与后端 BackupProgress 字段保持一致）
+interface RansomwareBackupProgress {
+  scanned: number;
+  total: number;
+  backed_up: number;
+  total_size_bytes: number;
+  current_file: string;
+  estimated: boolean;
+  completed: boolean;
+}
+
+// File Protection Manager - 文件防护管理器（监控文件变动并自动扫描隔离）
+class FileProtectionManager {
+  private enabled: boolean = false;
+  private scope: string = 'common';
+  private eventUnlisten: (() => void) | null = null;
+  private scanningFiles: Set<string> = new Set();
+  private processedFiles: Map<string, number> = new Map();
+  private onThreatDetectedCallback: ((filePath: string, threatName: string) => void) | null = null;
+  private readonly storageKey: string = 'file_protection_enabled';
+  private readonly scopeKey: string = 'file_protection_scope';
+  private readonly processedTTL: number = 10_000; // 命中威胁后会被移出缓存，普通文件 10 秒内不再重复扫描
+  private cloudPrimaryFailed: boolean = false;
+  public cloudHashManager: CloudHashManager | null = null; // 云端哈希管理器引用（由App设置）
+  public auxiliaryCloudScanManager: AuxiliaryCloudScanManager | null = null; // 辅助云查询管理器引用（由App设置）
+
+  constructor() {
+    this.loadState();
+  }
+
+  private loadState(): void {
+    try {
+      const stored = localStorage.getItem(this.storageKey);
+      this.enabled = stored !== null ? stored === 'true' : true;
+      this.scope = localStorage.getItem(this.scopeKey) || 'common';
+    } catch (e) {
+      console.error('[FileProtection] - Failed to load state:', e);
+      this.enabled = true;
+      this.scope = 'common';
+    }
+  }
+
+  async setEnabled(enabled: boolean, scope?: string): Promise<void> {
+    try {
+      this.enabled = enabled;
+      if (scope) {
+        this.scope = scope;
+        localStorage.setItem(this.scopeKey, scope);
+      }
+      localStorage.setItem(this.storageKey, String(enabled));
+
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('set_file_protection_enabled', {
+        enabled,
+        scope: this.scope
+      });
+
+      if (enabled) {
+        this.startListening();
+      } else {
+        this.stopListening();
+      }
+
+      console.log('[FileProtection] Protection enabled:', enabled, 'scope:', this.scope);
+    } catch (e) {
+      console.error('[FileProtection] - Failed to set enabled:', e);
+      this.enabled = false;
+      this.stopListening();
+    }
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  getScope(): string {
+    return this.scope;
+  }
+
+  setOnThreatDetectedCallback(callback: (filePath: string, threatName: string) => void): void {
+    this.onThreatDetectedCallback = callback;
+  }
+
+  // 监听后端文件防护事件（事件驱动，替代 2 秒轮询）
+  private async startListening(): Promise<void> {
+    if (this.eventUnlisten) return;
+
+    console.log('[FileProtection] - Starting file event listener...');
+
+    // 先排空后端已积压的事件，避免启动瞬间大量旧事件涌入
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('get_file_protection_events', { limit: 256 });
+    } catch (e) {
+      console.warn('[FileProtection] - Failed to drain old events:', e);
+    }
+
+    try {
+      const { listen } = await import('@tauri-apps/api/event');
+      this.eventUnlisten = await listen<FileProtectionEventPayload>('file-protection-event', (event) => {
+        if (!this.enabled) return;
+        const { path, threat_name } = event.payload;
+        if (threat_name) {
+          // 后端已判定威胁（如银狐木马），直接隔离并弹窗，不再走扫描流程和扩展名过滤
+          console.log('[FileProtection] - Backend threat reported:', path, '->', threat_name);
+          this.handleThreat(path, threat_name, 0.95);
+          return;
+        }
+        if (!this.shouldScanFile(path)) return;
+        this.handleFileEvent(path);
+      });
+    } catch (e) {
+      console.error('[FileProtection] - Failed to start event listener:', e);
+    }
+  }
+
+  private stopListening(): void {
+    if (!this.eventUnlisten) return;
+
+    console.log('[FileProtection] - Stopping file event listener...');
+    this.eventUnlisten();
+    this.eventUnlisten = null;
+  }
+
+  private shouldScanFile(filePath: string): boolean {
+    const lower = filePath.toLowerCase();
+    const now = Date.now();
+
+    // 监控 PE 可执行文件及常见脚本/宏载体
+    const isMonitored = lower.endsWith('.exe')
+      || lower.endsWith('.scr')
+      || lower.endsWith('.com')
+      || lower.endsWith('.pif')
+      || lower.endsWith('.msi')
+      || lower.endsWith('.msp')
+      || lower.endsWith('.gadget')
+      || lower.endsWith('.js')
+      || lower.endsWith('.jse')
+      || lower.endsWith('.vbs')
+      || lower.endsWith('.vbe')
+      || lower.endsWith('.bat')
+      || lower.endsWith('.cmd')
+      || lower.endsWith('.ps1')
+      || lower.endsWith('.wsf')
+      || lower.endsWith('.hta');
+    if (!isMonitored) return false;
+
+    // 排除自身目录和常见系统/软件目录，但保留 Temp（恶意文件高发区域）
+    const excludedPrefixes = [
+      '\\xiguasecurity',
+      '\\xigua security',
+      '\\windows\\',
+      '\\program files\\',
+      '\\program files (x86)\\',
+      '\\$recycle.bin',
+      '\\_mei',
+      '\\node_modules\\',
+      '\\python',
+      '\\site-packages',
+      '\\selenium',
+      '\\appdata\\local\\microsoft\\',
+      '\\appdata\\roaming\\microsoft\\',
+      '\\appdata\\local\\programs\\',
+    ];
+    if (excludedPrefixes.some(p => lower.includes(p))) return false;
+
+    // 短时间内已扫描过则跳过（命中威胁时会主动移出缓存，确保再次创建仍可拦截）
+    const lastScanned = this.processedFiles.get(lower);
+    if (lastScanned && (now - lastScanned) < this.processedTTL) return false;
+
+    return true;
+  }
+
+  private markScanned(filePath: string): void {
+    this.processedFiles.set(filePath.toLowerCase(), Date.now());
+
+    // 清理过期条目
+    const now = Date.now();
+    for (const [path, ts] of this.processedFiles) {
+      if (now - ts > this.processedTTL * 2) {
+        this.processedFiles.delete(path);
+      }
+    }
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  // 对“文件被占用”类错误进行短暂重试，避免文件刚创建时句柄未释放导致漏扫
+  private async tryScanWithRetry<T>(fn: () => Promise<T>, maxRetries = 4, delayMs = 200): Promise<T> {
+    for (let i = 0; i < maxRetries; i++) {
+      try {
+        return await fn();
+      } catch (e: any) {
+        const msg = String(e?.message || e);
+        const isLocked = msg.includes('另一个程序正在使用') ||
+          msg.includes('in use') ||
+          msg.includes('os error 32') ||
+          msg.includes('无法访问') ||
+          msg.includes('being used') ||
+          msg.includes('access');
+        if (!isLocked || i === maxRetries - 1) throw e;
+        console.log(`[FileProtection] File locked, retrying (${i + 1}/${maxRetries}):`, msg);
+        await this.delay(delayMs);
+      }
+    }
+    throw new Error('tryScanWithRetry unreachable');
+  }
+
+  private async handleFileEvent(filePath: string): Promise<void> {
+    const key = filePath.toLowerCase();
+    if (this.scanningFiles.has(key)) return;
+    this.scanningFiles.add(key);
+
+    try {
+      // 稍等片刻再扫描，让创建者释放文件句柄，避免“另一个程序正在使用此文件”
+      await this.delay(150);
+      console.log('[FileProtection] - Scanning file:', filePath);
+      const result = await this.scanFile(filePath);
+
+      if (result && result.isThreat && result.threatName) {
+        // 威胁文件：从缓存中移除，确保再次创建/移动仍可触发拦截
+        this.processedFiles.delete(key);
+        console.log('[FileProtection] - Threat detected:', filePath, '->', result.threatName);
+        await this.handleThreat(filePath, result.threatName, result.confidence || 0.8);
+      } else {
+        // 仅非威胁文件加入短期缓存
+        this.markScanned(filePath);
+      }
+    } catch (e) {
+      console.error('[FileProtection] - Failed to handle file event:', filePath, e);
+    } finally {
+      this.scanningFiles.delete(key);
+    }
+  }
+
+  private async scanFile(filePath: string): Promise<{ isThreat: boolean; threatName?: string; confidence?: number } | null> {
+    const { invoke } = await import('@tauri-apps/api/core');
+    const useAuxiliaryCloud = this.auxiliaryCloudScanManager?.isEnabled() || false;
+
+    // 1. 云端哈希优先（如果启用，且未启用辅助云查询）
+    const cloudEnabled = localStorage.getItem('cloud_scan_enabled') === 'true';
+    if (cloudEnabled && !useAuxiliaryCloud) {
+      try {
+        const hashes = await this.tryScanWithRetry(() => invoke('calculate_file_hashes_command', { filePaths: [filePath] }) as Promise<(string | null)[]>);
+        const hash = hashes?.[0];
+        if (hash) {
+          const cloudUrl = localStorage.getItem('cloud_hash_url') || 'https://cloudapi.xiguastudio.top';
+          const urls = this.cloudPrimaryFailed ? [cloudUrl] : [cloudUrl];
+          const apiKey = localStorage.getItem('cloud_hash_key') || 'scan_dcc33b100b8a485fb099a5dce4c4f486';
+
+          for (const url of urls) {
+            try {
+              const cloudResult = await Promise.race([
+                invoke<any>('cloud_hash_check_command', { serverUrl: url, apiKey, request: { hash } }),
+                new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000))
+              ]);
+
+              console.log('[FileProtection] - Cloud hash raw result:', url, cloudResult);
+              if (cloudResult && cloudResult.result === 'black') {
+                return { isThreat: true, threatName: cloudResult.family || 'CloudHash', confidence: 0.95 };
+              }
+              if (cloudResult && cloudResult.result === 'white') {
+                return { isThreat: false };
+              }
+              // unknown / null / 超时 / 错误：继续走引擎 + 深度分析
+            } catch (e) {
+              console.warn('[FileProtection] - Cloud hash failed:', url, e);
+            }
+            if (url === cloudUrl) this.cloudPrimaryFailed = true;
+          }
+        }
+      } catch (e) {
+        console.error('[FileProtection] - Cloud hash error:', e);
+      }
+    }
+
+    // 2. 本地引擎扫描
+    // 脚本文件永远不走主引擎/机器学习引擎，仅由脚本扫描引擎处理
+    const isScript = (window as any).appInstance?.isScriptFile?.(filePath) || false;
+    if (isScript) {
+      const scriptScanEnabled = (window as any).appInstance?.scriptScanManager?.isEnabled() || false;
+      if (scriptScanEnabled) {
+        try {
+          console.log('[FileProtection] - Scanning script file:', filePath);
+          const scriptResult = await this.tryScanWithRetry(() => invoke<any>('scan_script_file_command', { filePath }));
+          console.log('[FileProtection] - Script scan result:', filePath, scriptResult);
+          if (scriptResult && scriptResult.is_malicious) {
+            return { isThreat: true, threatName: scriptResult.virus_family || 'Trojan.Win32.BAT.Generic', confidence: scriptResult.threat_level || 0.9 };
+          }
+        } catch (e) {
+          console.error('[FileProtection] - Script scan error:', filePath, e);
+        }
+      } else {
+        console.log('[FileProtection] - Script scan disabled, skipping script file:', filePath);
+      }
+      return { isThreat: false };
+    }
+
+    const result = await this.tryScanWithRetry(() => invoke('scan_file_basic', {
+      filePath,
+      pid: null,
+      puaEnabled: localStorage.getItem('pua_protection_enabled') === 'true'
+    }) as Promise<any>);
+
+    if (result.result === 'SUSPICIOUS' || result.result === 'PUA') {
+      return { isThreat: false }; // 可疑/PUA 交给其他模块处理，不自动隔离
+    }
+
+    if (result.isThreat && result.threatName) {
+      // 辅助云查询：本地引擎检出威胁后，再查云端哈希库白名单
+      if (useAuxiliaryCloud && this.cloudHashManager) {
+        try {
+          const hashes = await this.tryScanWithRetry(() => invoke('calculate_file_hashes_command', { filePaths: [filePath] }) as Promise<(string | null)[]>);
+          const hash = hashes?.[0];
+          if (hash) {
+            const cloudResult = await this.cloudHashManager.forceCheckHash(hash);
+            console.log('[FileProtection] Auxiliary cloud query result:', filePath, cloudResult?.result);
+            if (cloudResult && cloudResult.result === 'white') {
+              console.log('[FileProtection] 命中云端:', filePath);
+              return { isThreat: false };
+            }
+          }
+        } catch (e) {
+          console.error('[FileProtection] Auxiliary cloud hash check failed:', filePath, e);
+        }
+      }
+      return { isThreat: true, threatName: result.threatName, confidence: result.confidence || 0.8 };
+    }
+
+    return { isThreat: false };
+  }
+
+  private async handleThreat(filePath: string, threatName: string, confidence: number): Promise<void> {
+    const { invoke } = await import('@tauri-apps/api/core');
+
+    // 1. 先尝试自动隔离，失败不影响弹窗提示
+    try {
+      const quarantineResult = await invoke('quarantine_threat_file', {
+        filePath,
+        threatName,
+        threatLevel: confidence > 0.7 ? 'High' : (confidence > 0.4 ? 'Medium' : 'Low')
+      }) as any;
+
+      if (quarantineResult && quarantineResult.success) {
+        console.log('[FileProtection] - Quarantined:', filePath, '->', quarantineResult.id);
+      } else {
+        console.warn('[FileProtection] - Quarantine failed or partial:', filePath, quarantineResult);
+      }
+    } catch (e) {
+      console.warn('[FileProtection] - Quarantine threw, continuing to alert:', filePath, e);
+    }
+
+    // 2. 显示文件防护隔离告警窗口（必须让用户感知到威胁）
+    try {
+      await invoke('show_file_protection_alert', {
+        filePath,
+        virusFamily: threatName
+      });
+    } catch (e) {
+      console.error('[FileProtection] - Failed to show alert:', filePath, e);
+    }
+
+    // 3. 触发回调
+    if (this.onThreatDetectedCallback) {
+      this.onThreatDetectedCallback(filePath, threatName);
+    }
+  }
+
+
+  refreshState(): void {
+    this.loadState();
+    if (this.enabled && !this.eventUnlisten) {
+      this.startListening();
+    } else if (!this.enabled && this.eventUnlisten) {
+      this.stopListening();
+    }
+  }
+}
+
+// Infector Detection Manager - 感染型病毒检测管理
+class InfectorDetectionManager {
+  private enabled: boolean = true;
+  private storageKey: string = 'infector_detection_enabled';
+
+  constructor() {
+    this.loadState();
+  }
+
+  private loadState(): void {
+    try {
+      const stored = localStorage.getItem(this.storageKey);
+      if (stored !== null) {
+        this.enabled = stored === 'true';
+      }
+    } catch (e) {
+      console.error('Failed to load infector detection state:', e);
+      this.enabled = true;
+    }
+  }
+
+  async setEnabled(enabled: boolean): Promise<void> {
+    this.enabled = enabled;
+    try {
+      localStorage.setItem(this.storageKey, String(enabled));
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('set_infector_detection_enabled', { enabled }).catch(() => {});
+    } catch (e) {
+      console.error('Failed to set infector detection:', e);
+    }
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  refreshState(): void {
+    this.loadState();
+  }
+}
+
+// Script Protection Manager - 脚本防护管理
+class ScriptProtectionManager {
+  private enabled: boolean = false;
+
+  constructor() {
+    this.loadState();
+  }
+
+  private async loadState(): Promise<void> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      this.enabled = await invoke('get_script_protection_enabled');
+    } catch (e) {
+      console.error('Failed to load script protection state:', e);
+      this.enabled = false;
+    }
+  }
+
+  async setEnabled(enabled: boolean): Promise<void> {
+    this.enabled = enabled;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('set_script_protection_enabled', { enabled }).catch(() => {});
+    } catch (e) {
+      console.error('Failed to set script protection:', e);
+    }
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+}
+
+// Virus Family Analysis Manager - 病毒家族分析管理
+class VirusFamilyAnalysisManager {
+  private enabled: boolean = true;
+  private storageKey: string = 'virus_family_analysis_enabled';
+
+  constructor() {
+    this.loadState();
+  }
+
+  private loadState(): void {
+    try {
+      const stored = localStorage.getItem(this.storageKey);
+      if (stored !== null) {
+        this.enabled = stored === 'true';
+      }
+    } catch (e) {
+      console.error('Failed to load virus family analysis state:', e);
+      this.enabled = true;
+    }
+  }
+
+  async setEnabled(enabled: boolean): Promise<void> {
+    this.enabled = enabled;
+    try {
+      localStorage.setItem(this.storageKey, String(enabled));
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('set_virus_family_analysis_enabled', { enabled }).catch(() => {});
+    } catch (e) {
+      console.error('Failed to set virus family analysis:', e);
+    }
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  refreshState(): void {
+    this.loadState();
+  }
+}
+
+// Driver Launch Hint Manager - 驱动启动提示管理
+class DriverLaunchHintManager {
+  private dontShowAgain: boolean = false;
+  private readonly STORAGE_KEY = 'driver_launch_hint_dont_show';
+
+  constructor() {
+    this.loadState();
+  }
+
+  private loadState() {
+    try {
+      const value = localStorage.getItem(this.STORAGE_KEY);
+      this.dontShowAgain = value === 'true';
+    } catch (e) {
+      console.error('Failed to load driver launch hint state:', e);
+      this.dontShowAgain = false;
+    }
+  }
+
+  isDontShowAgain(): boolean {
+    return this.dontShowAgain;
+  }
+
+  setDontShowAgain(value: boolean) {
+    try {
+      this.dontShowAgain = value;
+      localStorage.setItem(this.STORAGE_KEY, value ? 'true' : 'false');
+    } catch (e) {
+      console.error('Failed to save driver launch hint state:', e);
+    }
+  }
+}
+
+// Script Scan Manager - 脚本扫描引擎管理
+class ScriptScanManager {
+  private enabled: boolean = false;
+
+  constructor() {
+    this.loadState();
+  }
+
+  private async loadState() {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      this.enabled = await invoke('get_script_scan_enabled');
+    } catch (e) {
+      console.error('Failed to load script scan state:', e);
+      this.enabled = false; // 默认关闭
+    }
+  }
+
+  async setEnabled(enabled: boolean): Promise<void> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('set_script_scan_enabled', { enabled });
+      this.enabled = enabled;
+    } catch (e) {
+      console.error('Failed to set script scan:', e);
+    }
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  async refreshState(): Promise<void> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      this.enabled = await invoke('get_script_scan_enabled');
+    } catch (e) {
+      console.error('Failed to refresh script scan state:', e);
+    }
+  }
+}
+
+// Protection Type Manager - 防护类型管理（引导扇区、注册表、勒索软件、进程、内存）
+class ProtectionTypeManager {
+  private bootEnabled: boolean = true;
+  private registryEnabled: boolean = true;
+  private ransomwareEnabled: boolean = false; // 勒索软件防护默认关闭（误报率高）
+  private processEnabled: boolean = true;
+  private memoryEnabled: boolean = true;
+
+  constructor() {
+    this.loadState();
+  }
+
+  private async loadState() {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const config: ProtectionConfig = await invoke('get_protection_config');
+      this.bootEnabled = config.boot ?? true;
+      this.registryEnabled = config.registry ?? true;
+      this.ransomwareEnabled = config.ransomware ?? false; // 默认关闭
+      this.processEnabled = config.process ?? true;
+      this.memoryEnabled = config.memory ?? true;
+    } catch (e) {
+      console.error('Failed to load protection config:', e);
+      // 默认设置：勒索软件防护关闭，其他开启
+      this.bootEnabled = true;
+      this.registryEnabled = true;
+      this.ransomwareEnabled = false; // 默认关闭
+      this.processEnabled = true;
+      this.memoryEnabled = true;
+    }
+  }
+
+  async setBootEnabled(enabled: boolean): Promise<void> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('set_protection_config', { 
+        config: { boot: enabled } 
+      });
+      this.bootEnabled = enabled;
+    } catch (e) {
+      console.error('Failed to set boot protection:', e);
+    }
+  }
+
+  async setRegistryEnabled(enabled: boolean): Promise<void> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('set_protection_config', { 
+        config: { registry: enabled } 
+      });
+      this.registryEnabled = enabled;
+    } catch (e) {
+      console.error('Failed to set registry protection:', e);
+    }
+  }
+
+  async setRansomwareEnabled(enabled: boolean): Promise<void> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('set_protection_config', { 
+        config: { ransomware: enabled } 
+      });
+      this.ransomwareEnabled = enabled;
+    } catch (e) {
+      console.error('Failed to set ransomware protection:', e);
+    }
+  }
+
+  async setProcessEnabled(enabled: boolean): Promise<void> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('set_protection_config', { 
+        config: { process: enabled } 
+      });
+      this.processEnabled = enabled;
+    } catch (e) {
+      console.error('Failed to set process protection:', e);
+    }
+  }
+
+  async setMemoryEnabled(enabled: boolean): Promise<void> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('set_protection_config', { 
+        config: { memory: enabled } 
+      });
+      this.memoryEnabled = enabled;
+    } catch (e) {
+      console.error('Failed to set memory protection:', e);
+    }
+  }
+
+  isBootEnabled(): boolean {
+    return this.bootEnabled;
+  }
+
+  isRegistryEnabled(): boolean {
+    return this.registryEnabled;
+  }
+
+  isRansomwareEnabled(): boolean {
+    return this.ransomwareEnabled;
+  }
+
+  isProcessEnabled(): boolean {
+    return this.processEnabled;
+  }
+
+  isMemoryEnabled(): boolean {
+    return this.memoryEnabled;
+  }
+
+  async refreshState(): Promise<void> {
+    await this.loadState();
+  }
+}
+
+// 防护配置接口
+interface ProtectionConfig {
+  boot?: boolean;
+  registry?: boolean;
+  ransomware?: boolean;
+  process?: boolean;
+  memory?: boolean;
+}
+
+// Scan Batch Size Manager - 扫描批处理大小管理
+// Sidebar Shadow Manager - 侧边栏阴影管理
+class SidebarShadowManager {
+  private enabled: boolean = true;
+  private storageKey: string = 'sidebar_shadow_enabled';
+
+  constructor() {
+    this.loadState();
+  }
+
+  private loadState(): void {
+    try {
+      const stored = localStorage.getItem(this.storageKey);
+      if (stored !== null) {
+        this.enabled = stored === 'true';
+      }
+    } catch (e) {
+      console.error('Failed to load sidebar shadow state:', e);
+      this.enabled = true; // 默认开启
+    }
+  }
+
+  setEnabled(enabled: boolean): void {
+    this.enabled = enabled;
+    try {
+      localStorage.setItem(this.storageKey, String(enabled));
+      // 立即应用样式
+      this.applyStyle();
+    } catch (e) {
+      console.error('Failed to save sidebar shadow state:', e);
+    }
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  applyStyle(): void {
+    const sidebar = document.querySelector('.sidebar') as HTMLElement;
+    const titlebar = document.querySelector('.titlebar') as HTMLElement;
+    if (sidebar) {
+      if (this.enabled) {
+        sidebar.style.boxShadow = '2px 0 8px rgba(0, 0, 0, 0.06)';
+      } else {
+        sidebar.style.boxShadow = 'none';
+      }
+    }
+    if (titlebar) {
+      if (this.enabled) {
+        titlebar.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.08)';
+      } else {
+        titlebar.style.boxShadow = 'none';
+      }
+    }
+  }
+}
+
+// EDR 模式管理器
+class EdrModeManager {
+  private enabled: boolean = false;
+  private storageKey: string = 'edr_mode_enabled';
+  private onStateChangeCallback: ((enabled: boolean) => void) | null = null;
+
+  constructor() {
+    this.loadState();
+    // 如果 EDR 已启用，启动后端监控
+    if (this.enabled) {
+      console.log('[EDR] Auto-starting backend monitoring on init');
+      this.updateBackendState();
+    }
+  }
+
+  private loadState(): void {
+    try {
+      const stored = localStorage.getItem(this.storageKey);
+      if (stored !== null) {
+        this.enabled = stored === 'true';
+      }
+    } catch (e) {
+      console.error('Failed to load EDR mode state:', e);
+      this.enabled = false;
+    }
+  }
+
+  setEnabled(enabled: boolean): void {
+    const changed = this.enabled !== enabled;
+    this.enabled = enabled;
+    try {
+      localStorage.setItem(this.storageKey, String(enabled));
+      // 调用后端启用/禁用 ETW 监控
+      this.updateBackendState();
+      // 触发状态变更回调
+      if (changed && this.onStateChangeCallback) {
+        this.onStateChangeCallback(enabled);
+      }
+    } catch (e) {
+      console.error('Failed to save EDR mode state:', e);
+    }
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  setOnStateChange(callback: (enabled: boolean) => void): void {
+    this.onStateChangeCallback = callback;
+  }
+
+  private async updateBackendState(): Promise<void> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('set_edr_mode', { enabled: this.enabled });
+      console.log('[EDR] Mode updated:', this.enabled);
+    } catch (e) {
+      console.error('[EDR] Failed to update backend state:', e);
+    }
+  }
+}
+
+class ScanBatchSizeManager {
+  private batchSize: number = 25;
+  private storageKey: string = 'scan_batch_size';
+
+  constructor() {
+    this.loadState();
+  }
+
+  private loadState(): void {
+    try {
+      const stored = localStorage.getItem(this.storageKey);
+      if (stored !== null) {
+        const size = parseInt(stored, 10);
+        if (!isNaN(size) && size >= 5 && size <= 100) {
+          this.batchSize = size;
+        }
+      }
+    } catch (e) {
+      console.error('Failed to load batch size state:', e);
+      this.batchSize = 25; // 默认25
+    }
+  }
+
+  setBatchSize(size: number): void {
+    if (size >= 5 && size <= 100) {
+      this.batchSize = size;
+      try {
+        localStorage.setItem(this.storageKey, String(size));
+      } catch (e) {
+        console.error('Failed to save batch size state:', e);
+      }
+    }
+  }
+
+  getBatchSize(): number {
+    return this.batchSize;
+  }
+}
+
+
+
+// Cloud Hash Manager - 云端哈希库管理
+class CloudHashManager {
+  private enabled: boolean = false;
+  private serverUrl: string = 'https://cloudapi.xiguastudio.top';
+  private apiKey: string = 'scan_dcc33b100b8a485fb099a5dce4c4f486';
+  private storageKey: string = 'cloud_hash_enabled_v2';
+
+  constructor() {
+    this.loadState();
+  }
+
+  private loadState(): void {
+    try {
+      const stored = localStorage.getItem(this.storageKey);
+      if (stored !== null) {
+        this.enabled = stored === 'true';
+      } else {
+        this.enabled = true;
+      }
+    } catch (e) {
+      console.error('Failed to load cloud hash state:', e);
+    }
+  }
+
+  private saveState(): void {
+    try {
+      localStorage.setItem(this.storageKey, String(this.enabled));
+    } catch (e) {
+      console.error('Failed to save cloud hash state:', e);
+    }
+  }
+
+  setEnabled(enabled: boolean): void {
+    this.enabled = enabled;
+    this.saveState();
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  // 检查单个哈希（对接新平台 API，通过Rust后端代理解决CSP限制）
+  async checkHash(fileHash: string): Promise<{result: string, family?: string, message?: string} | null> {
+    if (!this.enabled) {
+      return null;
+    }
+    return this._invokeHashCheck('cloud_hash_check_command', { hash: fileHash });
+  }
+
+  // 辅助云查询强制检查（不依赖 enabled 开关，带重试）
+  async forceCheckHash(fileHash: string): Promise<{result: string, family?: string, message?: string} | null> {
+    const urls = [
+      localStorage.getItem('cloud_hash_url') || this.serverUrl,
+      this.serverUrl
+    ];
+    const apiKey = localStorage.getItem('cloud_hash_key') || this.apiKey;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      for (let i = 0; i < urls.length; i++) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          const result = await invoke<any>('cloud_hash_check_command', {
+            serverUrl: urls[i],
+            apiKey,
+            request: { hash: fileHash }
+          });
+          if (result) {
+            console.log(`[AuxiliaryCloud] Query success (attempt ${attempt + 1}, url ${urls[i]}):`, result);
+            return result;
+          }
+        } catch (error) {
+          console.warn(`[AuxiliaryCloud] Query failed (attempt ${attempt + 1}, url ${urls[i]}):`, error);
+        }
+      }
+    }
+    console.error('[AuxiliaryCloud] All cloud hash query attempts failed for hash:', fileHash);
+    return null;
+  }
+
+  // 批量检查哈希（减少请求数，通过Rust后端代理解决CSP限制）
+  async batchCheckHashes(hashes: string[]): Promise<{results: Array<{hash: string, result: string, family?: string, message?: string}>} | null> {
+    if (!this.enabled || hashes.length === 0) {
+      return null;
+    }
+    return this._invokeHashCheck('cloud_hash_batch_command', { hashes });
+  }
+
+  // 通用云端哈希调用，主服务器失败时自动切换到兜底服务器
+  private async _invokeHashCheck(command: string, request: any): Promise<any> {
+    const urls = [this.serverUrl];
+    for (let i = 0; i < urls.length; i++) {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const result = await invoke(command, {
+          serverUrl: urls[i],
+          apiKey: this.apiKey,
+          request
+        });
+        return result;
+      } catch (error) {
+        if (i < urls.length - 1) {
+          console.warn(`[CloudHash] - Primary server failed, trying fallback (${urls[i + 1]}):`, error);
+        } else {
+          console.error('[CloudHash] - All servers failed:', error);
+        }
+      }
+    }
+    return null;
+  }
+
+  /** 是否已连接（健康检查） */
+  async isConnected(): Promise<boolean> {
+    if (!this.enabled) return false;
+    try {
+      const resp = await fetch(this.serverUrl + '/api/health', { signal: AbortSignal.timeout(3000) });
+      return resp.ok;
+    } catch {
+      return false;
+    }
+  }
+}
+
+// Skip Local Rules Manager - 禁用本地规则库管理
+class SkipLocalRulesManager {
+  private enabled: boolean = false;
+
+  constructor() {
+    this.loadState();
+  }
+
+  private async loadState(): Promise<void> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const val = await invoke('set_skip_local_rules', {});
+      this.enabled = val === true;
+    } catch (e) {
+      console.error('Failed to load skip local rules state:', e);
+      this.enabled = false;
+    }
+  }
+
+  async setEnabled(enabled: boolean): Promise<void> {
+    this.enabled = enabled;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('set_skip_local_rules', { enabled }).catch(() => {});
+    } catch (e) {
+      console.error('Failed to set skip local rules:', e);
+    }
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+}
+
+// Archive Scan Manager - 压缩包扫描管理
+class ArchiveScanManager {
+  private enabled: boolean = false;
+  private storageKey: string = 'archive_scan_enabled';
+
+  constructor() {
+    this.loadState();
+  }
+
+  private loadState(): void {
+    try {
+      const stored = localStorage.getItem(this.storageKey);
+      if (stored !== null) {
+        this.enabled = stored === 'true';
+      }
+    } catch (e) {
+      console.error('Failed to load archive scan state:', e);
+      this.enabled = false;
+    }
+  }
+
+  setEnabled(enabled: boolean): void {
+    this.enabled = enabled;
+    try {
+      localStorage.setItem(this.storageKey, String(enabled));
+    } catch (e) {
+      console.error('Failed to save archive scan state:', e);
+    }
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+}
+
+// Context Menu Manager - 右键菜单管理
+class ContextMenuManager {
+  private enabled: boolean = false;
+  private storageKey: string = 'context_menu_enabled';
+
+  constructor() {
+    this.loadState();
+  }
+
+  private async loadState(): Promise<void> {
+    try {
+      // 从本地存储读取状态
+      const stored = localStorage.getItem(this.storageKey);
+      if (stored !== null) {
+        this.enabled = stored === 'true';
+      }
+      
+      // 同时检查注册表实际状态
+      const { invoke } = await import('@tauri-apps/api/core');
+      const registered = await invoke('is_context_menu_registered_command') as boolean;
+      
+      // 如果状态不一致，以注册表为准
+      if (this.enabled !== registered) {
+        this.enabled = registered;
+        localStorage.setItem(this.storageKey, String(registered));
+      }
+    } catch (e) {
+      console.error('Failed to load context menu state:', e);
+      this.enabled = false;
+    }
+  }
+
+  async setEnabled(enabled: boolean): Promise<boolean> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      
+      if (enabled) {
+        await invoke('register_context_menu_command');
+      } else {
+        await invoke('unregister_context_menu_command');
+      }
+      
+      this.enabled = enabled;
+      localStorage.setItem(this.storageKey, String(enabled));
+      return true;
+    } catch (e) {
+      console.error('Failed to set context menu state:', e);
+      return false;
+    }
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+}
+
+// Rules Manager - 规则库管理
+class RulesManager {
+  private version: string = '0.0.0';
+  private updatedAt: string = '1970-01-01';
+  private lastCheck: string = '1970-01-01';
+  private fileCount: number = 0;
+  private hashCount: number = 0;
+  private hasUpdate: boolean = false;
+  private latestVersion: string = '';
+  private latestDescription: string = '';
+  private latestUpdatedAt: string = '';
+  private localizationManager: LocalizationManager;
+
+  constructor(localizationManager: LocalizationManager) {
+    this.localizationManager = localizationManager;
+    this.loadState();
+  }
+
+  private t(key: keyof Translations, params?: Record<string, string | number>): string {
+    return this.localizationManager.format(key, params);
+  }
+
+  private async loadState() {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const status = await invoke('get_rules_status_command') as any;
+      this.version = status.version || '0.0.0';
+      this.updatedAt = status.updated_at || '1970-01-01';
+      this.lastCheck = status.last_check || '1970-01-01';
+      this.fileCount = status.file_count || 0;
+      this.hashCount = status.hash_count || 0;
+    } catch (e) {
+      console.error('Failed to load rules state:', e);
+    }
+  }
+
+  async checkUpdate(): Promise<boolean> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const result = await invoke('check_rules_update_command') as any;
+      
+      if (result.has_update) {
+        this.hasUpdate = true;
+        this.latestVersion = result.version;
+        this.latestDescription = result.description || '';
+        this.latestUpdatedAt = result.updated_at || '';
+        return true;
+      }
+      
+      this.hasUpdate = false;
+      this.latestDescription = '';
+      return false;
+    } catch (e) {
+      console.error('Failed to check rules update:', e);
+      return false;
+    }
+  }
+
+  async updateRules(): Promise<{ success: boolean; error?: string }> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('update_rules_command');
+      await this.loadState();
+      this.hasUpdate = false;
+      this.latestDescription = '';
+      return { success: true };
+    } catch (e: any) {
+      console.error('Failed to update rules:', e);
+      return { success: false, error: e?.message || String(e) || this.t('downloadUpdateFailed') };
+    }
+  }
+
+  async shouldAutoCheck(): Promise<boolean> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      return await invoke('should_auto_check_rules') as boolean;
+    } catch (e) {
+      console.error('Failed to check auto check status:', e);
+      return false;
+    }
+  }
+
+  getVersion(): string {
+    return this.version;
+  }
+
+  getUpdatedAt(): string {
+    return this.updatedAt;
+  }
+
+  getLastCheck(): string {
+    return this.lastCheck;
+  }
+
+  hasUpdateAvailable(): boolean {
+    return this.hasUpdate;
+  }
+
+  getLatestVersion(): string {
+    return this.latestVersion;
+  }
+
+  getLatestDescription(): string {
+    return this.latestDescription;
+  }
+
+  getLatestUpdatedAt(): string {
+    return this.latestUpdatedAt;
+  }
+
+  getFileCount(): number {
+    return this.fileCount;
+  }
+
+  getHashCount(): number {
+    return this.hashCount;
+  }
+
+  async refreshState(): Promise<void> {
+    await this.loadState();
+  }
+}
+
+// Driver Protection Manager
+class DriverProtectionManager {
+  private enabled: boolean = false;
+  private interceptedLogs: string[] = [];
+  private logCheckInterval: number | null = null;
+  private onNewLogsCallback: ((logs: string[]) => void) | null = null;
+
+  // 意外停止检测相关
+  private crashCheckInterval: number | null = null;
+  private lastEnabledState: boolean = false;
+  private crashDetectedCallback: (() => void) | null = null;
+  private userManuallyStopped: boolean = false;
+  // 启动检测的时间戳（用户开启防护时更新，UAC 等待期间不误报）
+  private crashDetectionStartupTime: number = Date.now();
+  // 崩溃后自动重试相关：先自动重启一次，10 秒内仍运行则不弹窗
+  private crashRetryCount: number = 0;
+  private crashRetryInProgress: boolean = false;
+  private crashDialogShown: boolean = false;
+
+  // 配置保存相关 - 默认开启
+  private configEnabled: boolean = false;
+
+  // 新拦截窗口（通过管道与主程序通讯，代替 TaskDialog）
+  private newInterceptWindow: boolean = false;
+
+  // 缓存最近一次检测到的实际进程状态，供同步方法使用
+  private cachedProcessRunning: boolean = false;
+  constructor() {
+    this.loadState();
+    this.loadConfig();
+  }
+
+  // 加载保存的配置（默认关闭）
+  private async loadConfig() {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      this.configEnabled = await invoke('get_driver_protection_config_enabled');
+      console.log('[DriverProtection] Config loaded:', this.configEnabled);
+      
+      // 加载新拦截窗口设置（默认启用）
+      try {
+        const config: any = await invoke('get_protection_config');
+        this.newInterceptWindow = config.new_intercept_window ?? true;
+        console.log('[DriverProtection] New intercept window setting:', this.newInterceptWindow, 'Config:', config);
+      } catch (e2) {
+        this.newInterceptWindow = true; // 默认启用
+        console.log('[DriverProtection] Failed to load new intercept window setting:', e2);
+      }
+    } catch (e) {
+      console.error('[DriverProtection] Failed to load config:', e);
+      this.configEnabled = false; // 默认关闭
+    }
+  }
+
+  // 保存配置
+  async saveConfig(enabled: boolean): Promise<void> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('set_driver_protection_config_enabled', { enabled });
+      this.configEnabled = enabled;
+      console.log('[DriverProtection] Config saved:', enabled);
+    } catch (e) {
+      console.error('[DriverProtection] Failed to save config:', e);
+    }
+  }
+
+  // 获取配置状态
+  getConfigEnabled(): boolean {
+    return this.configEnabled;
+  }
+
+  // 新拦截窗口 getter/setter
+  isNewInterceptWindowEnabled(): boolean {
+    return this.newInterceptWindow;
+  }
+
+  async setNewInterceptWindow(enabled: boolean): Promise<void> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      // 读取当前完整配置，修改 new_intercept_window 字段后写回
+      const config: any = await invoke('get_protection_config');
+      config.new_intercept_window = enabled;
+      await invoke('set_protection_config', { config });
+      this.newInterceptWindow = enabled;
+      console.log('[DriverProtection] New intercept window set:', enabled);
+    } catch (e) {
+      console.error('[DriverProtection] Failed to set new intercept window:', e);
+    }
+  }
+  
+  // 设置用户手动停止标志
+  setUserManuallyStopped(stopped: boolean) {
+    this.userManuallyStopped = stopped;
+  }
+  
+  // 获取用户手动停止标志
+  isUserManuallyStopped(): boolean {
+    return this.userManuallyStopped;
+  }
+  
+  // 设置意外停止回调
+  setOnCrashDetectedCallback(callback: () => void) {
+    this.crashDetectedCallback = callback;
+  }
+  
+  // 启动意外停止检测
+  startCrashDetection() {
+    if (this.crashCheckInterval) return;
+    
+    this.lastEnabledState = this.enabled;
+    
+    this.crashCheckInterval = window.setInterval(async () => {
+      try {
+        const processRunning = await this.isProcessRunning();
+        
+        // 如果之前是启用状态，但现在进程不在运行，且不是用户手动停止的
+        // UAC 宽限期内不触发崩溃检测（SimpleLauncher 可能还在等待 UAC 授权）
+        if (this.lastEnabledState && !processRunning && !this.userManuallyStopped) {
+          if (Date.now() - this.crashDetectionStartupTime < 20_000) {
+            // UAC 宽限期内，不报崩溃
+            return;
+          }
+          
+          if (this.crashRetryInProgress || this.crashDialogShown) {
+            return;
+          }
+          
+          // 首次崩溃：自动尝试重启一次，10 秒内仍运行则不弹窗
+          if (this.crashRetryCount < 1) {
+            this.crashRetryCount++;
+            this.crashRetryInProgress = true;
+            console.log('[DriverProtection] Crash detected, attempting automatic restart...');
+            try {
+              await this.setEnabled(true);
+              await new Promise(resolve => setTimeout(resolve, 10_000));
+              const stillRunning = await this.isProcessRunning();
+              if (stillRunning) {
+                console.log('[DriverProtection] Automatic restart succeeded, no crash dialog needed');
+                this.crashRetryCount = 0;
+                this.crashRetryInProgress = false;
+                this.lastEnabledState = true;
+                return;
+              }
+              console.log('[DriverProtection] Automatic restart failed, will show crash dialog');
+            } catch (e) {
+              console.error('[DriverProtection] Automatic restart attempt failed:', e);
+            }
+            this.crashRetryInProgress = false;
+          }
+          
+          console.log('[DriverProtection] Crash confirmed after retry, showing crash dialog');
+          if (this.crashDetectedCallback) {
+            this.crashDialogShown = true;
+            this.crashDetectedCallback();
+          }
+        }
+        
+        // 更新状态
+        this.lastEnabledState = processRunning;
+      } catch (e) {
+        console.error('[DriverProtection] Crash detection error:', e);
+      }
+    }, 3000); // 每3秒检查一次
+  }
+  
+  // 停止意外停止检测
+  stopCrashDetection() {
+    if (this.crashCheckInterval) {
+      clearInterval(this.crashCheckInterval);
+      this.crashCheckInterval = null;
+    }
+  }
+  
+  // 诊断驱动防护问题
+  async diagnose(): Promise<{
+    kernelIsolationEnabled: boolean;
+    kernelIsolationCheckError?: string;
+    processRunning: boolean;
+    driverFileExists: boolean;
+    driverFileCheckError?: string;
+  }> {
+    try {
+      const result = await invoke<{
+        kernel_isolation_enabled: boolean;
+        kernel_isolation_check_error?: string;
+        process_running: boolean;
+        driver_file_exists: boolean;
+        driver_file_check_error?: string;
+      }>('diagnose_driver_protection');
+      
+      return {
+        kernelIsolationEnabled: result.kernel_isolation_enabled,
+        kernelIsolationCheckError: result.kernel_isolation_check_error,
+        processRunning: result.process_running,
+        driverFileExists: result.driver_file_exists,
+        driverFileCheckError: result.driver_file_check_error,
+      };
+    } catch (e) {
+      console.error('[DriverProtection] Diagnosis failed:', e);
+      throw e;
+    }
+  }
+
+  private async loadState() {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      this.enabled = await invoke('get_driver_protection');
+      console.log('[DriverProtection] Loaded state:', this.enabled);
+      // 如果驱动防护已开启，自动启动日志检查（主程序重启后恢复监控）
+      if (this.enabled) {
+        console.log('[DriverProtection] Driver enabled on load, starting log checking');
+        this.startLogChecking();
+      }
+    } catch (e) {
+      console.error('Failed to load driver protection state:', e);
+    }
+  }
+
+  setOnNewLogsCallback(callback: (logs: string[]) => void) {
+    this.onNewLogsCallback = callback;
+  }
+
+  async setEnabled(enabled: boolean, isManualStop: boolean = false): Promise<void> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('set_driver_protection', { enabled });
+      this.enabled = enabled;
+      // 同步更新缓存的实际进程状态：关闭后 Agent 退出，进程不再运行；
+      // 不更新会导致主页"已保护您的计算机 X 天"一直显示旧状态
+      this.cachedProcessRunning = enabled;
+
+      // 保存配置状态
+      await this.saveConfig(enabled);
+
+      // 如果是用户手动停止，设置标志
+      if (!enabled && isManualStop) {
+        this.userManuallyStopped = true;
+      }
+      // 如果是启动防护，重置手动停止标志和崩溃检测标志
+      if (enabled) {
+        this.userManuallyStopped = false;
+        this.lastEnabledState = true;
+        this.crashDetectionStartupTime = Date.now(); // 更新启动时间，UAC 等待期间不误报
+        this.crashRetryCount = 0;
+        this.crashRetryInProgress = false;
+        this.crashDialogShown = false;
+      }
+
+      if (enabled) {
+        this.startLogChecking();
+      } else {
+        this.stopLogChecking();
+      }
+    } catch (e) {
+      console.error('Failed to set driver protection:', e);
+    }
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  async refreshState(): Promise<void> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      this.enabled = await invoke('get_driver_protection');
+      // 同步缓存实际进程状态，避免主页状态与实际不符
+      this.cachedProcessRunning = this.enabled;
+      // 如果驱动已经处于开启状态，需要在本端启动日志轮询，否则通知中心收不到拦截/EDR 事件
+      if (this.enabled) {
+        this.startLogChecking();
+      }
+    } catch (e) {
+      console.error('Failed to refresh driver protection state:', e);
+    }
+  }
+
+  // 检查实际进程是否在运行（而不是设置中的开关状态）
+  async isProcessRunning(): Promise<boolean> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const running = await invoke('check_driver_process_running') as boolean;
+      this.cachedProcessRunning = running;
+      return running;
+    } catch (e) {
+      console.error('Failed to check driver process:', e);
+      return false;
+    }
+  }
+
+  // 同步返回最近一次缓存的实际进程状态
+  isProcessRunningSync(): boolean {
+    return this.cachedProcessRunning;
+  }
+
+  private async startLogChecking() {
+    if (this.logCheckInterval) return;
+    
+    // 先获取一次当前日志作为基准，避免旧日志被当作新日志
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const currentLogs: string[] = await invoke('get_intercepted_logs');
+      this.interceptedLogs = currentLogs;
+    } catch (e) {
+      console.error('Failed to get initial logs:', e);
+    }
+    
+    this.logCheckInterval = window.setInterval(async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const logs: string[] = await invoke('get_intercepted_logs');
+        if (logs.length > 0) {
+          const newLogs = logs.filter(log => !this.interceptedLogs.includes(log));
+          if (newLogs.length > 0) {
+            this.interceptedLogs = logs;
+            if (this.onNewLogsCallback) {
+              this.onNewLogsCallback(newLogs);
+            }
+          }
+        }
+      } catch (e) {
+        console.error('Failed to get intercepted logs:', e);
+      }
+    }, 1000);
+  }
+
+  private stopLogChecking() {
+    if (this.logCheckInterval) {
+      clearInterval(this.logCheckInterval);
+      this.logCheckInterval = null;
+    }
+  }
+
+  getInterceptedLogs(): string[] {
+    return this.interceptedLogs;
+  }
+
+  async clearLogs(): Promise<void> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('clear_intercepted_logs');
+      this.interceptedLogs = [];
+    } catch (e) {
+      console.error('Failed to clear logs:', e);
+    }
+  }
+}
+
+// Anime Style Management
+type BackgroundMode = 'cover' | 'contain' | 'stretch' | 'repeat';
+
+class AnimeStyleManager {
+  private opacity: number = 1.0;
+  private backgroundImage: string | null = null;
+  private backgroundMode: BackgroundMode = 'cover';
+  private backdrop: 'none' | 'acrylic' | 'mica' | 'micaAlt' = 'none';
+  private customIcons: {
+    secure: string | null;
+    lowRisk: string | null;
+    mediumRisk: string | null;
+    highRisk: string | null;
+  } = {
+    secure: null,
+    lowRisk: null,
+    mediumRisk: null,
+    highRisk: null
+  };
+
+  constructor() {
+    const savedOpacity = localStorage.getItem('animeOpacity');
+    const savedBg = localStorage.getItem('animeBackground');
+    const savedBgMode = localStorage.getItem('animeBgMode');
+    const savedIcons = localStorage.getItem('animeIcons');
+    const savedBackdrop = localStorage.getItem('windowBackdrop');
+    const savedLegacyAcrylic = localStorage.getItem('acrylicEnabled');
+
+    if (savedOpacity) this.opacity = parseFloat(savedOpacity);
+    if (savedBg) this.backgroundImage = savedBg;
+    if (savedBgMode && ['cover', 'contain', 'stretch', 'repeat'].includes(savedBgMode)) {
+      this.backgroundMode = savedBgMode as BackgroundMode;
+    }
+    if (savedIcons) this.customIcons = JSON.parse(savedIcons);
+
+    // 优先读新 key，兼容旧版亚克力开关
+    if (savedBackdrop && ['none', 'acrylic', 'mica', 'micaAlt'].includes(savedBackdrop)) {
+      this.backdrop = savedBackdrop as typeof this.backdrop;
+    } else if (savedLegacyAcrylic === 'true') {
+      this.backdrop = 'acrylic';
+    } else {
+      this.backdrop = 'none';
+    }
+
+    this.applyStyles();
+    // 启动时恢复窗口材质
+    if (this.backdrop !== 'none') {
+      import('@tauri-apps/api/core').then(({ invoke }) => {
+        const themeMode = localStorage.getItem('themeMode') || 'colorful';
+        invoke('set_window_backdrop', { backdrop: this.backdrop, themeMode }).catch(() => {});
+      });
+    }
+    // 启动时从程序数据目录恢复已保存的背景图片
+    this.restoreBackgroundFromDisk();
+  }
+
+  // 从程序数据目录恢复背景图片（本地存储的路径失效时兜底）
+  private async restoreBackgroundFromDisk() {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const saved = await invoke('get_background_image') as string;
+      if (saved) {
+        // 本地存储的路径可能已被删除，用磁盘上的背景路径覆盖
+        const localBg = this.getBackgroundImage();
+        if (localBg && localBg === saved) return; // 一致，无需处理
+        if (!this.backgroundImage) {
+          this.backgroundImage = saved;
+          localStorage.setItem('animeBackground', saved);
+          this.loadBackgroundImage();
+        } else if (this.backgroundImage !== saved) {
+          // 本地存储路径失效（原图被删），回退到磁盘上的背景
+          this.backgroundImage = saved;
+          localStorage.setItem('animeBackground', saved);
+          this.loadBackgroundImage();
+        }
+      } else if (this.backgroundImage && !this.backgroundImage.startsWith('file://')) {
+        // 本地存储有路径但磁盘无背景（可能是旧版本），尝试从路径加载
+      }
+    } catch (e) {
+      console.error('[Background] Failed to restore from disk:', e);
+    }
+  }
+
+  setBackdrop(backdrop: 'none' | 'acrylic' | 'mica' | 'micaAlt') {
+    this.backdrop = backdrop;
+    localStorage.setItem('windowBackdrop', backdrop);
+    this.applyStyles();
+    // 调用后端切换窗口材质，带上当前主题模式
+    import('@tauri-apps/api/core').then(({ invoke }) => {
+      const themeMode = localStorage.getItem('themeMode') || 'colorful';
+      invoke('set_window_backdrop', { backdrop, themeMode }).catch(e => {
+        console.error('[Backdrop] Failed:', e);
+      });
+    });
+  }
+
+  getBackdrop(): 'none' | 'acrylic' | 'mica' | 'micaAlt' {
+    return this.backdrop;
+  }
+
+  setOpacity(opacity: number) {
+    this.opacity = Math.max(0, Math.min(1.0, opacity));
+    localStorage.setItem('animeOpacity', this.opacity.toString());
+    this.applyStyles();
+    // 实时调节亚克力强度（只对亚克力材质有效）
+    if (this.backdrop === 'acrylic') {
+      import('@tauri-apps/api/core').then(({ invoke }) => {
+        invoke('set_acrylic_intensity', { alpha: Math.round(opacity * 255) }).catch(() => {});
+      });
+    }
+  }
+
+  getOpacity(): number {
+    return this.opacity;
+  }
+
+  setBackgroundImage(imagePath: string | null) {
+    this.backgroundImage = imagePath;
+    if (imagePath) {
+      localStorage.setItem('animeBackground', imagePath);
+    } else {
+      localStorage.removeItem('animeBackground');
+    }
+  }
+
+  getBackgroundImage(): string | null {
+    return this.backgroundImage;
+  }
+
+  // 设置背景显示模式
+  setBackgroundMode(mode: BackgroundMode) {
+    this.backgroundMode = mode;
+    localStorage.setItem('animeBgMode', mode);
+    this.applyStyles();
+  }
+
+  // 获取背景显示模式
+  getBackgroundMode(): BackgroundMode {
+    return this.backgroundMode;
+  }
+
+  // 将显示模式映射为 CSS object-fit / background-size 值
+  getBackgroundCss(): { objectFit: string; backgroundSize: string; backgroundRepeat: string } {
+    switch (this.backgroundMode) {
+      case 'contain': // 自适应：完整显示图片，可能有留白
+        return { objectFit: 'contain', backgroundSize: 'contain', backgroundRepeat: 'no-repeat' };
+      case 'stretch': // 拉伸：填满窗口，可能变形
+        return { objectFit: 'fill', backgroundSize: '100% 100%', backgroundRepeat: 'no-repeat' };
+      case 'repeat': // 平铺
+        return { objectFit: 'cover', backgroundSize: 'auto', backgroundRepeat: 'repeat' };
+      case 'cover': // 填充（默认）：铺满裁剪
+      default:
+        return { objectFit: 'cover', backgroundSize: 'cover', backgroundRepeat: 'no-repeat' };
+    }
+  }
+
+  setCustomIcon(riskLevel: 'secure' | 'lowRisk' | 'mediumRisk' | 'highRisk', iconPath: string | null) {
+    this.customIcons[riskLevel] = iconPath;
+    localStorage.setItem('animeIcons', JSON.stringify(this.customIcons));
+  }
+
+  getCustomIcon(riskLevel: 'secure' | 'lowRisk' | 'mediumRisk' | 'highRisk'): string | null {
+    return this.customIcons[riskLevel];
+  }
+
+  getIconForThreatLevel(threatCount: number): string | null {
+    if (threatCount === 0) return this.customIcons.secure;
+    if (threatCount < 5) return this.customIcons.lowRisk;
+    if (threatCount < 20) return this.customIcons.mediumRisk;
+    return this.customIcons.highRisk;
+  }
+
+  async getIconUrl(iconPath: string): Promise<string> {
+    // 使用 Rust 后端命令加载图片并返回 base64 数据 URL
+    if (iconPath.startsWith('file://')) {
+      // 去掉 file:// 前缀，获取实际路径
+      const actualPath = iconPath.replace('file:///', '').replace(/\//g, '\\');
+      const { invoke } = await import('@tauri-apps/api/core');
+      return await invoke('load_image_as_base64', { filePath: actualPath }) as string;
+    }
+    if (iconPath.match(/^[A-Za-z]:/)) {
+      // Windows 绝对路径
+      const { invoke } = await import('@tauri-apps/api/core');
+      return await invoke('load_image_as_base64', { filePath: iconPath }) as string;
+    }
+    return iconPath;
+  }
+
+  private applyStyles() {
+    // 云母/亚克力都需要半透明背景让 DWM 效果透出来
+    document.documentElement.setAttribute('data-acrylic', (this.backdrop !== 'none').toString());
+    document.documentElement.setAttribute('data-backdrop', this.backdrop);
+    this.loadBackgroundImage();
+  }
+
+  private async loadBackgroundImage() {
+    const app = document.getElementById('app') as HTMLElement;
+    if (!app) {
+      console.log('[Background] app element not found');
+      return;
+    }
+
+    console.log('[Background] loadBackgroundImage called, backgroundImage:', this.backgroundImage);
+
+    if (this.backgroundImage) {
+      try {
+        console.log('[Background] Loading image:', this.backgroundImage);
+        const imgUrl = await this.getIconUrl(this.backgroundImage);
+        console.log('[Background] Got image URL (first 100 chars):', imgUrl.substring(0, 100));
+        // 先清除背景色，再设置背景图片
+        app.style.background = 'transparent';
+        app.style.backgroundImage = `url(${imgUrl})`;
+        const css = this.getBackgroundCss();
+        app.style.backgroundSize = css.backgroundSize;
+        app.style.backgroundPosition = 'center';
+        app.style.backgroundRepeat = css.backgroundRepeat;
+        // 标记自定义背景已启用：CSS 将内容容器透明化，让背景图透出来
+        // （修复：不开亚克力时背景图被内容层不透明背景完全遮挡的问题）
+        document.documentElement.setAttribute('data-custom-bg', 'true');
+        console.log('[Background] Background image applied, mode:', this.backgroundMode);
+      } catch (error) {
+        console.error('[Background] Failed to load background image:', error);
+        app.style.backgroundImage = 'none';
+        document.documentElement.setAttribute('data-custom-bg', 'false');
+      }
+    } else {
+      console.log('[Background] No background image set');
+      app.style.backgroundImage = 'none';
+      document.documentElement.setAttribute('data-custom-bg', 'false');
+    }
+  }
+
+  reset() {
+    this.opacity = 1.0;
+    this.backgroundImage = null;
+    this.backgroundMode = 'cover';
+    this.backdrop = 'none';
+    this.customIcons = { secure: null, lowRisk: null, mediumRisk: null, highRisk: null };
+    document.documentElement.setAttribute('data-custom-bg', 'false');
+    localStorage.removeItem('animeOpacity');
+    localStorage.removeItem('animeBackground');
+    localStorage.removeItem('animeBgMode');
+    localStorage.removeItem('animeIcons');
+    localStorage.removeItem('windowBackdrop');
+    localStorage.removeItem('acrylicEnabled');
+    this.applyStyles();
+  }
+}
+
+// Icons
+const Icons = {
+  home: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>`,
+  search: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>`,
+  grid: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>`,
+  shield: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>`,
+  settings: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>`,
+  shieldCheck: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>`,
+  shieldAlert: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>`,
+  scan: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="3"/></svg>`,
+  fileText: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>`,
+  logOut: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/></svg>`,
+  minimize: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/></svg>`,
+  maximize: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="5" y="5" rx="1.5" ry="1.5"/></svg>`,
+  close: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`,
+  arrowRight: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>`,
+  arrowLeft: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>`,
+  check: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`,
+  info: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>`,
+  list: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/></svg>`,
+  activity: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/></svg>`,
+  trash: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>`,
+  eye: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>`,
+  terminal: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>`,
+  folder: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>`,
+  cpu: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20v2"/><path d="M12 2v2"/><path d="M17 20v2"/><path d="M17 2v2"/><path d="M2 12h2"/><path d="M2 17h2"/><path d="M2 7h2"/><path d="M20 12h2"/><path d="M20 17h2"/><path d="M20 7h2"/><path d="M7 20v2"/><path d="M7 2v2"/><rect x="4" y="4" width="16" height="16" rx="2"/></svg>`,
+  database: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg>`,
+  globe: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>`,
+  zap: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>`,
+  box: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" x2="12" y1="22.08" y2="12"/></svg>`,
+  menu: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>`,
+  sandbox: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>`,
+};
+
+// ==================== 液态玻璃 (Liquid Glass) 模式管理 ====================
+// 灵感来自 Apple iOS 26 / macOS Tahoe 的 Liquid Glass 设计语言。
+// 启用后所有卡片切换为半透明玻璃体：背景模糊 + 边缘高光 + 噪声扭曲滤镜。
+class LiquidGlassManager {
+  private enabled: boolean = false;
+
+  constructor() {
+    const saved = localStorage.getItem('liquidGlassEnabled');
+    this.enabled = saved === 'true';
+    this.apply();
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  setEnabled(enabled: boolean) {
+    this.enabled = enabled;
+    localStorage.setItem('liquidGlassEnabled', enabled.toString());
+    this.apply();
+  }
+
+  toggle(): boolean {
+    this.setEnabled(!this.enabled);
+    return this.enabled;
+  }
+
+  private apply() {
+    document.documentElement.setAttribute('data-liquid-glass', this.enabled.toString());
+  }
+}
+
+// ==================== 隐藏分隔线 (Hide Separator Line) 模式管理 ====================
+// 启用后隐藏标题栏 / 侧边栏与主内容区域之间的分隔线（边框 + 投影），
+// 获得一体式沉浸观感，适合与液态玻璃 / 自定义背景搭配使用。
+class SeparatorLineManager {
+  private enabled: boolean = false;
+
+  constructor() {
+    const saved = localStorage.getItem('hideSeparatorEnabled');
+    this.enabled = saved === 'true';
+    this.apply();
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  setEnabled(enabled: boolean) {
+    this.enabled = enabled;
+    localStorage.setItem('hideSeparatorEnabled', enabled.toString());
+    this.apply();
+  }
+
+  toggle(): boolean {
+    this.setEnabled(!this.enabled);
+    return this.enabled;
+  }
+
+  private apply() {
+    document.documentElement.setAttribute('data-hide-separator', this.enabled.toString());
+  }
+}
+
+// App State
+type Page = 'home' | 'scan' | 'process' | 'settings' | 'quarantine' | 'security_log' | 'toolbox_popup' | 'toolbox_cleaner' | 'toolbox_edr_reports' | 'toolbox_process_manager' | 'toolbox_system_repair' | 'edr' | 'chat' | 'notifications';
+
+// 待处理威胁通知
+interface PendingThreat {
+  id: string;
+  path: string;
+  threatName: string;
+  threatLevel: string;
+  category: string;
+  detectedAt: string;
+  source: string;
+  status: 'pending' | 'processing' | 'resolved';
+}
+
+// 通知类型
+type NotificationCategory = 'threat' | 'scan' | 'intercept' | 'update' | 'quarantine' | 'system' | 'process';
+
+interface AppNotification {
+  id: string;
+  type: NotificationCategory;
+  title: string;
+  message: string;
+  timestamp: string;
+  read: boolean;
+  threatName?: string;
+  filePath?: string;
+  action?: string;
+  result?: string;
+  source?: string;
+  pendingThreatId?: string;
+}
+
+// 通知管理器（持久化到 localStorage）
+class NotificationManager {
+  private static STORAGE_KEY = 'xigua_notifications';
+  private static MAX_NOTIFICATIONS = 100;
+
+  private notifications: AppNotification[] = [];
+
+  constructor() {
+    this.load();
+  }
+
+  private load() {
+    try {
+      const raw = localStorage.getItem(NotificationManager.STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        this.notifications = Array.isArray(parsed) ? parsed.map((n: any) => ({
+          ...n,
+          id: n.id || `notif_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+          read: !!n.read,
+          timestamp: n.timestamp || new Date().toISOString(),
+          title: n.title || '通知',
+          message: n.type === 'threat' ? '' : (n.message || '-'),
+          type: n.type || 'system',
+          pendingThreatId: n.pendingThreatId,
+        })) : [];
+      }
+    } catch (_) {
+      this.notifications = [];
+    }
+  }
+
+  private save() {
+    try {
+      localStorage.setItem(NotificationManager.STORAGE_KEY, JSON.stringify(this.notifications));
+    } catch (_) {}
+  }
+
+  getAll(): AppNotification[] {
+    return [...this.notifications];
+  }
+
+  getById(id: string): AppNotification | undefined {
+    return this.notifications.find(n => n.id === id);
+  }
+
+  getUnreadCount(): number {
+    return this.notifications.filter(n => !n.read).length;
+  }
+
+  add(notification: Omit<AppNotification, 'id' | 'timestamp' | 'read'>): string {
+    const id = `notif_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const entry: AppNotification = {
+      ...notification,
+      id,
+      timestamp: new Date().toISOString(),
+      read: false,
+    };
+    this.notifications.unshift(entry);
+    if (this.notifications.length > NotificationManager.MAX_NOTIFICATIONS) {
+      this.notifications = this.notifications.slice(0, NotificationManager.MAX_NOTIFICATIONS);
+    }
+    this.save();
+    return id;
+  }
+
+  markAsRead(id: string) {
+    const n = this.notifications.find(item => item.id === id);
+    if (n) { n.read = true; this.save(); }
+  }
+
+  markAllAsRead() {
+    this.notifications.forEach(n => { n.read = true; });
+    this.save();
+  }
+
+  clearAll() {
+    this.notifications = [];
+    this.save();
+  }
+
+  removeById(id: string) {
+    this.notifications = this.notifications.filter(n => n.id !== id);
+    this.save();
+  }
+}
+
+// 安全日志类型定义
+interface SecurityLogEntry {
+  id: string;
+  timestamp: string;
+  category: 'scan' | 'realtime' | 'behavior' | 'driver' | 'update' | 'quarantine' | 'system' | 'other';
+  function: string;
+  summary: string;
+  details?: {
+    scanned_files?: number;
+    threats_found?: number;
+    threats_cleaned?: number;
+    file_size?: string;
+    virus_family?: string;
+    additional_info?: string;
+  };
+  file_path?: string;
+  threat_name?: string;
+  action: 'detected' | 'blocked' | 'cleaned' | 'quarantined' | 'deleted' | 'allowed' | 'scanned' | 'updated' | 'started' | 'stopped' | 'info';
+  result: 'success' | 'failed' | 'partial' | 'cancelled' | 'pending';
+}
+
+// interface SecurityLogStats {
+//   total_logs: number;
+//   category_counts: Record<string, number>;
+//   action_counts: Record<string, number>;
+//   threats_found: number;
+//   threats_blocked: number;
+//   threats_cleaned: number;
+// }
+
+// 动态获取的扫描文件列表
+let SCAN_FILES: string[] = [];
+
+class App {
+  private currentPage: Page = 'home';
+  private themeManager: ThemeManager;
+  private localizationManager: LocalizationManager;
+  private animeStyleManager: AnimeStyleManager;
+  private liquidGlassManager: LiquidGlassManager;
+  private separatorLineManager: SeparatorLineManager;
+  private driverProtectionManager: DriverProtectionManager;
+  // @ts-ignore - reserved for future use
+  private driverLaunchHintManager: DriverLaunchHintManager;
+  private basicProtectionManager: BasicProtectionManager;
+  private fileProtectionManager: FileProtectionManager;
+  private auxiliaryCloudScanManager: AuxiliaryCloudScanManager;
+  private scanSensitivity: string = 'high';
+  public puaProtectionEnabled: boolean = false;
+  public suspiciousInterceptEnabled: boolean = false;
+  public sandboxAnalysisEnabled: boolean = false;
+  public sandboxAnalysisFile: string = '';
+  public sandboxEnvStatus: string = '';
+  public popupInterceptorEnabled: boolean = false;
+  public popupRules: string[] = [];
+  public hiddenPopups: Array<{ hwnd: number; title: string; process_name: string; process_path: string; rule: string; hidden_at: string }> = [];
+  public desktopPetEnabled: boolean = false;
+  public autoStartEnabled: boolean = false; // 开机自启动
+  private silentModeManager: SilentModeManager;
+  private notificationModeManager: NotificationModeManager;
+  private infectorDetectionManager: InfectorDetectionManager;
+  private scriptProtectionManager: ScriptProtectionManager;
+  private virusFamilyAnalysisManager: VirusFamilyAnalysisManager;
+  private scanBatchSizeManager: ScanBatchSizeManager;
+
+  private isMsStore: boolean = false; // MS Store 版本标志
+
+  private scriptScanManager: ScriptScanManager;
+  private protectionTypeManager: ProtectionTypeManager;
+  private rulesManager: RulesManager;
+  private sidebarShadowManager: SidebarShadowManager;
+  private edrModeManager: EdrModeManager;
+  private archiveScanManager: ArchiveScanManager;
+  private skipLocalRulesManager: SkipLocalRulesManager;
+  private cloudHashManager: CloudHashManager;
+  private cloudDeepAnalysisManager: CloudDeepAnalysisManager;
+  private logUploadManager: LogUploadManager;
+  private contextMenuManager: ContextMenuManager;
+  private disableContinuousScroll: boolean = false;
+  private logs: string[] = [];
+  private isScanning: boolean = false;
+  private scanBatchRunning: boolean = false; // 防止 scanBatch 重入
+  private scanProgress: number = 0;
+  private isTraversing: boolean = false; // 遍历目录阶段（显示不确定进度条动画）
+  private scanTimer: number | null = null;
+  private sidebarUpdateTimer: number | null = null;
+  private isManualScrolling: boolean = false;
+  private currentScanFileIndex: number = 0;
+  private scannedFilesCount: number = 0;
+  private scanStartTime: number = 0;
+  private scanThreats: number = 0;
+  private totalFilesCount: number = 0;
+  private scanSpeedTimer: number | null = null;
+  private lastScanCount: number = 0;
+  private lastScanInfo: { time: string; files: number; threats: number; duration: number } | null = null;
+  private currentScanSpeed: number = 0;
+  private detectedThreats: Array<{path: string, probability: number, virus_family?: string, family_category?: string, is_infector?: boolean, fromCloud?: boolean}> = [];
+  private scanResultContextMenu: HTMLElement | null = null;
+  private totalThreatsFound: number = 0;
+  private sidebarCollapsed: boolean = false;
+  private processedEdrThreats: Set<string> = new Set(); // EDR 去重缓存 key=process_code
+  private pendingThreats: PendingThreat[] = [];
+  private notificationManager: NotificationManager;
+  private selectedNotificationId: string | null = null; // 当前选中的通知 ID
+  private cloudHashConnectionStatus: 'unknown' | 'connected' | 'disconnected' = 'unknown';
+  // System repair state
+  private systemRepairIssues: Array<{id: string, category: string, name: string, description: string, path: string, current_value?: string, expected_value?: string, severity: string, can_fix: boolean, selected?: boolean}> = [];
+  private systemRepairScanning: boolean = false;
+  private systemRepairFixing: boolean = false;
+  private systemRepairSummary: {total: number, high: number, medium: number, low: number, fixed: number} = {total: 0, high: 0, medium: 0, low: 0, fixed: 0};
+  private driverProcessCheckCount: number = 0;
+  private driverInterceptCount: number = 0; // 驱动拦截行为计数
+  private basicProtectionInterceptCount: number = 0; // 基础防护拦截计数
+  private demoMode: boolean = false; // 演示模式
+  private demoStepIndex: number = -1; // 当前演示步骤
+  private demoTimer: number | null = null; // 演示自动前进计时器
+  private readonly CHECK_COUNT_STORAGE_KEY = 'xigua_check_count';
+  private readonly INTERCEPT_COUNT_STORAGE_KEY = 'xigua_intercept_count';
+  private checkCountSaveTimer: number | null = null;
+  private xdowsSecurityDetected: boolean = false; // 是否检测到Xdows-Security
+  private isAdmin: boolean = false; // 是否以管理员权限运行
+  private appStartTime: number = (() => {
+    const key = 'installDate';
+    let t = localStorage.getItem(key);
+    if (!t) {
+      t = new Date().toISOString();
+      localStorage.setItem(key, t);
+    }
+    return new Date(t).getTime();
+  })();
+
+  // 启动管理
+  private startupComplete: boolean = false;
+  
+  // 云端哈希检查结果缓存（文件路径 -> 云端结果）
+
+  
+  // 进程管理
+  private processes: Array<{name: string, pid: number, path: string}> = [];
+  private selectedProcesses: Set<number> = new Set();
+  private processSearchTerm: string = '';
+  private processUpdateTimer: number | null = null;
+  
+  // 安全日志
+  private securityLogs: SecurityLogEntry[] = [];
+  private securityLogTotal: number = 0;
+  private securityLogPage: number = 0;
+  private securityLogPageSize: number = 20;
+  private securityLogStartDate: string = '';
+  private securityLogEndDate: string = '';
+  private securityLogCategory: string = 'all';
+  private securityLogKeyword: string = '';
+  // private securityLogStats: SecurityLogStats | null = null;
+  private securityLogLoading: boolean = false;
+  private securityLogLoaded: boolean = false;
+  
+  // OOBE (开箱体验)
+  private oobeStep: number = 0;
+  private oobeCompleted: boolean = false;
+  private oobeNextButtonEnabled: boolean = false;
+  private oobeCountdown: number = 3;
+  private oobeTimer: number | null = null;
+  private oobeSelectedTheme: string = 'blue';
+  private oobeAgreedToTerms: boolean = false;
+  
+  constructor() {
+    // 将自身暴露给全局，供 FileProtectionManager/BasicProtectionManager
+    // 调用 isScriptFile 和 scriptScanManager 等成员
+    (window as any).appInstance = this;
+    
+    this.themeManager = new ThemeManager();
+    this.localizationManager = new LocalizationManager();
+    this.animeStyleManager = new AnimeStyleManager();
+    this.liquidGlassManager = new LiquidGlassManager();
+    this.separatorLineManager = new SeparatorLineManager();
+    this.driverProtectionManager = new DriverProtectionManager();
+    this.driverLaunchHintManager = new DriverLaunchHintManager();
+    this.basicProtectionManager = new BasicProtectionManager();
+    this.fileProtectionManager = new FileProtectionManager();
+    this.auxiliaryCloudScanManager = new AuxiliaryCloudScanManager();
+    this.silentModeManager = new SilentModeManager();
+    this.notificationModeManager = new NotificationModeManager();
+    this.infectorDetectionManager = new InfectorDetectionManager();
+    this.scriptProtectionManager = new ScriptProtectionManager();
+    this.virusFamilyAnalysisManager = new VirusFamilyAnalysisManager();
+    this.scanBatchSizeManager = new ScanBatchSizeManager();
+
+    this.scriptScanManager = new ScriptScanManager();
+    this.protectionTypeManager = new ProtectionTypeManager();
+    this.rulesManager = new RulesManager(this.localizationManager);
+    this.sidebarShadowManager = new SidebarShadowManager();
+    this.edrModeManager = new EdrModeManager();
+    // EDR 模式已随驱动集成，强制禁用原独立 EDR 模式入口（保留后端代码与 EdrModeManager 类）
+    this.edrModeManager.setEnabled(false);
+    this.archiveScanManager = new ArchiveScanManager();
+    this.skipLocalRulesManager = new SkipLocalRulesManager();
+    this.cloudHashManager = new CloudHashManager();
+    this.cloudDeepAnalysisManager = new CloudDeepAnalysisManager();
+    this.logUploadManager = new LogUploadManager();
+    // 设置基础防护的云端哈希管理器引用
+    this.basicProtectionManager.cloudHashManager = this.cloudHashManager;
+    this.basicProtectionManager.auxiliaryCloudScanManager = this.auxiliaryCloudScanManager;
+    this.fileProtectionManager.cloudHashManager = this.cloudHashManager;
+    this.fileProtectionManager.auxiliaryCloudScanManager = this.auxiliaryCloudScanManager;
+    this.contextMenuManager = new ContextMenuManager();
+    this.notificationManager = new NotificationManager();
+    
+    // 同步通知模式状态到 Rust
+    this.notificationModeManager.setEnabled(this.notificationModeManager.isEnabled()).catch(() => {});
+
+    // 加载 PUA 拦截设置
+    this.puaProtectionEnabled = localStorage.getItem('pua_protection_enabled') === 'true';
+    this.suspiciousInterceptEnabled = localStorage.getItem('suspicious_intercept_enabled') === 'true';
+
+    // 加载沙盒分析设置
+    this.sandboxAnalysisFile = localStorage.getItem('sandbox_analysis_file') || '';
+    invoke('get_sandbox_analysis_enabled').then((enabled: unknown) => {
+      this.sandboxAnalysisEnabled = !!enabled;
+    }).catch(() => {
+      this.sandboxAnalysisEnabled = true;
+    });
+    
+    // 弹窗拦截器状态
+    this.popupInterceptorEnabled = false;
+    this.popupRules = [];
+    this.hiddenPopups = [];
+    
+    // 加载桌面宠物设置
+    this.desktopPetEnabled = localStorage.getItem('desktop_pet_enabled') === 'true';
+    
+    // 加载开机自启动状态
+    this.loadAutoStartState();
+    
+    // 加载侧边栏折叠状态
+    this.sidebarCollapsed = localStorage.getItem('sidebar_collapsed') === 'true';
+    
+    // 加载禁用一滑到底设置
+    this.loadContinuousScrollSetting();
+    
+    // 设置 EDR 状态变更回调，自动重新渲染侧边栏
+    this.edrModeManager.setOnStateChange((enabled) => {
+      console.log('[EDR] State changed to:', enabled);
+      this.render(); // 重新渲染以更新侧边栏
+      if (enabled) {
+        this.startEdrAutoRefresh();
+        console.log('[EDR] 模式已启用，程序监控功能已激活');
+      } else {
+        this.stopEdrAutoRefresh();
+        // 如果当前在 EDR 页面，切回首页
+        if (this.currentPage === 'edr') {
+          this.currentPage = 'home';
+        }
+        console.log('[EDR] 模式已禁用');
+      }
+    });
+    
+    // 如果 EDR 已启用，启动自动刷新
+    if (this.edrModeManager.isEnabled()) {
+      this.startEdrAutoRefresh();
+    }
+
+    // 同步当前语言到后端（独立弹窗需要）
+    const currentLang = this.localizationManager.getLanguage();
+    invoke('set_language', { lang: currentLang }).catch((err) => {
+      console.error('[App] Failed to sync initial language to backend:', err);
+    });
+    
+    this.driverProtectionManager.setOnNewLogsCallback((newLogs) => {
+      this.logs.unshift(...newLogs);
+      if (this.logs.length > 50) {
+        this.logs = this.logs.slice(0, 50);
+      }
+      
+      // 统计驱动检查的文件数和拦截行为
+      let hasNewCheck = false;
+      let hasNewIntercept = false;
+      const now = new Date();
+      const pad = (n: number) => n.toString().padStart(2, '0');
+      const timestamp = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+      newLogs.forEach(log => {
+        if (log.includes('驱动拦截') && log.includes('检查进程')) {
+          this.driverProcessCheckCount++;
+          hasNewCheck = true;
+        }
+        if (log.includes('驱动拦截') && log.includes('已阻止')) {
+          this.driverInterceptCount++;
+          hasNewIntercept = true;
+          // 通知由 Rust 端 driver-process-blocked 事件推送，此处不再重复创建
+        }
+        
+        // EDR 自动终止进程才算真正的威胁，加入通知中心
+        if (log.includes('EDR_ALERT') || log.includes('EDR_AUTO_KILL') || (log.includes('EDR |') && log.includes('Auto-killed'))) {
+          hasNewIntercept = true;
+          this.addEdrThreatFromLog(log, timestamp);
+        }
+      });
+      
+      // 如果有新检查或拦截，立即更新统计卡片和主页状态
+      if (hasNewCheck || hasNewIntercept) {
+        this.updateStatCardNumber();
+        this.updateHomeStatus().catch(e => console.error('Failed to update home status after intercept:', e));
+      }
+      
+      this.refreshHomeLogs();
+      
+      // 发送拦截通知
+      // 新拦截窗口启用且非静默模式时，由拦截窗口处理，不发送通知
+      // 静默模式下新拦截窗口不弹，仍需发送通知提醒用户
+      if (!this.driverProtectionManager.isNewInterceptWindowEnabled() || this.silentModeManager.isEnabled()) {
+        newLogs.forEach(log => {
+          if (log.includes('驱动拦截') && log.includes('已阻止')) {
+            this.sendInterceptNotification(log);
+          }
+        });
+      } else {
+        console.log('[LogCheck] New intercept window enabled, skipping notification for driver block');
+      }
+    });
+    
+    // 启动驱动统计定时器
+    this.startDriverStatsTimer();
+    
+    // 监听规则加载事件
+    this.listenForRulesLoaded();
+
+    // 监听驱动拦截事件
+    this.listenForDriverBlocked();
+    
+    // 初始化弹窗拦截器（根据本地设置自动启动）
+    this.initPopupInterceptor();
+    
+    // 检测管理员权限并初始化基础防护
+    this.checkAdminAndInitBasicProtection();
+    
+    // 设置基础防护威胁检测回调 - 复用现有的通知系统
+    this.basicProtectionManager.setOnThreatDetectedCallback(async (processPath, threatName) => {
+      const processName = processPath.split('\\').pop() || 'unknown.exe';
+      const timestamp = new Date().toISOString();
+      
+      // 构造类似驱动防护的日志格式，复用现有通知系统
+      const log = `[基础防护] 进程拦截: ${processName} 路径: ${processPath} 威胁: ${threatName} 已阻止`;
+      this.sendInterceptNotification(log, 'basic');
+      this.addLog('WARNING', `基础防护拦截: ${processName} (${threatName})`);
+      
+      // 增加基础防护拦截计数
+      this.basicProtectionInterceptCount++;
+      this.updateStatCardNumber();
+      
+      // 添加到时间线 - 使用与驱动拦截相同的格式
+      await this.addTimelineEvent({
+        id: `basic_protection_${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        event_type: 'block',
+        title: '已阻止恶意行为',
+        description: `[基础防护] 进程: ${processName} 路径: ${processPath}`,
+        process_name: processName,
+        result: '已阻止'
+      });
+      
+      // 添加到安全日志
+      await this.addSecurityLogEntry({
+        timestamp: timestamp,
+        category: 'protection',
+        action: 'intercept',
+        target: processPath,
+        details: `基础防护拦截: ${processName}, 威胁: ${threatName}`,
+        result: 'success',
+        source: '基础防护'
+      });
+      
+      // 基础防护拦截加入通知中心（使用原始威胁名，BDM 只用于 EDR）
+      const now = new Date();
+      const pad = (n: number) => n.toString().padStart(2, '0');
+      const detectedAt = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+      this.addPendingThreat({
+        path: processPath,
+        threatName: threatName || 'Trojan.Generic',
+        threatLevel: 'High',
+        category: '基础防护',
+        detectedAt: detectedAt,
+        source: 'realtime'
+      });
+    });
+    
+    this.init();
+
+    // 初始化扫描结果右键菜单（全局事件委托，只需一次）
+    this.initScanResultContextMenu();
+  }
+
+  // 检测管理员权限并初始化基础防护
+  private async checkAdminAndInitBasicProtection(): Promise<void> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      this.isAdmin = await invoke('is_admin') as boolean;
+      console.log('[Admin] Running as admin:', this.isAdmin);
+      
+      // 基础防护默认启用（不管是否是管理员）
+      this.basicProtectionManager.setEnabled(true);
+      console.log('[BasicProtection] - Basic protection enabled by default');
+    } catch (e) {
+      console.error('[Admin] Failed to check admin status:', e);
+      this.isAdmin = false;
+    }
+  }
+  
+  // 监听规则加载事件
+  private async listenForRulesLoaded() {
+    try {
+      const { listen } = await import('@tauri-apps/api/event');
+      listen('rules-loaded', (event: any) => {
+        console.log('[Frontend] Rules loaded event:', event.payload);
+        // 刷新规则库信息显示（局部刷新，不重新渲染整个页面）
+        this.rulesManager.refreshState().then(() => {
+          this.updateRulesDisplay();
+        });
+      });
+    } catch (e) {
+      console.error('Failed to listen for rules-loaded event:', e);
+    }
+  }
+
+  // 监听驱动进程拦截事件（Rust 端发射，包含正确的进程名）
+  private async listenForDriverBlocked() {
+    try {
+      const { listen } = await import('@tauri-apps/api/event');
+      listen('driver-process-blocked', (event: any) => {
+        const data = event.payload as { process: string; threat: string };
+        console.log('[DriverBlocked] Event received:', data);
+        // 通知模式下已由 Rust 端发送系统通知，不再添加应用内通知避免重复
+        if (!this.notificationModeManager.isEnabled()) {
+          this.addNotification('intercept', '驱动拦截已阻止', `已阻止进程: ${data.process}`, { source: '驱动防护' });
+        }
+      });
+    } catch (e) {
+      console.error('Failed to listen for driver-blocked event:', e);
+    }
+  }
+
+  // 发送拦截通知 - 根据通知模式决定是否弹窗
+  private async sendInterceptNotification(log: string, source: 'basic' | 'driver' = 'driver', respPipe?: string) {
+    try {
+      // 根据来源确定标题
+      const isBasicProtection = source === 'basic' || log.includes('[基础防护]');
+      const isNotificationMode = this.notificationModeManager.isEnabled();
+
+      // 通知模式下驱动防护已由 Rust 端直接拦截并发送通知，前端不再重复发送
+      if (!isBasicProtection && isNotificationMode) {
+        return;
+      }
+
+      const { invoke } = await import('@tauri-apps/api/core');
+      const title = isBasicProtection ? '恶意进程拦截' : '驱动防护拦截';
+      const notificationType = 'block';
+
+      // 解析文件名和路径
+      let fileName = '未知文件';
+      let filePath = '--';
+
+      if (isBasicProtection) {
+        const basicMatch = log.match(/进程拦截:\s*([^\s]+)/i);
+        const pathMatch = log.match(/路径:\s*([^\s]+)/i);
+        if (basicMatch) fileName = basicMatch[1].trim();
+        if (pathMatch) filePath = pathMatch[1].trim();
+      } else {
+        const processMatch = log.match(/进程:\s*([^\s]+)/i) || log.match(/Process:\s*([^\s]+)/i);
+        const pathMatch = log.match(/路径:\s*([^\s]+)/i);
+        if (processMatch) fileName = processMatch[1].trim();
+        if (pathMatch) filePath = pathMatch[1].trim();
+      }
+
+      const payload: any = {
+        title,
+        body: log,
+        notificationType,
+        source: isBasicProtection ? 'basic' : 'driver',
+        fileName,
+        filePath,
+      };
+      if (respPipe) {
+        payload.respPipe = respPipe;
+      }
+      await invoke('send_intercept_notification', payload);
+
+      // 通知模式开启时不显示拦截窗口
+      if (!isNotificationMode) {
+        this.showInterceptAlert(log);
+      }
+    } catch (e) {
+      console.error('Failed to send notification:', e);
+    }
+  }
+  
+  // 显示拦截窗口
+  private async showInterceptAlert(log: string) {
+    try {
+      console.log('[InterceptAlert] Showing intercept alert for log:', log);
+
+      let processName = '未知进程';
+      let commandLine = '--';
+      let interceptType = '驱动拦截'; // 默认为驱动拦截
+
+      // 检查是否是基础防护日志
+      if (log.includes('[基础防护]')) {
+        interceptType = '基础防护';
+        // 解析基础防护日志格式: [基础防护] 进程拦截: xxx.exe 路径: xxx 威胁: xxx 已阻止
+        const basicMatch = log.match(/进程拦截:\s*([^\s]+)/i);
+        const pathMatch = log.match(/路径:\s*([^\s]+)/i);
+        // threatMatch 已移除，因为不需要显示威胁类型
+
+        if (basicMatch) {
+          processName = basicMatch[1].trim();
+        }
+        // 只显示路径，不显示威胁类型，避免内容过多挤占窗口空间
+        if (pathMatch) {
+          commandLine = pathMatch[1].trim();
+        }
+      } else {
+        // 解析驱动防护日志内容
+        
+        // 新格式: [BLOCK] 驱动拦截 | Registry Protection | 已阻止 registry: xxx (Process: xxx.exe)
+         // 英文格式: [BLOCK] Driver | Registry Protection | Blocked registry: xxx (Process: xxx.exe)
+         const driverBlockMatch = log.match(/\[BLOCK\]\s*(?:驱动拦截|Driver)\s*\|\s*([^|]+)\s*\|\s*(?:已阻止|Blocked)\s+(\w+):\s*(.+?)(?:\s*\(Process:\s*([^)]+)\))?\s*$/i);
+        if (driverBlockMatch) {
+          const protectionType = driverBlockMatch[1].trim();
+          const targetPath = driverBlockMatch[3].trim();
+          const processFromBlock = driverBlockMatch[4]?.trim();
+          
+          // 根据保护类型设置拦截类型
+          if (protectionType.includes('Registry')) {
+            interceptType = '注册表拦截';
+          } else if (protectionType.includes('Ransomware') || protectionType.includes('勒索')) {
+            interceptType = '勒索软件拦截';
+          } else if (protectionType.includes('Memory') || protectionType.includes('内存')) {
+            interceptType = '内存保护拦截';
+          } else if (protectionType.includes('Boot') || protectionType.includes('引导')) {
+            interceptType = '引导扇区拦截';
+          } else {
+            interceptType = '进程拦截';
+          }
+          
+          // 设置进程名
+          if (processFromBlock) {
+            processName = processFromBlock;
+          } else {
+            // 尝试从路径中提取进程名
+            const pathMatch = targetPath.match(/([^\\\/]+\.exe)/i);
+            if (pathMatch) {
+              processName = pathMatch[1];
+            }
+          }
+          
+          // 设置目标路径
+          commandLine = targetPath;
+        } else {
+          // 旧格式解析
+          // 匹配 "进程: xxx.exe)" 或 "进程: xxx.exe"，提取进程名（去掉右括号）
+          const processMatch = log.match(/进程[:\s]+([^\s\)]+)/i);
+          // 匹配 "命令行: xxx" 或提取注册表路径
+          const commandMatch = log.match(/命令行[:\s]+(.+)/i);
+          // 提取注册表路径（支持 "已阻止注册表操作:" 或 "拦截注册表操作:"）
+          const registryMatch = log.match(/(?:已阻止|拦截)注册表操作:\s*(.+?)(?:\s*\(|\s*$)/i);
+          // 匹配勒索软件攻击（格式：已阻止勒索攻击: xxx.exe (文件: xxx)）
+          const ransomwareMatch = log.match(/(?:已阻止|拦截)勒索攻击:\s*([^\s\(]+)/i);
+          // 匹配勒索软件文件路径
+          const ransomwareFileMatch = log.match(/文件:\s*(.+?)(?:\s*\[|\s*$)/i);
+
+          // 优先匹配勒索软件攻击
+          if (ransomwareMatch) {
+            processName = ransomwareMatch[1].trim();
+            interceptType = '勒索软件拦截';
+            // 提取文件路径作为命令行
+            if (ransomwareFileMatch) {
+              commandLine = '勒索行为 - 文件: ' + ransomwareFileMatch[1].trim();
+            } else {
+              commandLine = '勒索软件攻击';
+            }
+          } else if (processMatch) {
+            // 普通进程匹配
+            processName = processMatch[1].trim();
+            // 去掉可能的右括号
+            processName = processName.replace(/\)$/, '');
+
+            // 优先使用命令行，如果没有则使用注册表路径
+            if (commandMatch) {
+              commandLine = commandMatch[1].trim();
+            } else if (registryMatch) {
+              commandLine = registryMatch[1].trim();
+              interceptType = '注册表拦截';
+            }
+          }
+        }
+      }
+
+      console.log('[InterceptAlert] Parsed - Type:', interceptType, 'Process:', processName, 'Command:', commandLine);
+
+      // 使用 Tauri 命令创建和显示拦截窗口
+      const { invoke } = await import('@tauri-apps/api/core');
+
+      // 调用 Rust 后端创建窗口
+      await invoke('show_intercept_window', {
+        processName: processName,
+        commandLine: commandLine,
+        time: new Date().toLocaleString(),
+        interceptType: interceptType // 传递拦截类型
+      });
+
+      console.log('[InterceptAlert] Window shown successfully');
+    } catch (e) {
+      console.error('[InterceptAlert] Failed to show intercept alert:', e);
+    }
+  }
+
+  // Helper method to get translation
+  private t(key: keyof Translations, params?: Record<string, string | number>): string {
+    return this.localizationManager.format(key, params);
+  }
+
+  // 同步计算设备状态，用于初始渲染和运行时刷新（避免异步等待导致的闪烁/竞态）
+  private getDeviceStatusSync(): { title: string; subtitle: string; color: string; icon: 'check' | 'cross' } {
+    if (this.isMsStore) {
+      return {
+        title: this.t('statusSecure'),
+        subtitle: this.t('statusSecureSubtitle'),
+        color: 'var(--success)',
+        icon: 'check'
+      };
+    }
+    
+    const threats = this.pendingThreatCount;
+    // 使用缓存的驱动状态，避免异步等待
+    const driverProcessRunning = this.driverProtectionManager.isProcessRunningSync();
+
+    if (this.xdowsSecurityDetected) {
+      return {
+        title: this.t('statusOtherAvInstalled'),
+        subtitle: this.t('statusOtherAvInstalledSubtitle'),
+        color: '#ff9800',
+        icon: 'check'
+      };
+    }
+
+    const basicProtectionEnabled = this.basicProtectionManager.isEnabled();
+    const allCoreProtectionEnabled = driverProcessRunning && basicProtectionEnabled;
+
+    if (!allCoreProtectionEnabled) {
+      // 驱动防护和基础防护任一未运行（或都未运行）时，统一提示防护已停止
+      return { title: this.t('statusProtectionStopped'), subtitle: this.t('statusProtectionStoppedSubtitle'), color: 'var(--error)', icon: 'cross' };
+    }
+
+    if (threats === 0) {
+      return { title: this.t('statusSecure'), subtitle: this.t('statusSecureSubtitle'), color: 'var(--success)', icon: 'check' };
+    } else {
+      return { title: this.t('statusAtRisk'), subtitle: this.t('statusAtRiskSubtitle'), color: 'var(--warning)', icon: 'check' };
+    }
+  }
+
+  private startDriverStatsTimer() {
+    // 每5秒获取一次驱动统计（仅作为备用，主要统计在前端完成）
+    window.setInterval(async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const stats: any = await invoke('get_driver_stats');
+        if (stats && stats.process_check_count !== undefined) {
+          // 只更新标题显示，不累加（前端已经在日志回调中统计了）
+          // 如果后端统计比前端多，说明有遗漏，取较大值
+          if (stats.process_check_count > this.driverProcessCheckCount) {
+            this.driverProcessCheckCount = stats.process_check_count;
+            this.updateActivityLogHeader();
+          }
+        }
+      } catch (e) {
+        // 驱动可能未启动，忽略错误
+      }
+    }, 5000);
+  }
+
+  private updateActivityLogHeader() {
+    this.updateStatCardNumber();
+  }
+
+  private updateStatCardNumber() {
+    // 更新检查统计卡片的数字
+    const statCard = document.getElementById('stat-check-card');
+    if (statCard) {
+      const checkNum = statCard.querySelector('.check-count');
+      const interceptNum = statCard.querySelector('.intercept-count');
+      if (checkNum) checkNum.textContent = String(this.driverProcessCheckCount);
+      // 拦截数 = 驱动拦截 + 基础防护拦截
+      const totalIntercepts = this.driverInterceptCount + this.basicProtectionInterceptCount;
+      if (interceptNum) interceptNum.textContent = String(totalIntercepts);
+    }
+
+    // 同步更新新版主页统计行
+    const checkedCount = document.getElementById('stat-checked-count');
+    const interceptCount = document.getElementById('stat-intercept-count');
+    if (checkedCount) checkedCount.textContent = this.driverProcessCheckCount.toLocaleString();
+    if (interceptCount) interceptCount.textContent = String(this.driverInterceptCount + this.basicProtectionInterceptCount);
+
+    // 延迟保存到本地存储（避免频繁写入）
+    this.scheduleSaveCheckCount();
+  }
+
+  private scheduleSaveCheckCount() {
+    // 清除之前的定时器
+    if (this.checkCountSaveTimer) {
+      clearTimeout(this.checkCountSaveTimer);
+    }
+    // 延迟2秒后保存
+    this.checkCountSaveTimer = window.setTimeout(() => {
+      this.saveCheckCount();
+    }, 2000);
+  }
+
+  private saveCheckCount() {
+    try {
+      localStorage.setItem(this.CHECK_COUNT_STORAGE_KEY, String(this.driverProcessCheckCount));
+      localStorage.setItem(this.INTERCEPT_COUNT_STORAGE_KEY, String(this.driverInterceptCount));
+      console.log('[CheckCount] Saved:', this.driverProcessCheckCount, 'Intercepts:', this.driverInterceptCount);
+    } catch (e) {
+      console.error('[CheckCount] Failed to save:', e);
+    }
+  }
+
+  private loadCheckCount() {
+    try {
+      const saved = localStorage.getItem(this.CHECK_COUNT_STORAGE_KEY);
+      if (saved) {
+        const count = parseInt(saved, 10);
+        if (!isNaN(count) && count >= 0) {
+          this.driverProcessCheckCount = count;
+          console.log('[CheckCount] Loaded:', this.driverProcessCheckCount);
+        }
+      }
+      const savedIntercept = localStorage.getItem(this.INTERCEPT_COUNT_STORAGE_KEY);
+      if (savedIntercept) {
+        const interceptCount = parseInt(savedIntercept, 10);
+        if (!isNaN(interceptCount) && interceptCount >= 0) {
+          this.driverInterceptCount = interceptCount;
+          console.log('[InterceptCount] Loaded:', this.driverInterceptCount);
+        }
+      }
+    } catch (e) {
+      console.error('[CheckCount] Failed to load:', e);
+    }
+  }
+
+  private init() {
+    SCAN_FILES = [];
+    
+    // 加载保存的检查计数
+    this.loadCheckCount();
+    
+    // 检查OOBE是否已完成
+    this.oobeCompleted = localStorage.getItem('oobe_completed') === 'true';
+    
+    // 如果OOBE未完成，显示OOBE界面
+    if (!this.oobeCompleted) {
+      this.renderOOBE();
+      return;
+    }
+    
+    // 显示加载遮罩，等初始化完成后再渲染界面
+    this.showSplash();
+    
+    // ===== 文件完整性检查（卡住启动，不进主界面） =====
+    this.checkIntegrityAndStartup();
+  }
+  
+  // 检查文件完整性，缺失则卡在 splash 并弹窗
+  private async checkIntegrityAndStartup() {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const missingFiles: string[] = await invoke('check_essential_files');
+      
+      if (missingFiles.length > 0) {
+        // 文件缺失 → 卡住 splash 并显示 Fluent 风格错误弹窗
+        this.showIntegrityErrorDialog(missingFiles);
+        return; // 不继续初始化，不进主界面
+      }
+    } catch (e) {
+      console.error('[Integrity] Check failed:', e);
+      // 检查失败仍继续启动，不阻塞用户
+    }
+    
+    // 文件完好 → 启动规则库门禁检查（后台并行，不阻塞 splash 动画）
+    const gatePromise = this.checkRulesUpdateGate();
+
+    // 文件完好 → 继续正常启动流程（门禁结果在 splash 结束前再判断）
+    this.continueStartup(gatePromise);
+  }
+
+  // 检查本地规则库版本是否低于云端
+  private async checkRulesUpdateGate(): Promise<{ needsUpdate: boolean; version: string; description: string; updatedAt: string }> {
+    try {
+      const hasUpdate = await this.rulesManager.checkUpdate();
+      if (!hasUpdate) {
+        return { needsUpdate: false, version: '', description: '', updatedAt: '' };
+      }
+      return {
+        needsUpdate: true,
+        version: this.rulesManager.getLatestVersion(),
+        description: this.rulesManager.getLatestDescription(),
+        updatedAt: this.rulesManager.getLatestUpdatedAt(),
+      };
+    } catch (e) {
+      console.error('[RulesGate] Failed to check rules update:', e);
+      return { needsUpdate: false, version: '', description: '', updatedAt: '' };
+    }
+  }
+
+  // 规则库强制更新门禁弹窗（Fluent 风格，阻止进入程序）
+  private async showRulesUpdateGate(latestVersion: string, description: string, updatedAt: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      const currentVersion = this.rulesManager.getVersion();
+
+      const dialog = document.createElement('div');
+      dialog.id = 'rules-update-gate-dialog';
+      dialog.innerHTML = `
+        <div class="rules-gate-overlay"></div>
+        <div class="rules-gate-content">
+          <div style="padding: 24px;">
+            <div style="display:flex;align-items:flex-start;gap:16px;margin-bottom:16px;">
+              <div style="width:24px;height:24px;flex-shrink:0;margin-top:2px;color:#0067C0;">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M12 2C6.48 2 2 6.48 2 12C2 17.52 6.48 22 12 22C17.52 22 22 17.52 22 12C22 6.48 17.52 2 12 2ZM12 20C7.59 20 4 16.41 4 12C4 7.59 7.59 4 12 4C16.41 4 20 7.59 20 12C20 16.41 16.41 20 12 20ZM11 7H13V13H11V7ZM11 15H13V17H11V15Z" fill="currentColor"/>
+                </svg>
+              </div>
+              <div style="flex:1;">
+                <div style="font-size:18px;font-weight:600;color:#1C1C1C;line-height:1.4;margin-bottom:12px;">您需要完成以下操作才能进入程序</div>
+                <div style="font-size:14px;color:#5F5F5F;line-height:1.6;margin-bottom:16px;">
+                  为保障查杀准确率并减少误报，请先将病毒库更新到最新版本。
+                </div>
+                <div style="background:#F5F5F5;border-radius:6px;padding:12px 16px;line-height:1.8;">
+                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                    <span style="font-size:14px;font-weight:600;color:#1C1C1C;">更新规则库</span>
+                  </div>
+                  <div style="font-size:13px;color:#5F5F5F;">
+                    <div>当前版本：<span style="font-family:Consolas,monospace;">${currentVersion}</span></div>
+                    <div>最新版本：<span style="font-family:Consolas,monospace;color:#0067C0;font-weight:600;">${latestVersion}</span></div>
+                    <div>更新时间：<span style="font-family:Consolas,monospace;">${updatedAt}</span></div>
+                  </div>
+                </div>
+                <div style="margin-top:12px;">
+                  <div style="font-size:13px;font-weight:600;color:#1C1C1C;margin-bottom:6px;">更新内容</div>
+                  <div id="rules-gate-description" style="font-size:13px;color:#5F5F5F;background:#FFFFFF;border:1px solid rgba(0,0,0,0.08);border-radius:6px;padding:10px 12px;max-height:120px;overflow-y:auto;line-height:1.6;white-space:pre-wrap;word-break:break-word;">${description}</div>
+                </div>
+                <div id="rules-gate-progress" style="display:none;margin-top:16px;">
+                  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                    <span id="rules-gate-progress-text" style="font-size:12px;color:#5F5F5F;">准备下载...</span>
+                    <span id="rules-gate-progress-percent" style="font-size:12px;color:#5F5F5F;">0%</span>
+                  </div>
+                  <div style="width:100%;height:4px;background:#E5E5E5;border-radius:2px;overflow:hidden;">
+                    <div id="rules-gate-progress-bar" style="width:0%;height:100%;background:#0067C0;transition:width 0.3s ease;"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;justify-content:flex-end;padding:16px 24px;background:#F3F3F3;border-top:1px solid rgba(0,0,0,0.05);">
+            <button id="rules-gate-exit-btn" style="
+              padding:6px 16px;border:1px solid rgba(0,0,0,0.1);background:#FFFFFF;
+              border-radius:4px;font-size:14px;font-weight:400;color:#1C1C1C;
+              cursor:pointer;font-family:inherit;transition:all 0.15s ease;min-width:80px;
+              box-shadow:0 1px 2px rgba(0,0,0,0.05);
+            ">退出</button>
+            <button id="rules-gate-update-btn" style="
+              padding:6px 16px;border:1px solid transparent;background:#0067C0;
+              border-radius:4px;font-size:14px;font-weight:400;color:#FFFFFF;
+              cursor:pointer;font-family:inherit;transition:all 0.15s ease;min-width:80px;
+              box-shadow:0 1px 2px rgba(0,0,0,0.05);
+            ">更新</button>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(dialog);
+
+      const style = document.createElement('style');
+      style.textContent = `
+        #rules-update-gate-dialog {
+          position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+          z-index: 100002; display: flex; align-items: center; justify-content: center;
+        }
+        .rules-gate-overlay {
+          position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+          background: rgba(0,0,0,0.25); backdrop-filter: blur(4px);
+        }
+        .rules-gate-content {
+          position: relative; background: #FFFFFF; border-radius: 8px;
+          max-width: 520px; width: 90%;
+          box-shadow: 0 32px 64px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.05);
+          font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
+          overflow: hidden;
+          animation: rulesGateDialogShow 0.2s cubic-bezier(0.0, 0.0, 0.2, 1);
+        }
+        @keyframes rulesGateDialogShow {
+          from { opacity: 0; transform: scale(0.95) translateY(-10px); }
+          to { opacity: 1; transform: scale(1) translateY(0); }
+        }
+      `;
+      document.head.appendChild(style);
+
+      const updateBtn = dialog.querySelector('#rules-gate-update-btn') as HTMLButtonElement | null;
+      const exitBtn = dialog.querySelector('#rules-gate-exit-btn') as HTMLButtonElement | null;
+      const progressBox = dialog.querySelector('#rules-gate-progress') as HTMLElement | null;
+      const progressText = dialog.querySelector('#rules-gate-progress-text') as HTMLElement | null;
+      const progressPercent = dialog.querySelector('#rules-gate-progress-percent') as HTMLElement | null;
+      const progressBar = dialog.querySelector('#rules-gate-progress-bar') as HTMLElement | null;
+
+      updateBtn?.addEventListener('click', async () => {
+        if (!updateBtn || !progressBox || !progressText || !progressPercent || !progressBar) return;
+        updateBtn.disabled = true;
+        exitBtn && (exitBtn.disabled = true);
+        progressBox.style.display = 'block';
+        progressText.textContent = '下载中...';
+
+        let progressTimer: number | null = null;
+        const onProgress = (payload: any) => {
+          const pct = Math.min(100, Math.max(0, Math.round(payload?.progress ?? 0)));
+          const status = payload?.status || '下载中...';
+          progressText.textContent = status;
+          progressPercent.textContent = `${pct}%`;
+          progressBar.style.width = `${pct}%`;
+        };
+
+        try {
+          const { listen } = await import('@tauri-apps/api/event');
+          const unlisten = await listen('rules-download-progress', (e) => onProgress(e.payload));
+          progressTimer = window.setTimeout(() => unlisten(), 60000);
+
+          const result = await this.rulesManager.updateRules();
+          unlisten();
+          if (progressTimer) window.clearTimeout(progressTimer);
+
+          if (result.success) {
+            progressText.textContent = '更新完成';
+            progressPercent.textContent = '100%';
+            progressBar.style.width = '100%';
+            setTimeout(() => {
+              dialog.remove();
+              style.remove();
+              resolve(true);
+            }, 600);
+          } else {
+            updateBtn.disabled = false;
+            exitBtn && (exitBtn.disabled = false);
+            progressBox.style.display = 'none';
+            alert('更新规则库失败' + (result.error ? `\n\n${result.error}` : ''));
+          }
+        } catch (e: any) {
+          if (progressTimer) window.clearTimeout(progressTimer);
+          updateBtn.disabled = false;
+          exitBtn && (exitBtn.disabled = false);
+          progressBox.style.display = 'none';
+          alert('更新规则库失败' + (e?.message ? `\n\n${e.message}` : ''));
+        }
+      });
+
+      exitBtn?.addEventListener('click', async () => {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          await invoke('exit_app');
+        } catch (e) {
+          console.error('[RulesGate] Failed to exit app:', e);
+        }
+        resolve(false);
+      });
+    });
+  }
+  
+  // 文件缺失错误弹窗（Fluent 风格）
+  private showIntegrityErrorDialog(missingFiles: string[]) {
+    // 防止重复弹出
+    if (document.getElementById('integrity-error-dialog')) return;
+
+    const dialog = document.createElement('div');
+    dialog.id = 'integrity-error-dialog';
+    dialog.innerHTML = `
+      <div class="integrity-error-overlay"></div>
+      <div class="integrity-error-content">
+        <div style="padding: 24px;">
+          <div style="display:flex;align-items:flex-start;gap:16px;margin-bottom:16px;">
+            <div style="width:20px;height:20px;flex-shrink:0;margin-top:2px;">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M10 2C14.4183 2 18 5.58172 18 10C18 14.4183 14.4183 18 10 18C5.58172 18 2 14.4183 2 10C2 5.58172 5.58172 2 10 2ZM10 3C6.13401 3 3 6.13401 3 10C3 13.866 6.13401 17 10 17C13.866 17 17 13.866 17 10C17 6.13401 13.866 3 10 3ZM9.5 13.5V14.5H10.5V13.5H9.5ZM9.5 5.5V12H10.5V5.5H9.5Z" fill="#C42B1C"/>
+              </svg>
+            </div>
+            <div style="flex:1;">
+              <div style="font-size:18px;font-weight:600;color:#1C1C1C;line-height:1.4;margin-bottom:12px;">文件完整性检查失败</div>
+              <div style="font-size:14px;color:#5F5F5F;line-height:1.6;">
+                <p style="margin:0 0 12px 0;">应用程序必要文件缺失，请重新安装 XIGUASecurity。</p>
+                <div style="font-size:12px;color:#666;background:#F5F5F5;padding:10px 12px;border-radius:6px;max-height:120px;overflow-y:auto;line-height:1.8;">
+                  ${missingFiles.map(f => `<div>${f}</div>`).join('')}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;padding:16px 24px;background:#F3F3F3;border-top:1px solid rgba(0,0,0,0.05);">
+          <button id="integrity-confirm-btn" style="
+            padding:6px 16px;border:1px solid rgba(0,0,0,0.1);background:#FFFFFF;
+            border-radius:4px;font-size:14px;font-weight:400;color:#1C1C1C;
+            cursor:pointer;font-family:inherit;transition:all 0.15s ease;min-width:80px;
+            box-shadow:0 1px 2px rgba(0,0,0,0.05);
+          " onmouseover="this.style.background='#F9F9F9';this.style.borderColor='rgba(0,0,0,0.15)'"
+             onmouseout="this.style.background='#FFFFFF';this.style.borderColor='rgba(0,0,0,0.1)'"
+             onmousedown="this.style.background='#F0F0F0'"
+             onmouseup="this.style.background='#F9F9F9'">确认</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(dialog);
+
+    const style = document.createElement('style');
+    style.textContent = `
+      .integrity-error-dialog {
+        position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+        z-index: 100000; display: flex; align-items: center; justify-content: center;
+      }
+      .integrity-error-overlay {
+        position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,0.25); backdrop-filter: blur(4px);
+      }
+      .integrity-error-content {
+        position: relative; background: #FFFFFF; border-radius: 8px;
+        max-width: 480px; width: 90%;
+        box-shadow: 0 32px 64px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.05);
+        font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
+        overflow: hidden;
+        animation: integrityDialogShow 0.2s cubic-bezier(0.0, 0.0, 0.2, 1);
+      }
+      @keyframes integrityDialogShow {
+        from { opacity: 0; transform: scale(0.95) translateY(-10px); }
+        to { opacity: 1; transform: scale(1) translateY(0); }
+      }
+    `;
+    document.head.appendChild(style);
+
+    dialog.className = 'integrity-error-dialog';
+
+    document.getElementById('integrity-confirm-btn')?.addEventListener('click', () => {
+      dialog.remove();
+      style.remove();
+    });
+  }
+
+  // 日志上传授权弹窗（Fluent 风格）
+  private showLogUploadConsentDialog() {
+    if (document.getElementById('log-upload-consent-dialog')) return;
+
+    const dialog = document.createElement('div');
+    dialog.id = 'log-upload-consent-dialog';
+    dialog.innerHTML = `
+      <div class="log-upload-consent-overlay"></div>
+      <div class="log-upload-consent-content">
+        <div style="padding: 24px;">
+          <div style="display:flex;align-items:flex-start;gap:16px;margin-bottom:16px;">
+            <div style="width:24px;height:24px;flex-shrink:0;margin-top:2px;color:#0067C0;">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 2C6.48 2 2 6.48 2 12C2 17.52 6.48 22 12 22C17.52 22 22 17.52 22 12C22 6.48 17.52 2 12 2ZM12 20C7.59 20 4 16.41 4 12C4 7.59 7.59 4 12 4C16.41 4 20 7.59 20 12C20 16.41 16.41 20 12 20ZM11 7H13V13H11V7ZM11 15H13V17H11V15Z" fill="currentColor"/>
+              </svg>
+            </div>
+            <div style="flex:1;">
+              <div style="font-size:18px;font-weight:600;color:#1C1C1C;line-height:1.4;margin-bottom:12px;">${this.t('logUploadConsentTitle')}</div>
+              <div style="font-size:14px;color:#5F5F5F;line-height:1.6;">
+                <p style="margin:0 0 12px 0;">${this.t('logUploadConsentText')}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;padding:16px 24px;background:#F3F3F3;border-top:1px solid rgba(0,0,0,0.05);">
+          <button id="log-upload-deny-btn" style="
+            padding:6px 16px;border:1px solid rgba(0,0,0,0.1);background:#FFFFFF;
+            border-radius:4px;font-size:14px;font-weight:400;color:#1C1C1C;
+            cursor:pointer;font-family:inherit;transition:all 0.15s ease;min-width:80px;
+            box-shadow:0 1px 2px rgba(0,0,0,0.05);
+          ">${this.t('deny')}</button>
+          <button id="log-upload-allow-btn" style="
+            padding:6px 16px;border:1px solid transparent;background:#0067C0;
+            border-radius:4px;font-size:14px;font-weight:400;color:#FFFFFF;
+            cursor:pointer;font-family:inherit;transition:all 0.15s ease;min-width:80px;
+            box-shadow:0 1px 2px rgba(0,0,0,0.05);
+          ">${this.t('allow')}</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(dialog);
+
+    const style = document.createElement('style');
+    style.textContent = `
+      #log-upload-consent-dialog {
+        position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+        z-index: 100001; display: flex; align-items: center; justify-content: center;
+      }
+      .log-upload-consent-overlay {
+        position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,0.25); backdrop-filter: blur(4px);
+      }
+      .log-upload-consent-content {
+        position: relative; background: #FFFFFF; border-radius: 8px;
+        max-width: 520px; width: 90%;
+        box-shadow: 0 32px 64px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.05);
+        font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
+        overflow: hidden;
+        animation: logUploadDialogShow 0.2s cubic-bezier(0.0, 0.0, 0.2, 1);
+      }
+      @keyframes logUploadDialogShow {
+        from { opacity: 0; transform: scale(0.95) translateY(-10px); }
+        to { opacity: 1; transform: scale(1) translateY(0); }
+      }
+    `;
+    document.head.appendChild(style);
+
+    document.getElementById('log-upload-deny-btn')?.addEventListener('click', () => {
+      this.logUploadManager.setEnabled(false).then(() => {
+        this.logUploadManager.markConsentShown();
+        dialog.remove();
+        style.remove();
+      });
+    });
+
+    document.getElementById('log-upload-allow-btn')?.addEventListener('click', () => {
+      this.logUploadManager.setEnabled(true).then(() => {
+        this.logUploadManager.markConsentShown();
+        dialog.remove();
+        style.remove();
+      });
+    });
+  }
+
+  // 赞助开发者确认弹窗（Fluent 风格）
+  private showSponsorDialog() {
+    if (document.getElementById('sponsor-dialog')) return;
+
+    const dialog = document.createElement('div');
+    dialog.id = 'sponsor-dialog';
+    dialog.innerHTML = `
+      <div class="sponsor-dialog-overlay"></div>
+      <div class="sponsor-dialog-content">
+        <div style="padding: 24px;">
+          <div style="display:flex;align-items:flex-start;gap:16px;margin-bottom:16px;">
+            <div style="width:28px;height:28px;flex-shrink:0;margin-top:2px;color:#E5484D;">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+                <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" fill="currentColor"/>
+              </svg>
+            </div>
+            <div style="flex:1;">
+              <div style="font-size:18px;font-weight:600;color:#1C1C1C;line-height:1.4;margin-bottom:12px;">${this.t('sponsorDialogTitle')}</div>
+              <div style="font-size:14px;color:#5F5F5F;line-height:1.6;">
+                <p style="margin:0 0 8px 0;">${this.t('sponsorDialogText')}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;padding:16px 24px;background:#F3F3F3;border-top:1px solid rgba(0,0,0,0.05);">
+          <button id="sponsor-cancel-btn" style="
+            padding:6px 16px;border:1px solid rgba(0,0,0,0.1);background:#FFFFFF;
+            border-radius:4px;font-size:14px;font-weight:400;color:#1C1C1C;
+            cursor:pointer;font-family:inherit;transition:all 0.15s ease;min-width:80px;
+            box-shadow:0 1px 2px rgba(0,0,0,0.05);
+          ">${this.t('sponsorCancel')}</button>
+          <button id="sponsor-confirm-btn" style="
+            padding:6px 16px;border:1px solid transparent;background:#E5484D;
+            border-radius:4px;font-size:14px;font-weight:400;color:#FFFFFF;
+            cursor:pointer;font-family:inherit;transition:all 0.15s ease;min-width:80px;
+            box-shadow:0 1px 2px rgba(0,0,0,0.05);
+          ">${this.t('sponsorConfirm')}</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(dialog);
+
+    const style = document.createElement('style');
+    style.textContent = `
+      #sponsor-dialog {
+        position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+        z-index: 100002; display: flex; align-items: center; justify-content: center;
+      }
+      .sponsor-dialog-overlay {
+        position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,0.25); backdrop-filter: blur(4px);
+      }
+      .sponsor-dialog-content {
+        position: relative; background: #FFFFFF; border-radius: 8px;
+        max-width: 480px; width: 90%;
+        box-shadow: 0 32px 64px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.05);
+        font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
+        overflow: hidden;
+        animation: sponsorDialogShow 0.2s cubic-bezier(0.0, 0.0, 0.2, 1);
+      }
+      @keyframes sponsorDialogShow {
+        from { opacity: 0; transform: scale(0.95) translateY(-10px); }
+        to { opacity: 1; transform: scale(1) translateY(0); }
+      }
+    `;
+    document.head.appendChild(style);
+
+    document.getElementById('sponsor-cancel-btn')?.addEventListener('click', () => {
+      dialog.remove();
+      style.remove();
+    });
+
+    document.getElementById('sponsor-confirm-btn')?.addEventListener('click', async () => {
+      dialog.remove();
+      style.remove();
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('open_sponsor_url');
+        this.addLog('INFO', '已打开赞助页面');
+      } catch (e) {
+        console.error('[Sponsor] Failed to open sponsor page:', e);
+      }
+    });
+  }
+
+  // ==================== 体验调研弹窗（随机弹出） ====================
+  // 程序启动后 1~5 分钟随机弹出一次，询问用户是否愿意参与产品体验调研。
+  // 点击"不再弹出"后永久记录，之后不再弹出。
+  private surveyTimer: number | null = null;
+
+  // 是否已关闭调研弹窗（不再次弹出）
+  private isSurveyDismissed(): boolean {
+    return localStorage.getItem('survey_dismissed') === 'true';
+  }
+
+  // 启动调研弹窗调度：程序启动后 1~5 分钟随机弹出
+  private scheduleSurveyPopup() {
+    if (this.isSurveyDismissed()) return;
+    if (this.surveyTimer !== null) return;
+
+    // 随机延迟 1~5 分钟（60_000 ~ 300_000 ms）
+    const delay = 60_000 + Math.floor(Math.random() * 240_000);
+    console.log('[Survey] Survey popup scheduled in', Math.round(delay / 1000), 'seconds');
+
+    this.surveyTimer = window.setTimeout(() => {
+      this.surveyTimer = null;
+      // 弹出前再次检查是否已被标记为不再弹出
+      if (this.isSurveyDismissed()) return;
+      this.showSurveyDialog();
+    }, delay);
+  }
+
+  // 显示体验调研弹窗（Fluent 风格）
+  private showSurveyDialog() {
+    if (document.getElementById('survey-dialog')) return;
+
+    const dialog = document.createElement('div');
+    dialog.id = 'survey-dialog';
+    dialog.innerHTML = `
+      <div class="survey-dialog-overlay"></div>
+      <div class="survey-dialog-content">
+        <div style="padding: 24px;">
+          <div style="display:flex;align-items:flex-start;gap:16px;margin-bottom:16px;">
+            <div style="width:28px;height:28px;flex-shrink:0;margin-top:2px;color:#0067C0;">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" fill="currentColor"/>
+              </svg>
+            </div>
+            <div style="flex:1;">
+              <div style="font-size:18px;font-weight:600;color:#1C1C1C;line-height:1.4;margin-bottom:12px;">${this.t('surveyDialogTitle')}</div>
+              <div style="font-size:14px;color:#5F5F5F;line-height:1.6;">
+                <p style="margin:0 0 8px 0;">${this.t('surveyDialogText')}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;padding:16px 24px;background:#F3F3F3;border-top:1px solid rgba(0,0,0,0.05);">
+          <button id="survey-dismiss-btn" style="
+            padding:6px 16px;border:1px solid rgba(0,0,0,0.1);background:#FFFFFF;
+            border-radius:4px;font-size:14px;font-weight:400;color:#1C1C1C;
+            cursor:pointer;font-family:inherit;transition:all 0.15s ease;min-width:80px;
+            box-shadow:0 1px 2px rgba(0,0,0,0.05);
+          ">${this.t('surveyDismiss')}</button>
+          <button id="survey-open-btn" style="
+            padding:6px 16px;border:1px solid transparent;background:#0067C0;
+            border-radius:4px;font-size:14px;font-weight:400;color:#FFFFFF;
+            cursor:pointer;font-family:inherit;transition:all 0.15s ease;min-width:80px;
+            box-shadow:0 1px 2px rgba(0,0,0,0.05);
+          ">${this.t('surveyOpen')}</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(dialog);
+
+    const style = document.createElement('style');
+    style.textContent = `
+      #survey-dialog {
+        position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+        z-index: 100003; display: flex; align-items: center; justify-content: center;
+      }
+      .survey-dialog-overlay {
+        position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,0.25); backdrop-filter: blur(4px);
+      }
+      .survey-dialog-content {
+        position: relative; background: #FFFFFF; border-radius: 8px;
+        max-width: 480px; width: 90%;
+        box-shadow: 0 32px 64px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.05);
+        font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
+        overflow: hidden;
+        animation: surveyDialogShow 0.2s cubic-bezier(0.0, 0.0, 0.2, 1);
+      }
+      @keyframes surveyDialogShow {
+        from { opacity: 0; transform: scale(0.95) translateY(-10px); }
+        to { opacity: 1; transform: scale(1) translateY(0); }
+      }
+    `;
+    document.head.appendChild(style);
+
+    // 不再弹出：永久标记
+    document.getElementById('survey-dismiss-btn')?.addEventListener('click', () => {
+      localStorage.setItem('survey_dismissed', 'true');
+      this.addLog('INFO', '用户选择不再弹出体验调研');
+      dialog.remove();
+      style.remove();
+    });
+
+    // 打开问卷
+    document.getElementById('survey-open-btn')?.addEventListener('click', async () => {
+      dialog.remove();
+      style.remove();
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('open_survey_url');
+        this.addLog('INFO', '用户打开体验调研问卷');
+      } catch (e) {
+        console.error('[Survey] Failed to open survey:', e);
+      }
+    });
+  }
+
+  // 正常启动流程（文件完整性通过后执行）
+  private async continueStartup(gatePromise?: Promise<{ needsUpdate: boolean; version: string; description: string; updatedAt: string }>) {
+    // 初始化日志上传器（与 Rust 同步状态）
+    this.logUploadManager.init().then(() => {
+      // 首次启动/未确认过授权时，弹窗询问是否允许日志上传
+      if (!this.logUploadManager.hasConsentBeenShown()) {
+        setTimeout(() => this.showLogUploadConsentDialog(), 800);
+      }
+    });
+
+    // 检测是否安装了其他杀软（Xdows-Security）
+    this.checkXdowsSecurityInstalled();
+    
+    // 先加载扫描敏感度设置
+    this.loadScanSensitivity();
+    
+    // 添加初始日志（延迟执行，不阻塞）
+    this.addInitialLogs();
+
+    // 定期检测云端哈希库连接（每30秒）
+    setInterval(() => {
+      this.checkCloudHashConnection();
+    }, 30000);
+
+    // 启动时并行加载：驱动防护 + 云端连接 + 云端哈希
+    this.startupComplete = false;
+    
+    // 检测 MS Store 版本
+    try {
+      const { invoke: invokeApi } = await import('@tauri-apps/api/core');
+      this.isMsStore = await invokeApi<boolean>('is_ms_store');
+    } catch {
+      this.isMsStore = false;
+    }
+    
+    // MS Store 版禁用基础防护、文件防护和静默模式
+    if (this.isMsStore) {
+      this.basicProtectionManager.setEnabled(false);
+      this.fileProtectionManager.setEnabled(false);
+      this.silentModeManager.setEnabled(false);
+      
+      // 移除 splash 中的 "EndPoint Security" 副标题
+      const splashSubtitle = document.querySelector('.splash-subtitle');
+      if (splashSubtitle) splashSubtitle.remove();
+    }
+    
+    const startupTasks = Promise.all([
+      this.isMsStore
+        ? Promise.resolve() // MS Store 版跳过驱动防护初始化
+        : this.driverProtectionManager.refreshState()
+            .then(async () => {
+              this.updateStatsProtectionToggle();
+              this.updateDriverProtectionToggle();
+              this.updateProtectionStatus();
+              const currentlyEnabled = this.driverProtectionManager.isEnabled();
+              if (!currentlyEnabled) {
+                try {
+                  const { invoke } = await import('@tauri-apps/api/core');
+                  // Windows 版本检测：
+                  // - Win11：自动启用，无弹窗
+                  // - Win10 及以下：弹出兼容性警告弹窗，让用户决定
+                  const autoStart = await invoke('get_driver_auto_start_decision');
+                  if (!autoStart) {
+                    console.log('[Startup] User declined driver protection on Win10 warning');
+                    // 用户选择不启用，保存配置为禁用
+                    await this.driverProtectionManager.saveConfig(false);
+                    return;
+                  }
+                  await this.driverProtectionManager.setEnabled(true, false);
+                  this.addLog('INFO', 'Driver protection auto-started on startup');
+                  this.updateDriverProtectionToggle();
+                  this.updateProtectionStatus();
+                  this.updateStatsProtectionToggle();
+                } catch (e) {
+                  console.error('[Startup] Failed to auto-start driver protection:', e);
+                }
+              }
+            }),
+      this.checkCloudHashConnection(),
+      new Promise(r => setTimeout(r, 2500)), // 最小展示 splash 时间
+    ]);
+
+    // 启动完成后添加云端状态日志和更新检查日志
+    startupTasks.then(() => {
+      if (this.cloudHashConnectionStatus === 'connected') {
+        this.addLog('INFO', 'CloudHash 云端就绪');
+      } else {
+        this.addLog('WARNING', 'CloudHash 云端未连接');
+      }
+
+      // 启动时检查更新
+      this.checkUpdateAtStartup();
+    });
+    
+    // 超时保护：最多等 6 秒
+    Promise.race([
+      startupTasks,
+      new Promise(r => setTimeout(r, 6000)),
+    ]).then(async () => {
+      // splash 动画已结束，再判断规则库门禁
+      if (gatePromise) {
+        // 门禁检查带 3 秒兜底超时：断网/云端高延迟时不再阻塞主界面显示
+        const gate = await Promise.race([
+          gatePromise,
+          new Promise<{ needsUpdate: boolean; version: string; description: string; updatedAt: string }>(r =>
+            setTimeout(() => r({ needsUpdate: false, version: '', description: '', updatedAt: '' }), 3000)
+          ),
+        ]);
+        if (gate.needsUpdate) {
+          // 隐藏 splash，显示门禁弹窗
+          try {
+            const { invoke } = await import('@tauri-apps/api/core');
+            await invoke('hide_splash').catch(() => {});
+          } catch (_) {}
+
+          const updated = await this.showRulesUpdateGate(gate.version, gate.description, gate.updatedAt);
+          if (!updated) {
+            return; // 用户选择退出
+          }
+          // 更新完成，继续进入主界面
+        }
+      }
+
+      this.render();
+      this.startupComplete = true;
+      // 渲染完成后再更新主页状态，避免 DOM 未生成导致样式没生效
+      this.updateHomeStatus().catch(e => console.error('Failed to update home status:', e));
+      setTimeout(() => this.hideSplash(), 400);
+      
+      // 自动恢复桌面宠物（如果之前开启了）
+      if (this.desktopPetEnabled) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          invoke('toggle_desktop_pet', { enabled: true }).catch(err => {
+            console.warn('[Startup] Failed to auto-restore desktop pet:', err);
+          });
+        } catch (e) {
+          console.warn('[Startup] Cannot restore desktop pet:', e);
+        }
+      }
+    });
+    
+    // 设置驱动防护意外停止检测回调
+    this.driverProtectionManager.setOnCrashDetectedCallback(() => {
+      this.showDriverCrashDialog();
+    });
+    
+    // 启动意外停止检测
+    if (!this.isMsStore) {
+      this.driverProtectionManager.startCrashDetection();
+    }
+
+    // 初始化文件防护（MS Store 版跳过）
+    if (!this.isMsStore) {
+        this.initFileProtection();
+    }
+
+    // 初始化 R3 勒索软件防护监听
+    this.initRansomwareProtectionListener();
+
+    // 如果勒索软件防护已开启，自动启动 R3 备份与监控
+    if (this.protectionTypeManager.isRansomwareEnabled()) {
+      this.startRansomwareProtection();
+    }
+
+    // 定期检查驱动进程状态，仅在状态变化时更新主页
+    if (!this.isMsStore) {
+      setInterval(async () => {
+        const wasEnabled = this.driverProtectionManager.isEnabled();
+        await this.driverProtectionManager.refreshState();
+        const isEnabled = this.driverProtectionManager.isEnabled();
+        if (wasEnabled !== isEnabled && !this.isScanning) {
+          this.updateDriverProtectionToggle();
+          this.updateStatsProtectionToggle();
+          this.updateProtectionStatus();
+        }
+      }, 2000);
+    }
+
+    // 启动时自动检查更新（延迟3秒，避免影响启动速度）
+    // 公告将在更新弹窗关闭后显示
+    setTimeout(() => {
+      this.checkUpdateOnStartup();
+    }, 3000);
+
+    // 监听托盘菜单的页面跳转事件
+    this.listenForNavigationEvents();
+
+    // 调度体验调研弹窗：启动后 1~5 分钟随机弹出（仅一次，点击"不再弹出"后永久关闭）
+    this.scheduleSurveyPopup();
+  }
+  
+  // 初始化文件防护
+  private async initFileProtection() {
+    try {
+      // 设置威胁检测回调：文件防护检测到威胁时刷新主页状态并加入通知中心
+      this.fileProtectionManager.setOnThreatDetectedCallback((filePath: string, threatName: string) => {
+        this.totalThreatsFound++;
+        this.updateHomeStatus();
+        this.updateProtectionStatus();
+        const now = new Date();
+        const pad = (n: number) => n.toString().padStart(2, '0');
+        const timestamp = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+        this.addPendingThreat({
+          path: filePath,
+          threatName: threatName,
+          threatLevel: 'High',
+          category: '实时防护',
+          detectedAt: timestamp,
+          source: 'realtime'
+        });
+      });
+
+      // 每次启动都启用文件防护
+      await this.fileProtectionManager.setEnabled(true, this.fileProtectionManager.getScope());
+      console.log('[Startup] File protection started');
+    } catch (e) {
+      console.error('[Startup] Failed to init file protection:', e);
+    }
+  }
+
+  // R3 勒索软件防护：监听后端检测事件与备份进度
+  private async initRansomwareProtectionListener() {
+    try {
+      const { listen } = await import('@tauri-apps/api/event');
+      listen<RansomwareDetectionPayload>('ransomware-detected', (event) => {
+        this.showRansomwareDetectionDialog(event.payload);
+      });
+      listen<RansomwareBackupProgress>('ransomware-backup-progress', (event) => {
+        this.updateRansomwareBackupProgress(event.payload);
+      });
+      listen<RansomwareBackupProgress>('ransomware-backup-completed', (event) => {
+        this.updateRansomwareBackupProgress(event.payload);
+      });
+      console.log('[RansomwareProtection] R3 listener initialized');
+    } catch (e) {
+      console.error('[RansomwareProtection] Failed to init listener:', e);
+    }
+  }
+
+  private async startRansomwareProtection() {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('set_ransomware_protection_enabled', { enabled: true });
+      console.log('[RansomwareProtection] R3 protection started');
+    } catch (e) {
+      console.error('[RansomwareProtection] Failed to start R3 protection:', e);
+    }
+  }
+
+  // 显示勒索攻击检测/回滚对话框
+  private showRansomwareDetectionDialog(detection: RansomwareDetectionPayload) {
+    if (document.getElementById('ransomware-detection-dialog')) return;
+
+    const processName = detection.process_name || '未知进程';
+    const count = detection.event_count || 0;
+    const files = detection.affected_files || [];
+
+    const dialog = document.createElement('div');
+    dialog.id = 'ransomware-detection-dialog';
+    dialog.innerHTML = `
+      <style>
+        #ransomware-detection-dialog {
+          position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+          z-index: 100000; display: flex; align-items: center; justify-content: center;
+          font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
+        }
+        .ransomware-detection-overlay {
+          position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+          background: rgba(0,0,0,0.25); backdrop-filter: blur(4px);
+        }
+        .ransomware-detection-content {
+          position: relative; background: var(--bg-primary); border-radius: var(--radius-md);
+          max-width: 560px; width: 90%;
+          box-shadow: 0 32px 64px rgba(0,0,0,0.15), 0 0 0 1px var(--border-color);
+          overflow: hidden;
+          animation: ransomwareDialogShow 0.2s cubic-bezier(0.0, 0.0, 0.2, 1);
+        }
+        @keyframes ransomwareDialogShow {
+          from { opacity: 0; transform: scale(0.95) translateY(-10px); }
+          to { opacity: 1; transform: scale(1) translateY(0); }
+        }
+      </style>
+      <div class="ransomware-detection-overlay"></div>
+      <div class="ransomware-detection-content">
+        <div style="padding: 24px;">
+          <div style="display:flex;align-items:flex-start;gap:16px;margin-bottom:16px;">
+            <div style="width:20px;height:20px;flex-shrink:0;margin-top:2px;">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M10 2C14.4183 2 18 5.58172 18 10C18 14.4183 14.4183 18 10 18C5.58172 18 2 14.4183 2 10C2 5.58172 5.58172 2 10 2ZM10 3C6.13401 3 3 6.13401 3 10C3 13.866 6.13401 17 10 17C13.866 17 17 13.866 17 10C17 6.13401 13.866 3 10 3ZM9.5 13.5V14.5H10.5V13.5H9.5ZM9.5 5.5V12H10.5V5.5H9.5Z" fill="#C42B1C"/>
+              </svg>
+            </div>
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:18px;font-weight:600;color:var(--text-primary);line-height:1.4;margin-bottom:8px;">${this.t('ransomwareDetectionTitle')}</div>
+              <div style="font-size:14px;color:var(--text-secondary);line-height:1.6;margin-bottom:16px;">${this.t('ransomwareDetectionDesc').replace('{process}', processName).replace('{count}', String(count))}</div>
+              <div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:8px;">${this.t('ransomwareAffectedFiles')}</div>
+              <div style="max-height:200px;overflow-y:auto;border:1px solid var(--border-color);border-radius:var(--radius-sm);padding:8px 12px;background:var(--bg-secondary);">
+                ${files.length === 0 ? `<div style="color:var(--text-tertiary);font-size:13px;">无文件</div>` : files.map((f, idx) => `
+                  <div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border-color);${idx === files.length - 1 ? 'border-bottom:none;' : ''}">
+                    <input type="checkbox" class="ransomware-file-cb" data-path="${this.escapeHtml(f.path)}" checked style="width:16px;height:16px;flex-shrink:0;accent-color:var(--accent-primary);">
+                    <div style="flex:1;min-width:0;">
+                      <div style="font-size:13px;color:var(--text-primary);word-break:break-all;">${this.escapeHtml(f.path)}</div>
+                      <div style="font-size:12px;color:${f.backed_up ? 'var(--text-tertiary)' : '#D13438'};">${f.backed_up ? '' : this.t('ransomwareNoBackup')}</div>
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;padding:16px 24px;background:var(--bg-secondary);border-top:1px solid var(--border-color);">
+          <button id="ransomware-ignore-btn" class="btn-fluent-secondary" style="padding:6px 16px;font-size:14px;">${this.t('ransomwareIgnore')}</button>
+          <button id="ransomware-rollback-selected-btn" class="btn-fluent-primary" style="padding:6px 16px;font-size:14px;">${this.t('ransomwareRollback')}</button>
+          <button id="ransomware-rollback-all-btn" class="btn-fluent-primary" style="padding:6px 16px;font-size:14px;">${this.t('ransomwareRollbackAll')}</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(dialog);
+
+    const closeDialog = () => {
+      dialog.remove();
+    };
+
+    const doRollback = async (paths: string[]) => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const results: RansomwareRollbackResult[] = await invoke('rollback_ransomware_files', { paths });
+        const successCount = results.filter(r => r.success).length;
+        const failCount = results.length - successCount;
+        this.addLog('INFO', `R3 勒索防护：已回滚 ${successCount} 个文件，失败 ${failCount} 个`);
+
+        // 生成详细结果报告
+        const failedItems = results.filter(r => !r.success);
+        let detailHtml = '';
+        if (failedItems.length > 0) {
+          detailHtml = `<div style="margin-top:12px;max-height:160px;overflow-y:auto;border:1px solid var(--border-color);border-radius:var(--radius-sm);padding:8px 12px;background:var(--bg-secondary);">
+            <div style="font-size:13px;font-weight:600;color:var(--text-primary);margin-bottom:8px;">失败详情：</div>
+            ${failedItems.map(r => `
+              <div style="font-size:12px;color:#D13438;margin-bottom:6px;word-break:break-all;">
+                ${this.escapeHtml(r.path)}<br>
+                <span style="color:var(--text-tertiary);">${this.escapeHtml(r.message)}</span>
+              </div>
+            `).join('')}
+          </div>`;
+        }
+
+        const summaryDialog = document.createElement('div');
+        summaryDialog.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:100001;display:flex;align-items:center;justify-content:center;font-family:"Segoe UI Variable", "Segoe UI", system-ui, sans-serif;';
+        summaryDialog.innerHTML = `
+          <div style="position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.25);backdrop-filter:blur(4px);" id="rollback-summary-overlay"></div>
+          <div style="position:relative;background:var(--bg-primary);border-radius:var(--radius-md);max-width:560px;width:90%;box-shadow:0 32px 64px rgba(0,0,0,0.15),0 0 0 1px var(--border-color);overflow:hidden;padding:24px;">
+            <div style="font-size:18px;font-weight:600;color:var(--text-primary);margin-bottom:12px;">回滚结果</div>
+            <div style="font-size:14px;color:var(--text-secondary);line-height:1.6;margin-bottom:12px;">
+              成功 <span style="color:#00d4aa;font-weight:600;">${successCount}</span> 个，
+              失败 <span style="color:#D13438;font-weight:600;">${failCount}</span> 个
+            </div>
+            ${detailHtml}
+            <div style="display:flex;justify-content:flex-end;margin-top:16px;">
+              <button id="rollback-summary-ok" class="btn-fluent-primary" style="padding:6px 16px;font-size:14px;">确定</button>
+            </div>
+          </div>
+        `;
+        document.body.appendChild(summaryDialog);
+        document.getElementById('rollback-summary-overlay')?.addEventListener('click', () => summaryDialog.remove());
+        document.getElementById('rollback-summary-ok')?.addEventListener('click', () => summaryDialog.remove());
+      } catch (e) {
+        console.error('[RansomwareProtection] Rollback failed:', e);
+        this.addLog('ERROR', `R3 勒索防护回滚失败: ${e}`);
+      }
+    };
+
+    document.getElementById('ransomware-ignore-btn')?.addEventListener('click', closeDialog);
+    document.getElementById('ransomware-rollback-all-btn')?.addEventListener('click', async () => {
+      const allPaths = files.map(f => f.path);
+      await doRollback(allPaths);
+      closeDialog();
+    });
+    document.getElementById('ransomware-rollback-selected-btn')?.addEventListener('click', async () => {
+      const checkboxes = document.querySelectorAll('.ransomware-file-cb:checked') as NodeListOf<HTMLInputElement>;
+      const selectedPaths = Array.from(checkboxes).map(cb => cb.dataset.path || '').filter(Boolean);
+      if (selectedPaths.length === 0) {
+        alert('请先选择要回滚的文件');
+        return;
+      }
+      await doRollback(selectedPaths);
+      closeDialog();
+    });
+  }
+
+  // 监听导航事件
+  private async listenForNavigationEvents() {
+    try {
+      const { listen } = await import('@tauri-apps/api/event');
+      listen<string>('navigate-to', (event) => {
+        const page = event.payload;
+        console.log('[Navigation] Received navigate-to event:', page);
+        this.handleNavigation(page);
+      });
+
+      // 监听右键扫描事件
+      listen<{ path: string, source: string }>('scan-path-selected', (event) => {
+        let { path, source } = event.payload;
+        
+        // 修复路径中的双反斜杠为单反斜杠
+        // 注意：日志中显示的 \\ 是 JSON 转义，实际字符串中是 \
+        while (path.includes('\\\\')) {
+          path = path.replace(/\\\\/g, '\\');
+        }
+        
+        console.log(`[ContextMenu] Received scan request from ${source} for: ${path}`);
+        this.addLog('INFO', `[ContextMenu] Received scan request for: ${path}`);
+
+        // 切换到主页并滚动到扫描区域
+        this.currentPage = 'home';
+        this.render();
+
+        // 延迟滚动到扫描区域并开始扫描
+        setTimeout(() => {
+          const scanSection = document.getElementById('section-scan');
+          if (scanSection) {
+            scanSection.scrollIntoView({ behavior: 'smooth' });
+          }
+          // 再延迟一点开始扫描
+          setTimeout(() => {
+            console.log(`[ContextMenu] Starting custom scan for: ${path}`);
+            this.addLog('INFO', `[ContextMenu] Starting custom scan for: ${path}`);
+            this.startCustomScan(path);
+          }, 300);
+        }, 100);
+      });
+
+      // 监听 EDR 弹窗触发的快速扫描事件
+      listen('edr-start-quick-scan', () => {
+        console.log('[EDRAlert] Received edr-start-quick-scan event, starting quick scan');
+        this.currentPage = 'home';
+        this.render();
+        setTimeout(() => {
+          const scanSection = document.getElementById('section-scan');
+          if (scanSection) scanSection.scrollIntoView({ behavior: 'smooth' });
+          setTimeout(() => {
+            this.startScan();
+          }, 300);
+        }, 100);
+      });
+    } catch (e) {
+      console.error('Failed to listen for navigation events:', e);
+    }
+  }
+  
+  // 处理页面导航
+  private handleNavigation(page: string) {
+    switch (page) {
+      case 'quick-scan':
+        this.currentPage = 'home';
+        this.render();
+        // 滚动到扫描区域并触发快速扫描
+        setTimeout(() => {
+          const scanSection = document.getElementById('section-scan');
+          if (scanSection) {
+            scanSection.scrollIntoView({ behavior: 'smooth' });
+            // 延迟触发快速扫描按钮
+            setTimeout(() => {
+              const quickScanBtn = document.getElementById('start-quick-scan');
+              if (quickScanBtn) quickScanBtn.click();
+            }, 300);
+          }
+        }, 100);
+        break;
+      case 'custom-scan':
+        this.currentPage = 'home';
+        this.render();
+        // 滚动到扫描区域并触发自定义扫描
+        setTimeout(() => {
+          const scanSection = document.getElementById('section-scan');
+          if (scanSection) {
+            scanSection.scrollIntoView({ behavior: 'smooth' });
+            // 延迟触发自定义扫描按钮
+            setTimeout(() => {
+              const customScanBtn = document.getElementById('start-custom-scan');
+              if (customScanBtn) customScanBtn.click();
+            }, 300);
+          }
+        }, 100);
+        break;
+      case 'quarantine':
+        this.currentPage = 'quarantine';
+        this.render();
+        break;
+      case 'settings':
+        this.currentPage = 'home';
+        this.render();
+        // 滚动到设置区域
+        setTimeout(() => {
+          const settingsSection = document.getElementById('section-settings');
+          if (settingsSection) {
+            settingsSection.scrollIntoView({ behavior: 'smooth' });
+          }
+        }, 100);
+        break;
+      default:
+        this.currentPage = 'home';
+        this.render();
+    }
+  }
+  
+  // 显示驱动防护意外停止诊断对话框
+  private showDriverCrashDialog() {
+    // 防止重复弹出
+    if (document.getElementById('driver-crash-dialog')) {
+      return;
+    }
+
+    const dialog = document.createElement('div');
+    dialog.id = 'driver-crash-dialog';
+    dialog.className = 'driver-crash-dialog';
+    dialog.innerHTML = `
+      <div class="driver-crash-overlay"></div>
+      <div class="driver-crash-content">
+        <!-- 内容区域 -->
+        <div style="padding: 24px;">
+          <div style="
+            display: flex;
+            align-items: flex-start;
+            gap: 16px;
+            margin-bottom: 16px;
+          ">
+            <!-- 警告图标 (Fluent InfoBar 风格) -->
+            <div style="
+              width: 20px;
+              height: 20px;
+              flex-shrink: 0;
+              margin-top: 2px;
+            ">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M10 2C14.4183 2 18 5.58172 18 10C18 14.4183 14.4183 18 10 18C5.58172 18 2 14.4183 2 10C2 5.58172 5.58172 2 10 2ZM10 3C6.13401 3 3 6.13401 3 10C3 13.866 6.13401 17 10 17C13.866 17 17 13.866 17 10C17 6.13401 13.866 3 10 3ZM10 13.5C10.4142 13.5 10.75 13.8358 10.75 14.25C10.75 14.6642 10.4142 15 10 15C9.58579 15 9.25 14.6642 9.25 14.25C9.25 13.8358 9.58579 13.5 10 13.5ZM10 5.5C10.2761 5.5 10.5 5.72386 10.5 6V11C10.5 11.2761 10.2761 11.5 10 11.5C9.72386 11.5 9.5 11.2761 9.5 11V6C9.5 5.72386 9.72386 5.5 10 5.5Z" fill="#9C5F00"/>
+              </svg>
+            </div>
+
+            <div style="flex: 1;">
+              <!-- 标题 -->
+              <div style="
+                font-size: 18px;
+                font-weight: 600;
+                color: #1C1C1C;
+                line-height: 1.4;
+                margin-bottom: 12px;
+              ">${this.t('driverProtectionStopped')}</div>
+
+              <!-- 内容区域 -->
+              <div style="
+                font-size: 14px;
+                color: #5F5F5F;
+                line-height: 1.6;
+              ">
+                <p style="margin: 0 0 12px 0;">${this.t('driverProtectionStoppedDesc')}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 按钮区域 (Fluent Button 风格 + 灰色背景) -->
+        <div style="
+          display: flex;
+          gap: 8px;
+          justify-content: flex-end;
+          padding: 16px 24px 24px 24px;
+          background: #F3F3F3;
+          border-top: 1px solid rgba(0, 0, 0, 0.05);
+        ">
+          <button id="crash-dialog-cancel" style="
+            padding: 6px 16px;
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            background: #FFFFFF;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: 400;
+            color: #1C1C1C;
+            cursor: pointer;
+            font-family: inherit;
+            transition: all 0.15s ease;
+            min-width: 80px;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+          " onmouseover="this.style.background='#F9F9F9'; this.style.borderColor='rgba(0, 0, 0, 0.15)'"
+             onmouseout="this.style.background='#FFFFFF'; this.style.borderColor='rgba(0, 0, 0, 0.1)'"
+             onmousedown="this.style.background='#F0F0F0'"
+             onmouseup="this.style.background='#F9F9F9'">${this.t('later')}</button>
+          <button id="crash-dialog-check" style="
+            padding: 6px 16px;
+            border: none;
+            background: #005FB8;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: 400;
+            color: white;
+            cursor: pointer;
+            font-family: inherit;
+            transition: all 0.15s ease;
+            min-width: 80px;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+          " onmouseover="this.style.background='#0066C7'"
+             onmouseout="this.style.background='#005FB8'"
+             onmousedown="this.style.background='#004E92'"
+             onmouseup="this.style.background='#0066C7'">${this.t('checkReasonBtn')}</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(dialog);
+
+    // 添加样式
+    const style = document.createElement('style');
+    style.textContent = `
+      .driver-crash-dialog {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 10000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .driver-crash-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.25);
+        backdrop-filter: blur(4px);
+      }
+      .driver-crash-content {
+        position: relative;
+        background: #FFFFFF;
+        border-radius: 8px;
+        max-width: 480px;
+        width: 90%;
+        box-shadow: 0 32px 64px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.05);
+        animation: contentDialogShow 0.2s cubic-bezier(0.0, 0.0, 0.2, 1);
+        font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
+        overflow: hidden;
+      }
+      @keyframes contentDialogShow {
+        from {
+          opacity: 0;
+          transform: scale(0.95) translateY(-10px);
+        }
+        to {
+          opacity: 1;
+          transform: scale(1) translateY(0);
+        }
+      }
+    `;
+    document.head.appendChild(style);
+    
+    // 绑定事件
+    document.getElementById('crash-dialog-cancel')?.addEventListener('click', () => {
+      dialog.remove();
+      style.remove();
+    });
+    
+    document.getElementById('crash-dialog-check')?.addEventListener('click', async () => {
+      // 不关闭对话框，而是更新对话框内容开始诊断
+      const content = dialog.querySelector('.driver-crash-content');
+      if (content) {
+        await this.runDriverDiagnostics(content);
+      }
+    });
+  }
+  
+  // 在现有对话框中运行驱动防护诊断
+  private async runDriverDiagnostics(contentElement: Element) {
+    // 更新对话框内容为诊断进度界面 (Fluent Design 风格)
+    contentElement.innerHTML = `
+      <!-- 内容区域 -->
+      <div style="padding: 24px;">
+        <div style="
+          display: flex;
+          align-items: flex-start;
+          gap: 16px;
+          margin-bottom: 20px;
+        ">
+          <!-- 诊断图标 (Fluent InfoBar 风格) -->
+          <div style="
+            width: 20px;
+            height: 20px;
+            flex-shrink: 0;
+            margin-top: 2px;
+          ">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M10 2C14.4183 2 18 5.58172 18 10C18 14.4183 14.4183 18 10 18C5.58172 18 2 14.4183 2 10C2 5.58172 5.58172 2 10 2ZM10 3C6.13401 3 3 6.13401 3 10C3 13.866 6.13401 17 10 17C13.866 17 17 13.866 17 10C17 6.13401 13.866 3 10 3ZM10 13.5C10.4142 13.5 10.75 13.8358 10.75 14.25C10.75 14.6642 10.4142 15 10 15C9.58579 15 9.25 14.6642 9.25 14.25C9.25 13.8358 9.58579 13.5 10 13.5ZM10 5.5C10.2761 5.5 10.5 5.72386 10.5 6V11C10.5 11.2761 10.2761 11.5 10 11.5C9.72386 11.5 9.5 11.2761 9.5 11V6C9.5 5.72386 9.72386 5.5 10 5.5Z" fill="#005FB8"/>
+            </svg>
+          </div>
+
+          <div style="flex: 1;">
+            <!-- 标题 -->
+            <div style="
+              font-size: 18px;
+              font-weight: 600;
+              color: #1C1C1C;
+              line-height: 1.4;
+              margin-bottom: 4px;
+            ">正在诊断...</div>
+            <div style="
+              font-size: 14px;
+              color: #5F5F5F;
+              line-height: 1.5;
+            ">正在检查驱动防护相关问题</div>
+          </div>
+        </div>
+
+        <!-- 诊断项目列表 -->
+        <div style="
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        ">
+          <div class="diagnostic-item" id="check-system" data-status="checking" style="
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 16px;
+            background: #F3F3F3;
+            border-radius: 6px;
+            transition: all 0.3s ease;
+          ">
+            <div class="diagnostic-item-icon" style="width: 16px; height: 16px; display: flex; align-items: center; justify-content: center;">
+              <div class="diagnostic-spinner-small" style="
+                width: 14px;
+                height: 14px;
+                border: 2px solid #E0E0E0;
+                border-top-color: #005FB8;
+                border-radius: 50%;
+                animation: spin 1s linear infinite;
+              "></div>
+            </div>
+            <span style="flex: 1; font-size: 14px; color: #1C1C1C;">${this.t('checkSystemVersion')}</span>
+            <span class="diagnostic-item-status" style="font-size: 12px; color: #005FB8;">检查中...</span>
+          </div>
+
+          <div class="diagnostic-item" id="check-kernel" data-status="pending" style="
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 16px;
+            background: #F3F3F3;
+            border-radius: 6px;
+            transition: all 0.3s ease;
+          ">
+            <div class="diagnostic-item-icon" style="width: 16px; height: 16px; display: flex; align-items: center; justify-content: center;">
+              <div class="diagnostic-spinner-small" style="display: none; width: 14px; height: 14px; border: 2px solid #E0E0E0; border-top-color: #005FB8; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+            </div>
+            <span style="flex: 1; font-size: 14px; color: #1C1C1C;">${this.t('checkKernelIsolation')}</span>
+            <span class="diagnostic-item-status" style="font-size: 12px; color: #5F5F5F;">等待中</span>
+          </div>
+
+          <div class="diagnostic-item" id="check-agent-file" data-status="pending" style="
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 16px;
+            background: #F3F3F3;
+            border-radius: 6px;
+            transition: all 0.3s ease;
+          ">
+            <div class="diagnostic-item-icon" style="width: 16px; height: 16px; display: flex; align-items: center; justify-content: center;">
+              <div class="diagnostic-spinner-small" style="display: none; width: 14px; height: 14px; border: 2px solid #E0E0E0; border-top-color: #005FB8; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+            </div>
+            <span style="flex: 1; font-size: 14px; color: #1C1C1C;">${this.t('checkAgentFile')}</span>
+            <span class="diagnostic-item-status" style="font-size: 12px; color: #5F5F5F;">等待中</span>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // 添加样式
+    const style = document.createElement('style');
+    style.textContent = `
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+    `;
+    document.head.appendChild(style);
+    
+    // 更新检查项状态的辅助函数 (Fluent Design 风格)
+    const updateCheckItem = (id: string, status: 'checking' | 'success' | 'error', statusText: string) => {
+      const item = document.getElementById(id);
+      if (item) {
+        item.setAttribute('data-status', status);
+
+        // 更新背景色
+        if (status === 'checking') {
+          item.style.background = '#F3F3F3';
+        } else if (status === 'success') {
+          item.style.background = '#F0F9F0'; // 淡绿色背景
+        } else if (status === 'error') {
+          item.style.background = '#FDF2F2'; // 淡红色背景
+        }
+
+        // 更新图标
+        const iconContainer = item.querySelector('.diagnostic-item-icon');
+        if (iconContainer) {
+          if (status === 'success') {
+            iconContainer.innerHTML = `
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M8 15C11.866 15 15 11.866 15 8C15 4.13401 11.866 1 8 1C4.13401 1 1 4.13401 1 8C1 11.866 4.13401 15 8 15ZM11.3536 6.35355L7.35355 10.3536C7.15829 10.5488 6.84171 10.5488 6.64645 10.3536L4.64645 8.35355C4.45118 8.15829 4.45118 7.84171 4.64645 7.64645C4.84171 7.45118 5.15829 7.45118 5.35355 7.64645L7 9.29289L10.6464 5.64645C10.8417 5.45118 11.1583 5.45118 11.3536 5.64645C11.5488 5.84171 11.5488 6.15829 11.3536 6.35355Z" fill="#107C10"/>
+              </svg>
+            `;
+          } else if (status === 'error') {
+            iconContainer.innerHTML = `
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M8 15C11.866 15 15 11.866 15 8C15 4.13401 11.866 1 8 1C4.13401 1 1 4.13401 1 8C1 11.866 4.13401 15 8 15ZM5.64645 5.64645C5.84171 5.45118 6.15829 5.45118 6.35355 5.64645L8 7.29289L9.64645 5.64645C9.84171 5.45118 10.1583 5.45118 10.3536 5.64645C10.5488 5.84171 10.5488 6.15829 10.3536 6.35355L8.70711 8L10.3536 9.64645C10.5488 9.84171 10.5488 10.1583 10.3536 10.3536C10.1583 10.5488 9.84171 10.5488 9.64645 10.3536L8 8.70711L6.35355 10.3536C6.15829 10.5488 5.84171 10.5488 5.64645 10.3536C5.45118 10.1583 5.45118 9.84171 5.64645 9.64645L7.29289 8L5.64645 6.35355C5.45118 6.15829 5.45118 5.84171 5.64645 5.64645Z" fill="#D13438"/>
+              </svg>
+            `;
+          } else if (status === 'checking') {
+            iconContainer.innerHTML = `
+              <div class="diagnostic-spinner-small" style="
+                width: 14px;
+                height: 14px;
+                border: 2px solid #E0E0E0;
+                border-top-color: #005FB8;
+                border-radius: 50%;
+                animation: spin 1s linear infinite;
+              "></div>
+            `;
+          }
+        }
+
+        // 更新状态文字颜色
+        const statusEl = item.querySelector('.diagnostic-item-status') as HTMLElement;
+        if (statusEl) {
+          statusEl.textContent = statusText;
+          if (status === 'checking') {
+            statusEl.style.color = '#005FB8';
+          } else if (status === 'success') {
+            statusEl.style.color = '#107C10';
+          } else if (status === 'error') {
+            statusEl.style.color = '#D13438';
+          }
+        }
+      }
+    };
+    
+    try {
+      // 1. 检查系统版本（驱动不兼容 Windows 10，仅支持 Windows 11 及以上）
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      let systemVersionSupported = false;
+      try {
+        const result = await invoke<{ system_version_supported: boolean }>('diagnose_driver_protection');
+        systemVersionSupported = result.system_version_supported;
+        updateCheckItem('check-system', systemVersionSupported ? 'success' : 'error', systemVersionSupported ? this.t('systemVersionSupported') : this.t('systemVersionNotSupported'));
+      } catch (e) {
+        updateCheckItem('check-system', 'error', '检查失败');
+      }
+
+      // 2. 检查内核隔离状态
+      updateCheckItem('check-kernel', 'checking', '检查中...');
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      let kernelIsolationEnabled = false;
+      let kernelIsolationError: string | null = null;
+      try {
+        const result = await invoke<{ kernel_isolation_enabled: boolean; kernel_isolation_check_error?: string }>('diagnose_driver_protection');
+        kernelIsolationEnabled = result.kernel_isolation_enabled;
+        if (result.kernel_isolation_check_error) {
+          kernelIsolationError = result.kernel_isolation_check_error;
+        }
+        updateCheckItem('check-kernel', kernelIsolationEnabled ? 'error' : 'success', kernelIsolationEnabled ? '已启用' : '已禁用');
+      } catch (e) {
+        updateCheckItem('check-kernel', 'error', '检查失败');
+      }
+
+      // 3. 检查 Agent 文件是否存在
+      updateCheckItem('check-agent-file', 'checking', '检查中...');
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      let agentFileExists = false;
+      try {
+        const result = await invoke<{ agent_file_exists: boolean }>('diagnose_driver_protection');
+        agentFileExists = result.agent_file_exists;
+        updateCheckItem('check-agent-file', agentFileExists ? 'success' : 'error', agentFileExists ? this.t('agentFileExists') : this.t('agentFileNotExists'));
+      } catch (e) {
+        updateCheckItem('check-agent-file', 'error', '检查失败');
+      }
+
+      // 等待一下让用户看到完成的检查
+      await new Promise(resolve => setTimeout(resolve, 800));
+
+      // 显示诊断结果
+      this.showDiagnosticResultInDialog(contentElement, systemVersionSupported, kernelIsolationEnabled, agentFileExists, kernelIsolationError);
+
+    } catch (error) {
+      this.showDiagnosticErrorInDialog(contentElement);
+    }
+  }
+  
+  // 在对话框中显示诊断结果
+  private showDiagnosticResultInDialog(
+    contentElement: Element,
+    systemVersionSupported: boolean,
+    kernelIsolationEnabled: boolean,
+    agentFileExists: boolean,
+    _kernelIsolationError: string | null
+  ) {
+    let issues: string[] = [];
+    let solutions: string[] = [];
+
+    if (!systemVersionSupported) {
+      issues.push(this.t('systemVersionNotSupported'));
+      solutions.push(this.t('checkSystemVersionDesc'));
+    }
+
+    if (kernelIsolationEnabled) {
+      issues.push(this.t('kernelIsolationEnabled'));
+      solutions.push(this.t('closeKernelIsolation'));
+    }
+
+    if (!agentFileExists) {
+      issues.push(this.t('agentFileNotExists'));
+      solutions.push(this.t('driverNotInstalled'));
+    }
+
+    const hasIssues = issues.length > 0;
+
+    contentElement.innerHTML = `
+      <!-- 内容区域 -->
+      <div style="padding: 24px;">
+        <div style="
+          display: flex;
+          align-items: flex-start;
+          gap: 16px;
+          margin-bottom: 20px;
+        ">
+          <!-- 结果图标 (Fluent 风格) -->
+          <div style="
+            width: 20px;
+            height: 20px;
+            flex-shrink: 0;
+            margin-top: 2px;
+          ">
+            ${hasIssues ? `
+              <svg width="20" height="20" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M8 15C11.866 15 15 11.866 15 8C15 4.13401 11.866 1 8 1C4.13401 1 1 4.13401 1 8C1 11.866 4.13401 15 8 15ZM5.64645 5.64645C5.84171 5.45118 6.15829 5.45118 6.35355 5.64645L8 7.29289L9.64645 5.64645C9.84171 5.45118 10.1583 5.45118 10.3536 5.64645C10.5488 5.84171 10.5488 6.15829 10.3536 6.35355L8.70711 8L10.3536 9.64645C10.5488 9.84171 10.5488 10.1583 10.3536 10.3536C10.1583 10.5488 9.84171 10.5488 9.64645 10.3536L8 8.70711L6.35355 10.3536C6.15829 10.5488 5.84171 10.5488 5.64645 10.3536C5.45118 10.1583 5.45118 9.84171 5.64645 9.64645L7.29289 8L5.64645 6.35355C5.45118 6.15829 5.45118 5.84171 5.64645 5.64645Z" fill="#D13438"/>
+              </svg>
+            ` : `
+              <svg width="20" height="20" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M8 15C11.866 15 15 11.866 15 8C15 4.13401 11.866 1 8 1C4.13401 1 1 4.13401 1 8C1 11.866 4.13401 15 8 15ZM11.3536 6.35355L7.35355 10.3536C7.15829 10.5488 6.84171 10.5488 6.64645 10.3536L4.64645 8.35355C4.45118 8.15829 4.45118 7.84171 4.64645 7.64645C4.84171 7.45118 5.15829 7.45118 5.35355 7.64645L7 9.29289L10.6464 5.64645C10.8417 5.45118 11.1583 5.45118 11.3536 5.64645C11.5488 5.84171 11.5488 6.15829 11.3536 6.35355Z" fill="#107C10"/>
+              </svg>
+            `}
+          </div>
+
+          <div style="flex: 1;">
+            <!-- 标题 -->
+            <div style="
+              font-size: 18px;
+              font-weight: 600;
+              color: #1C1C1C;
+              line-height: 1.4;
+              margin-bottom: 4px;
+            ">${this.t('diagnosisResult')}</div>
+            <div style="
+              font-size: 14px;
+              color: ${hasIssues ? '#D13438' : '#107C10'};
+              line-height: 1.5;
+            ">${hasIssues ? this.t('detectedIssues') : this.t('noIssuesDetected')}</div>
+          </div>
+        </div>
+
+        <!-- 问题列表 -->
+        ${hasIssues ? `
+          <div style="
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+          ">
+            <!-- 检测到的问题 -->
+            <div style="
+              padding: 12px 16px;
+              background: #FDF2F2;
+              border-radius: 6px;
+            ">
+              <div style="
+                font-size: 14px;
+                font-weight: 600;
+                color: #D13438;
+                margin-bottom: 8px;
+              ">${this.t('detectedIssues')}</div>
+              <ul style="
+                margin: 0;
+                padding-left: 18px;
+                font-size: 14px;
+                color: #1C1C1C;
+                line-height: 1.6;
+              ">
+                ${issues.map(issue => `<li style="margin-bottom: 4px;">${issue}</li>`).join('')}
+              </ul>
+            </div>
+
+            <!-- 解决方案 -->
+            ${solutions.length > 0 ? `
+              <div style="
+                padding: 12px 16px;
+                background: #F3F3F3;
+                border-radius: 6px;
+              ">
+                <div style="
+                  font-size: 14px;
+                  font-weight: 600;
+                  color: #1C1C1C;
+                  margin-bottom: 8px;
+                ">${this.t('suggestedSolutions')}</div>
+                <ol style="
+                  margin: 0;
+                  padding-left: 18px;
+                  font-size: 14px;
+                  color: #5F5F5F;
+                  line-height: 1.6;
+                ">
+                  ${solutions.map(solution => `<li style="margin-bottom: 4px;">${solution}</li>`).join('')}
+                </ol>
+              </div>
+            ` : ''}
+          </div>
+        ` : `
+          <div style="
+            padding: 12px 16px;
+            background: #F0F9F0;
+            border-radius: 6px;
+            font-size: 14px;
+            color: #5F5F5F;
+            line-height: 1.6;
+          ">
+            ${this.t('driverStoppedUnknown')}
+          </div>
+        `}
+      </div>
+
+      <!-- 按钮区域 (Fluent Button 风格 + 灰色背景) -->
+      <div style="
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+        padding: 16px 24px 24px 24px;
+        background: #F3F3F3;
+        border-top: 1px solid rgba(0, 0, 0, 0.05);
+      ">
+        <button id="diagnostic-advanced" style="
+          padding: 6px 16px;
+          border: 1px solid rgba(0, 0, 0, 0.1);
+          background: #FFFFFF;
+          border-radius: 4px;
+          font-size: 14px;
+          font-weight: 400;
+          color: #1C1C1C;
+          cursor: pointer;
+          font-family: inherit;
+          transition: all 0.15s ease;
+          min-width: 80px;
+          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+        " onmouseover="this.style.background='#F9F9F9'; this.style.borderColor='rgba(0, 0, 0, 0.15)'"
+           onmouseout="this.style.background='#FFFFFF'; this.style.borderColor='rgba(0, 0, 0, 0.1)'"
+           onmousedown="this.style.background='#F0F0F0'"
+           onmouseup="this.style.background='#F9F9F9'">${this.t('advancedCheck')}</button>
+        <button id="diagnostic-close" style="
+          padding: 6px 16px;
+          border: none;
+          background: #005FB8;
+          border-radius: 4px;
+          font-size: 14px;
+          font-weight: 400;
+          color: white;
+          cursor: pointer;
+          font-family: inherit;
+          transition: all 0.15s ease;
+          min-width: 80px;
+          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+        " onmouseover="this.style.background='#0066C7'"
+           onmouseout="this.style.background='#005FB8'"
+           onmousedown="this.style.background='#004E92'"
+           onmouseup="this.style.background='#0066C7'">${this.t('iUnderstand')}</button>
+      </div>
+    `;
+
+    // 绑定按钮事件
+    setTimeout(() => {
+      document.getElementById('diagnostic-close')?.addEventListener('click', () => {
+        const dialog = document.getElementById('driver-crash-dialog');
+        if (dialog) dialog.remove();
+      });
+
+      // 高级检查：PowerShell 提权 sc start 驱动，记录错误码到日志
+      document.getElementById('diagnostic-advanced')?.addEventListener('click', async () => {
+        const btn = document.getElementById('diagnostic-advanced') as HTMLButtonElement | null;
+        if (btn) btn.disabled = true;
+        await this.runAdvancedDriverCheck(contentElement);
+      });
+    }, 0);
+  }
+
+  // 高级检查：调用后端提权执行 sc start 驱动，展示日志路径与打开按钮
+  private async runAdvancedDriverCheck(contentElement: Element) {
+    contentElement.innerHTML = `
+      <div style="padding: 24px;">
+        <div style="display: flex; align-items: flex-start; gap: 16px; margin-bottom: 20px;">
+          <div style="width: 20px; height: 20px; flex-shrink: 0; margin-top: 2px;">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M10 2C14.4183 2 18 5.58172 18 10C18 14.4183 14.4183 18 10 18C5.58172 18 2 14.4183 2 10C2 5.58172 5.58172 2 10 2ZM10 3C6.13401 3 3 6.13401 3 10C3 13.866 6.13401 17 10 17C13.866 17 17 13.866 17 10C17 6.13401 13.866 3 10 3ZM10 13.5C10.4142 13.5 10.75 13.8358 10.75 14.25C10.75 14.6642 10.4142 15 10 15C9.58579 15 9.25 14.6642 9.25 14.25C9.25 13.8358 9.58579 13.5 10 13.5ZM10 5.5C10.2761 5.5 10.5 5.72386 10.5 6V11C10.5 11.2761 10.2761 11.5 10 11.5C9.72386 11.5 9.5 11.2761 9.5 11V6C9.5 5.72386 9.72386 5.5 10 5.5Z" fill="#005FB8"/>
+            </svg>
+          </div>
+          <div style="flex: 1;">
+            <div style="font-size: 18px; font-weight: 600; color: #1C1C1C; line-height: 1.4; margin-bottom: 4px;">${this.t('advancedCheck')}</div>
+            <div style="font-size: 14px; color: #5F5F5F; line-height: 1.5;">${this.t('advancedCheckRunning')}</div>
+          </div>
+        </div>
+        <div id="advanced-check-progress" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: #F3F3F3; border-radius: 6px;">
+          <div style="width: 14px; height: 14px; border: 2px solid #E0E0E0; border-top-color: #005FB8; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+          <span style="flex: 1; font-size: 14px; color: #1C1C1C;">${this.t('advancedCheckDesc')}</span>
+        </div>
+      </div>
+    `;
+
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const result = await invoke<any>('advanced_driver_check');
+      const logPath = result?.log_path || '';
+
+      contentElement.innerHTML = `
+        <div style="padding: 24px;">
+          <div style="display: flex; align-items: flex-start; gap: 16px; margin-bottom: 20px;">
+            <div style="width: 20px; height: 20px; flex-shrink: 0; margin-top: 2px;">
+              <svg width="20" height="20" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M8 15C11.866 15 15 11.866 15 8C15 4.13401 11.866 1 8 1C4.13401 1 1 4.13401 1 8C1 11.866 4.13401 15 8 15ZM11.3536 6.35355L7.35355 10.3536C7.15829 10.5488 6.84171 10.5488 6.64645 10.3536L4.64645 8.35355C4.45118 8.15829 4.45118 7.84171 4.64645 7.64645C4.84171 7.45118 5.15829 7.45118 5.35355 7.64645L7 9.29289L10.6464 5.64645C10.8417 5.45118 11.1583 5.45118 11.3536 5.64645C11.5488 5.84171 11.5488 6.15829 11.3536 6.35355Z" fill="#107C10"/>
+              </svg>
+            </div>
+            <div style="flex: 1;">
+              <div style="font-size: 18px; font-weight: 600; color: #1C1C1C; line-height: 1.4; margin-bottom: 4px;">${this.t('advancedCheckDone')}</div>
+              <div style="font-size: 14px; color: #5F5F5F; line-height: 1.5;">
+                ${result?.error_code ? `${this.t('advancedCheck')} sc start 退出码: <b style="color:#D13438;">${this.escapeHtml(result.error_code)}</b><br>` : ''}
+                ${this.t('advancedCheckLogSaved')}
+              </div>
+            </div>
+          </div>
+
+          <div style="display: flex; align-items: center; gap: 8px; padding: 12px 16px; background: #F3F3F3; border-radius: 6px;">
+            <input id="advanced-log-path" type="text" readonly value="${this.escapeHtml(logPath)}" style="
+              flex: 1;
+              font-size: 13px;
+              color: #5F5F5F;
+              background: #FFFFFF;
+              border: 1px solid rgba(0, 0, 0, 0.1);
+              border-radius: 4px;
+              padding: 6px 10px;
+              font-family: inherit;
+              outline: none;
+              min-width: 0;
+            " onfocus="this.select()">
+            <button id="advanced-copy-log" style="
+              padding: 6px 16px;
+              border: 1px solid rgba(0, 0, 0, 0.1);
+              background: #FFFFFF;
+              border-radius: 4px;
+              font-size: 14px;
+              font-weight: 400;
+              color: #1C1C1C;
+              cursor: pointer;
+              font-family: inherit;
+              transition: all 0.15s ease;
+              min-width: 80px;
+              box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+              flex-shrink: 0;
+            " onmouseover="this.style.background='#F9F9F9'; this.style.borderColor='rgba(0, 0, 0, 0.15)'"
+               onmouseout="this.style.background='#FFFFFF'; this.style.borderColor='rgba(0, 0, 0, 0.1)'"
+               onmousedown="this.style.background='#F0F0F0'"
+               onmouseup="this.style.background='#F9F9F9'">${this.t('copy')}</button>
+            <button id="advanced-open-log" style="
+              padding: 6px 16px;
+              border: none;
+              background: #005FB8;
+              border-radius: 4px;
+              font-size: 14px;
+              font-weight: 400;
+              color: white;
+              cursor: pointer;
+              font-family: inherit;
+              transition: all 0.15s ease;
+              min-width: 80px;
+              box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+              flex-shrink: 0;
+            " onmouseover="this.style.background='#0066C7'"
+               onmouseout="this.style.background='#005FB8'"
+               onmousedown="this.style.background='#004E92'"
+               onmouseup="this.style.background='#0066C7'">${this.t('openLogFile')}</button>
+          </div>
+        </div>
+
+        <div style="
+          display: flex;
+          gap: 8px;
+          justify-content: flex-end;
+          padding: 16px 24px 24px 24px;
+          background: #F3F3F3;
+          border-top: 1px solid rgba(0, 0, 0, 0.05);
+        ">
+          <button id="advanced-close" style="
+            padding: 6px 16px;
+            border: none;
+            background: #005FB8;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: 400;
+            color: white;
+            cursor: pointer;
+            font-family: inherit;
+            transition: all 0.15s ease;
+            min-width: 80px;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+          " onmouseover="this.style.background='#0066C7'"
+             onmouseout="this.style.background='#005FB8'"
+             onmousedown="this.style.background='#004E92'"
+             onmouseup="this.style.background='#0066C7'">${this.t('iUnderstand')}</button>
+        </div>
+      `;
+
+      // 绑定事件：复制路径 + 打开日志 + 关闭
+      setTimeout(() => {
+        document.getElementById('advanced-copy-log')?.addEventListener('click', async () => {
+          const input = document.getElementById('advanced-log-path') as HTMLInputElement | null;
+          if (!input || !input.value) return;
+          try {
+            await navigator.clipboard.writeText(input.value);
+            const btn = document.getElementById('advanced-copy-log') as HTMLButtonElement | null;
+            if (btn) {
+              const original = btn.textContent;
+              btn.textContent = this.t('copied');
+              setTimeout(() => { if (btn) btn.textContent = original; }, 1500);
+            }
+          } catch (e) {
+            input.select();
+            document.execCommand('copy');
+          }
+        });
+        document.getElementById('advanced-open-log')?.addEventListener('click', async () => {
+          if (!logPath) return;
+          try {
+            const { invoke } = await import('@tauri-apps/api/core');
+            await invoke('open_file_path', { path: logPath });
+          } catch (err) {
+            console.error('Failed to open log:', err);
+          }
+        });
+        document.getElementById('advanced-close')?.addEventListener('click', () => {
+          const dialog = document.getElementById('driver-crash-dialog');
+          if (dialog) dialog.remove();
+        });
+      }, 0);
+    } catch (e) {
+      console.error('Advanced driver check failed:', e);
+      contentElement.innerHTML = `
+        <div style="padding: 24px;">
+          <div style="display: flex; align-items: flex-start; gap: 16px;">
+            <div style="width: 20px; height: 20px; flex-shrink: 0; margin-top: 2px;">
+              <svg width="20" height="20" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M8 15C11.866 15 15 11.866 15 8C15 4.13401 11.866 1 8 1C4.13401 1 1 4.13401 1 8C1 11.866 4.13401 15 8 15ZM5.64645 5.64645C5.84171 5.45118 6.15829 5.45118 6.35355 5.64645L8 7.29289L9.64645 5.64645C9.84171 5.45118 10.1583 5.45118 10.3536 5.64645C10.5488 5.84171 10.5488 6.15829 10.3536 6.35355L8.70711 8L10.3536 9.64645C10.5488 9.84171 10.5488 10.1583 10.3536 10.3536C10.1583 10.5488 9.84171 10.5488 9.64645 10.3536L8 8.70711L6.35355 10.3536C6.15829 10.5488 5.84171 10.5488 5.64645 10.3536C5.45118 10.1583 5.45118 9.84171 5.64645 9.64645L7.29289 8L5.64645 6.35355C5.45118 6.15829 5.45118 5.84171 5.64645 5.64645Z" fill="#D13438"/>
+              </svg>
+            </div>
+            <div style="flex: 1;">
+              <div style="font-size: 18px; font-weight: 600; color: #1C1C1C; line-height: 1.4; margin-bottom: 8px;">${this.t('advancedCheckFailed')}</div>
+              <div style="font-size: 14px; color: #5F5F5F; line-height: 1.6;">${this.escapeHtml(String(e))}</div>
+            </div>
+          </div>
+        </div>
+        <div style="
+          display: flex;
+          gap: 8px;
+          justify-content: flex-end;
+          padding: 16px 24px 24px 24px;
+          background: #F3F3F3;
+          border-top: 1px solid rgba(0, 0, 0, 0.05);
+        ">
+          <button id="advanced-close" style="
+            padding: 6px 16px;
+            border: none;
+            background: #005FB8;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: 400;
+            color: white;
+            cursor: pointer;
+            font-family: inherit;
+            transition: all 0.15s ease;
+            min-width: 80px;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+          " onmouseover="this.style.background='#0066C7'"
+             onmouseout="this.style.background='#005FB8'"
+             onmousedown="this.style.background='#004E92'"
+             onmouseup="this.style.background='#0066C7'">${this.t('iUnderstand')}</button>
+        </div>
+      `;
+      setTimeout(() => {
+        document.getElementById('advanced-close')?.addEventListener('click', () => {
+          const dialog = document.getElementById('driver-crash-dialog');
+          if (dialog) dialog.remove();
+        });
+      }, 0);
+    }
+  }
+
+  // 在对话框中显示诊断错误
+  private showDiagnosticErrorInDialog(contentElement: Element) {
+    contentElement.innerHTML = `
+      <!-- 内容区域 -->
+      <div style="padding: 24px;">
+        <div style="
+          display: flex;
+          align-items: flex-start;
+          gap: 16px;
+          margin-bottom: 16px;
+        ">
+          <!-- 错误图标 (Fluent 风格) -->
+          <div style="
+            width: 20px;
+            height: 20px;
+            flex-shrink: 0;
+            margin-top: 2px;
+          ">
+            <svg width="20" height="20" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M8 15C11.866 15 15 11.866 15 8C15 4.13401 11.866 1 8 1C4.13401 1 1 4.13401 1 8C1 11.866 4.13401 15 8 15ZM5.64645 5.64645C5.84171 5.45118 6.15829 5.45118 6.35355 5.64645L8 7.29289L9.64645 5.64645C9.84171 5.45118 10.1583 5.45118 10.3536 5.64645C10.5488 5.84171 10.5488 6.15829 10.3536 6.35355L8.70711 8L10.3536 9.64645C10.5488 9.84171 10.5488 10.1583 10.3536 10.3536C10.1583 10.5488 9.84171 10.5488 9.64645 10.3536L8 8.70711L6.35355 10.3536C6.15829 10.5488 5.84171 10.5488 5.64645 10.3536C5.45118 10.1583 5.45118 9.84171 5.64645 9.64645L7.29289 8L5.64645 6.35355C5.45118 6.15829 5.45118 5.84171 5.64645 5.64645Z" fill="#D13438"/>
+            </svg>
+          </div>
+
+          <div style="flex: 1;">
+            <!-- 标题 -->
+            <div style="
+              font-size: 18px;
+              font-weight: 600;
+              color: #1C1C1C;
+              line-height: 1.4;
+              margin-bottom: 8px;
+            ">诊断失败</div>
+
+            <!-- 内容 -->
+            <div style="
+              font-size: 14px;
+              color: #5F5F5F;
+              line-height: 1.6;
+            ">无法完成诊断，请尝试重启软件或联系技术支持。</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 按钮区域 (Fluent Button 风格 + 灰色背景) -->
+      <div style="
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+        padding: 16px 24px 24px 24px;
+        background: #F3F3F3;
+        border-top: 1px solid rgba(0, 0, 0, 0.05);
+      ">
+        <button id="diagnostic-close" style="
+          padding: 6px 16px;
+          border: none;
+          background: #005FB8;
+          border-radius: 4px;
+          font-size: 14px;
+          font-weight: 400;
+          color: white;
+          cursor: pointer;
+          font-family: inherit;
+          transition: all 0.15s ease;
+          min-width: 80px;
+          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+        " onmouseover="this.style.background='#0066C7'"
+           onmouseout="this.style.background='#005FB8'"
+           onmousedown="this.style.background='#004E92'"
+           onmouseup="this.style.background='#0066C7'">关闭</button>
+      </div>
+    `;
+
+    setTimeout(() => {
+      document.getElementById('diagnostic-close')?.addEventListener('click', () => {
+        const dialog = document.getElementById('driver-crash-dialog');
+        if (dialog) dialog.remove();
+      });
+    }, 0);
+  }
+
+
+
+  // 检测是否安装了Xdows-Security
+  private async checkXdowsSecurityInstalled() {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const detected = await invoke<boolean>('check_xdows_security_installed');
+      this.xdowsSecurityDetected = detected;
+      if (detected) {
+        console.log('[XdowsCheck] Xdows-Security detected on desktop');
+        // 如果检测到，更新主页状态显示
+        this.updateHomeStatus();
+      }
+    } catch (error) {
+      console.error('[XdowsCheck] Failed to check Xdows-Security:', error);
+    }
+  }
+
+  // 启动时检查更新
+  private async checkUpdateOnStartup() {
+    try {
+      console.log('[AutoUpdate] Checking for updates on startup...');
+      const updateInfo = await updateManager.checkUpdate();
+      if (updateInfo && updateInfo.has_update) {
+        console.log(`[AutoUpdate] New version available: ${updateInfo.latest_version}`);
+        // 显示更新提示（非阻塞），公告将在更新弹窗关闭后显示
+        this.showUpdateNotification(updateInfo);
+      } else {
+        console.log('[AutoUpdate] No updates available');
+        // 没有更新时，直接显示公告
+        this.fetchAndShowAnnouncement();
+      }
+    } catch (error) {
+      console.error('[AutoUpdate] Failed to check update:', error);
+      // 更新检查失败时，仍然尝试显示公告
+      this.fetchAndShowAnnouncement();
+    }
+  }
+
+  // 获取并显示公告
+  private async fetchAndShowAnnouncement() {
+    try {
+      console.log('[Announcement] Fetching latest announcement...');
+      const { invoke } = await import('@tauri-apps/api/core');
+      const announcement = await invoke<{id: string, title: string, content: string, publish_date: string} | null>('fetch_announcement_command');
+
+      if (announcement) {
+        console.log(`[Announcement] Got announcement: ${announcement.title}, id: ${announcement.id}`);
+        // 检查是否已经显示过此公告（使用 localStorage）
+        const shownAnnouncements = JSON.parse(localStorage.getItem('shownAnnouncements') || '[]');
+        console.log(`[Announcement] Shown announcements:`, shownAnnouncements);
+        if (!shownAnnouncements.includes(announcement.id)) {
+          console.log('[Announcement] Showing notification...');
+          this.showAnnouncementNotification(announcement);
+          shownAnnouncements.push(announcement.id);
+          localStorage.setItem('shownAnnouncements', JSON.stringify(shownAnnouncements));
+        } else {
+          console.log('[Announcement] Already shown this announcement');
+        }
+      } else {
+        console.log('[Announcement] No announcement available');
+      }
+    } catch (error) {
+      console.error('[Announcement] Failed to fetch announcement:', error);
+    }
+  }
+
+  // 显示公告通知
+  private showAnnouncementNotification(announcement: {id: string, title: string, content: string, publish_date: string}) {
+    console.log('[Announcement] Creating notification element...');
+    // 创建公告通知弹窗
+    const notification = document.createElement('div');
+    notification.className = 'announcement-notification';
+    // 内容中可能包含HTML标签（如<b>, <br>），直接作为HTML插入
+    const contentHtml = announcement.content
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      // 恢复允许的HTML标签
+      .replace(/&lt;(\/?)(b|br|strong|em|i|u|p|span|div|a|ul|ol|li|h[1-6])\b[^&]*&gt;/gi, '<$1$2>');
+
+    notification.innerHTML = `
+      <div class="announcement-notification-content">
+        <div class="announcement-notification-header">
+          <div class="announcement-notification-title">${announcement.title}</div>
+          <div class="announcement-notification-date">${new Date(announcement.publish_date).toLocaleDateString('zh-CN')}</div>
+        </div>
+        <div class="announcement-notification-body">${contentHtml}</div>
+      </div>
+      <button class="announcement-notification-close">×</button>
+    `;
+
+    // 添加样式
+    notification.style.cssText = `
+      position: fixed;
+      top: 60px;
+      right: 20px;
+      background: #ffffff;
+      border: 1px solid #e0e0e0;
+      border-radius: 12px;
+      padding: 16px 20px;
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.15);
+      z-index: 99999;
+      width: 360px;
+      max-height: 400px;
+      animation: slideIn 0.3s ease;
+      pointer-events: auto;
+    `;
+
+    // 添加动画样式
+    const style = document.createElement('style');
+    style.textContent = `
+      @keyframes slideIn {
+        from { transform: translateX(100%); opacity: 0; }
+        to { transform: translateX(0); opacity: 1; }
+      }
+      @keyframes slideOut {
+        from { transform: translateX(0); opacity: 1; }
+        to { transform: translateX(100%); opacity: 0; }
+      }
+      .announcement-notification-content { flex: 1; overflow-y: auto; max-height: 360px; }
+      .announcement-notification-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+      .announcement-notification-title { font-weight: 600; color: #333; font-size: 14px; }
+      .announcement-notification-date { font-size: 11px; color: #999; }
+      .announcement-notification-body { font-size: 13px; color: #666; line-height: 1.5; }
+      .announcement-notification-body h1, .announcement-notification-body h2, .announcement-notification-body h3 { margin: 8px 0; color: #333; }
+      .announcement-notification-body ul { margin: 8px 0; padding-left: 16px; }
+      .announcement-notification-body li { margin: 4px 0; }
+      .announcement-notification-body code { background: #f0f0f0; padding: 2px 4px; border-radius: 3px; font-size: 12px; }
+      .announcement-notification-body strong { color: #333; }
+      .announcement-notification-close {
+        background: none;
+        border: none;
+        color: #999;
+        font-size: 18px;
+        cursor: pointer;
+        padding: 2px 6px;
+        line-height: 1;
+        border-radius: 4px;
+        transition: all 0.2s;
+        flex-shrink: 0;
+      }
+      .announcement-notification-close:hover { color: #666; background: #f0f0f0; }
+    `;
+    document.head.appendChild(style);
+    console.log('[Announcement] Style added to head');
+    console.log('[Announcement] document.body exists:', !!document.body);
+    document.body.appendChild(notification);
+    console.log('[Announcement] Notification added to body, children count:', document.body.children.length);
+    console.log('[Announcement] Notification element:', notification);
+    console.log('[Announcement] Notification parent:', notification.parentNode);
+
+    // 关闭按钮事件
+    const closeBtn = notification.querySelector('.announcement-notification-close') as HTMLButtonElement;
+    closeBtn?.addEventListener('click', () => {
+      notification.style.animation = 'slideOut 0.3s ease forwards';
+      setTimeout(() => notification.remove(), 300);
+    });
+
+    // 3分钟后自动关闭
+    setTimeout(() => {
+      if (notification.parentNode) {
+        notification.style.animation = 'slideOut 0.3s ease forwards';
+        setTimeout(() => notification.remove(), 300);
+      }
+    }, 180000);
+  }
+
+  // 简单的 Markdown 解析器
+  private parseMarkdown(text: string): string {
+    if (!text) return '';
+    
+    let html = text
+      // 转义HTML特殊字符
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      // 标题 (## 标题)
+      .replace(/^### (.*$)/gim, '<h3>$1</h3>')
+      .replace(/^## (.*$)/gim, '<h2>$1</h2>')
+      .replace(/^# (.*$)/gim, '<h1>$1</h1>')
+      // 粗体 (**text**)
+      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+      // 斜体 (*text*)
+      .replace(/\*(.*?)\*/g, '<em>$1</em>')
+      // 行内代码 (`code`)
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      // 无序列表 (- item 或 * item)
+      .replace(/^\s*[-*] (.*$)/gim, '<li>$1</li>')
+      // 有序列表 (1. item)
+      .replace(/^\s*\d+\. (.*$)/gim, '<li>$1</li>')
+      // 换行符转<br>
+      .replace(/\n/g, '<br>');
+    
+    // 将连续的<li>包装成<ul>
+    html = html.replace(/(<li>.*?<\/li>)(<br>)*(<li>.*?<\/li>)/g, '$1$3');
+    html = html.replace(/(<li>.*?<\/li>)+/g, '<ul>$&</ul>');
+    // 修复ul内的br
+    html = html.replace(/<ul>(.*?)<\/ul>/gs, (match) => {
+      return match.replace(/<br>/g, '');
+    });
+    
+    return html;
+  }
+
+  // 显示更新通知
+  private showUpdateNotification(updateInfo: UpdateInfo) {
+    // 解析 Markdown 格式的更新日志
+    let releaseNotes = updateInfo.release_notes || '暂无更新说明';
+    // 截取前500字符，避免过长
+    if (releaseNotes.length > 500) {
+      releaseNotes = releaseNotes.substring(0, 500) + '...';
+    }
+    // 简单的 Markdown 解析
+    releaseNotes = this.parseMarkdown(releaseNotes);
+    
+    // 创建通知元素
+    const notification = document.createElement('div');
+    notification.className = 'update-notification';
+    notification.innerHTML = `
+      <div class="update-notification-wrapper">
+        <div class="update-notification-header">
+          <div class="update-notification-title">${this.t('newVersionFound').replace('{version}', updateInfo.latest_version)}</div>
+          <div class="update-notification-header-actions">
+            <button class="update-notification-btn">${this.t('update')}</button>
+            <button class="update-notification-close">×</button>
+          </div>
+        </div>
+        <div class="update-notification-desc">${this.t('clickToUpdate')}</div>
+        <div class="update-release-notes">
+          <div class="update-release-notes-title">${this.t('updateContent')}</div>
+          <div class="update-release-notes-content">${releaseNotes}</div>
+        </div>
+        <div class="update-progress-container" style="display: none;">
+          <div class="update-progress-bar"></div>
+        </div>
+        <div class="update-progress-text" style="display: none; font-size: 11px; color: var(--text-secondary); margin-top: 4px;">${this.t('preparingDownload')}</div>
+      </div>
+    `;
+
+    // 添加样式
+    notification.style.cssText = `
+      position: fixed;
+      top: 60px;
+      right: 20px;
+      background: #ffffff;
+      border: 1px solid #e0e0e0;
+      border-radius: 12px;
+      padding: 20px 24px;
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.15);
+      z-index: 99999;
+      animation: slideIn 0.3s ease;
+      pointer-events: auto;
+      width: 420px;
+      max-width: calc(100vw - 40px);
+    `;
+
+    // 添加动画样式
+    const style = document.createElement('style');
+    style.textContent = `
+      @keyframes slideIn {
+        from { transform: translateX(100%); opacity: 0; }
+        to { transform: translateX(0); opacity: 1; }
+      }
+      @keyframes slideOut {
+        from { transform: translateX(0); opacity: 1; }
+        to { transform: translateX(100%); opacity: 0; }
+      }
+      .update-notification-wrapper { flex: 1; min-width: 0; }
+      .update-notification-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 4px;
+        gap: 12px;
+      }
+      .update-notification-title { font-weight: 600; color: #333; font-size: 15px; flex: 1; }
+      .update-notification-header-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
+        margin-top: 8px;
+      }
+      .update-notification-desc { font-size: 12px; color: #666; margin-bottom: 8px; margin-top: -2px; }
+      .update-release-notes {
+        margin-top: 10px;
+        padding: 12px;
+        background: #f8f9fa;
+        border-radius: 8px;
+        max-height: 180px;
+        overflow-y: auto;
+        border: 1px solid #e9ecef;
+      }
+      .update-release-notes::-webkit-scrollbar {
+        width: 6px;
+      }
+      .update-release-notes::-webkit-scrollbar-track {
+        background: transparent;
+        border-radius: 8px;
+        margin: 4px 0;
+      }
+      .update-release-notes::-webkit-scrollbar-thumb {
+        background: #c1c1c1;
+        border-radius: 3px;
+        min-height: 40px;
+      }
+      .update-release-notes::-webkit-scrollbar-thumb:hover {
+        background: #a8a8a8;
+      }
+      .update-release-notes-title {
+        font-size: 12px;
+        font-weight: 600;
+        color: #333;
+        margin-bottom: 8px;
+      }
+      .update-release-notes-content {
+        font-size: 12px;
+        color: #555;
+        line-height: 1.6;
+      }
+      .update-release-notes-content h1,
+      .update-release-notes-content h2,
+      .update-release-notes-content h3 {
+        font-size: 13px;
+        font-weight: 600;
+        color: #333;
+        margin: 8px 0 6px 0;
+      }
+      .update-release-notes-content ul,
+      .update-release-notes-content ol {
+        margin: 6px 0;
+        padding-left: 18px;
+      }
+      .update-release-notes-content li {
+        margin: 3px 0;
+      }
+      .update-release-notes-content code {
+        background: #e9ecef;
+        padding: 1px 4px;
+        border-radius: 3px;
+        font-family: monospace;
+        font-size: 11px;
+      }
+      .update-release-notes-content strong {
+        font-weight: 600;
+        color: #333;
+      }
+      .update-notification-btn {
+        background: #10b981;
+        color: white;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 500;
+        transition: background 0.2s;
+        white-space: nowrap;
+      }
+      .update-notification-btn:hover {
+        background: #059669;
+      }
+      .update-notification-btn:disabled {
+        background: #9ca3af;
+        cursor: not-allowed;
+      }
+      .update-notification-close {
+        background: none;
+        border: none;
+        color: #999;
+        font-size: 18px;
+        cursor: pointer;
+        padding: 2px 6px;
+        line-height: 1;
+        border-radius: 4px;
+        transition: all 0.2s;
+        flex-shrink: 0;
+      }
+      .update-notification-close:hover {
+        color: #666;
+        background: #f0f0f0;
+      }
+      .update-progress-container {
+        width: 100%;
+        height: 4px;
+        background: #e5e7eb;
+        border-radius: 2px;
+        margin-top: 8px;
+        overflow: hidden;
+      }
+      .update-progress-bar {
+        height: 100%;
+        background: #10b981;
+        border-radius: 2px;
+        width: 0%;
+        transition: width 0.3s ease;
+      }
+    `;
+    document.head.appendChild(style);
+
+    const btn = notification.querySelector('.update-notification-btn') as HTMLButtonElement;
+    const closeBtn = notification.querySelector('.update-notification-close') as HTMLButtonElement;
+    const progressContainer = notification.querySelector('.update-progress-container') as HTMLElement;
+    const progressBar = notification.querySelector('.update-progress-bar') as HTMLElement;
+    const progressText = notification.querySelector('.update-progress-text') as HTMLElement;
+
+    // 事件处理
+    btn?.addEventListener('click', async () => {
+      if (updateInfo.download_url) {
+        btn.disabled = true;
+        btn.textContent = '下载中...';
+        progressContainer.style.display = 'block';
+        progressText.style.display = 'block';
+        
+        // 监听下载进度事件
+        const { listen } = await import('@tauri-apps/api/event');
+        const unlisten = await listen<{progress: number, status: string}>('download-progress', (event) => {
+          const { progress, status } = event.payload;
+          progressBar.style.width = `${progress}%`;
+          progressText.textContent = status;
+        });
+        
+        const success = await updateManager.downloadUpdate(updateInfo.download_url);
+        
+        // 取消监听
+        unlisten();
+        
+        if (!success) {
+          btn.disabled = false;
+          btn.textContent = this.t('retry');
+          progressContainer.style.display = 'none';
+          progressText.style.display = 'none';
+          alert(this.t('downloadUpdateFailed'));
+        }
+        // 如果成功，应用会自动退出，不需要处理UI
+      }
+    });
+
+    closeBtn?.addEventListener('click', () => {
+      notification.style.animation = 'slideOut 0.3s ease forwards';
+      setTimeout(() => {
+        notification.remove();
+        // 更新弹窗关闭后，显示公告
+        this.fetchAndShowAnnouncement();
+      }, 300);
+    });
+
+    document.body.appendChild(notification);
+  }
+
+  // 刷新主页日志显示
+  private refreshHomeLogs() {
+    // 更新原来的日志容器
+    const logContainer = document.getElementById('log-container');
+    if (logContainer) {
+      logContainer.innerHTML = this.logs.map(log => `<div class="log-entry">${log}</div>`).join('');
+    }
+    
+    // 更新主页的日志容器
+    const homeLogContainer = document.getElementById('home-log-container');
+    if (homeLogContainer) {
+      homeLogContainer.innerHTML = this.logs.map(log => `<div class="log-entry" style="word-wrap: break-word; word-break: break-all;">${log}</div>`).join('');
+    }
+    
+    // 更新主页最近日志列表
+    const homeLogsList = document.getElementById('home-logs-list');
+    if (homeLogsList) {
+      homeLogsList.innerHTML = this.logs.length > 0
+        ? this.logs.slice(0, 6).map(log => `<div class="log-entry">${log}</div>`).join('')
+        : `<div class="log-entry" style="color: var(--text-tertiary);">${this.t('noLogs')}</div>`;
+    }
+    
+    // 同时更新活动日志头部统计
+    this.updateActivityLogHeader();
+  }
+
+  // 加载进程列表
+  private async loadProcessList() {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      this.processes = await invoke('get_process_list');
+      this.refreshProcessList();
+    } catch (e) {
+      console.error('Failed to load process list:', e);
+    }
+  }
+
+  // 刷新进程列表显示
+  private refreshProcessList() {
+    const processListContainer = document.getElementById('process-list-container');
+    if (processListContainer) {
+      const filteredProcesses = this.processes.filter(p => 
+        p.name.toLowerCase().includes(this.processSearchTerm.toLowerCase()) ||
+        p.path.toLowerCase().includes(this.processSearchTerm.toLowerCase()) ||
+        p.pid.toString().includes(this.processSearchTerm)
+      );
+      
+      processListContainer.innerHTML = filteredProcesses.map(p => `
+        <div class="process-item" data-pid="${p.pid}">
+          <input type="checkbox" class="process-checkbox" ${this.selectedProcesses.has(p.pid) ? 'checked' : ''} data-pid="${p.pid}">
+          <div class="process-info">
+            <span class="process-name">${p.name}</span>
+            <span class="process-path">${p.path}</span>
+          </div>
+          <span class="process-pid">PID: ${p.pid}</span>
+        </div>
+      `).join('');
+      
+      this.attachProcessEventListeners();
+    }
+  }
+
+  // 附加进程列表事件监听器
+  private attachProcessEventListeners() {
+    document.querySelectorAll('.process-checkbox').forEach(checkbox => {
+      checkbox.addEventListener('change', (e) => {
+        const target = e.target as HTMLInputElement;
+        const pid = parseInt(target.dataset.pid || '0');
+        if (target.checked) {
+          this.selectedProcesses.add(pid);
+        } else {
+          this.selectedProcesses.delete(pid);
+        }
+        this.refreshProcessButtons();
+      });
+    });
+
+    const searchInput = document.getElementById('process-search') as HTMLInputElement;
+    if (searchInput) {
+      searchInput.addEventListener('input', (e) => {
+        this.processSearchTerm = (e.target as HTMLInputElement).value;
+        this.refreshProcessList();
+      });
+    }
+
+    const refreshBtn = document.getElementById('refresh-process-btn');
+    if (refreshBtn) {
+      refreshBtn.addEventListener('click', () => {
+        this.loadProcessList();
+      });
+    }
+
+    const killBtn = document.getElementById('kill-process-btn');
+    if (killBtn) {
+      killBtn.addEventListener('click', async () => {
+        if (this.selectedProcesses.size === 0) return;
+        if (!confirm(`确定要结束选中的 ${this.selectedProcesses.size} 个进程吗？`)) return;
+        
+        const { invoke } = await import('@tauri-apps/api/core');
+        let successCount = 0;
+        let failCount = 0;
+        
+        for (const pid of this.selectedProcesses) {
+          try {
+            await invoke('kill_process', { pid });
+            successCount++;
+          } catch (e) {
+            failCount++;
+            console.error(`Failed to kill process ${pid}:`, e);
+          }
+        }
+        
+        alert(`结束进程完成：成功 ${successCount} 个，失败 ${failCount} 个`);
+        this.selectedProcesses.clear();
+        this.loadProcessList();
+      });
+    }
+  }
+
+  // 刷新进程按钮状态
+  private refreshProcessButtons() {
+    const killBtn = document.getElementById('kill-process-btn') as HTMLButtonElement;
+    if (killBtn) {
+      killBtn.disabled = this.selectedProcesses.size === 0;
+      killBtn.textContent = `结束进程 (${this.selectedProcesses.size})`;
+    }
+  }
+
+  // 启动进程列表自动更新
+  private startProcessUpdate() {
+    if (this.processUpdateTimer) return;
+    this.loadProcessList();
+    this.processUpdateTimer = window.setInterval(() => {
+      this.loadProcessList();
+    }, 3000);
+  }
+
+  // 停止进程列表自动更新
+  private stopProcessUpdate() {
+    if (this.processUpdateTimer) {
+      clearInterval(this.processUpdateTimer);
+      this.processUpdateTimer = null;
+    }
+  }
+
+  private renderBackgroundImage(): string {
+    const bgImage = this.animeStyleManager.getBackgroundImage();
+    if (!bgImage) return '';
+    // 图片放在最底层，内容区域需要透明才能看到
+    const css = this.animeStyleManager.getBackgroundCss();
+    return `<img id="bg-image" data-path="${bgImage}" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; object-fit: ${css.objectFit}; z-index: 0; pointer-events: none;" />`;
+  }
+
+  private async loadBackgroundImageAsync() {
+    console.log('[Background] loadBackgroundImageAsync called');
+    const img = document.getElementById('bg-image') as HTMLImageElement;
+    if (!img) {
+      console.log('[Background] img element not found');
+      return;
+    }
+    console.log('[Background] img element found:', img);
+    
+    const bgPath = img.getAttribute('data-path');
+    console.log('[Background] bgPath:', bgPath);
+    if (!bgPath) {
+      console.log('[Background] no bgPath, hiding img');
+      img.style.display = 'none';
+      return;
+    }
+    
+    try {
+      console.log('[Background] calling getIconUrl with:', bgPath);
+      const imgUrl = await this.animeStyleManager.getIconUrl(bgPath);
+      console.log('[Background] got URL, length:', imgUrl.length);
+      img.src = imgUrl;
+      img.style.opacity = this.animeStyleManager.getOpacity().toString();
+      img.style.display = 'block';
+      // 标记自定义背景已启用，内容容器透明化让背景图透出来
+      document.documentElement.setAttribute('data-custom-bg', 'true');
+      console.log('[Background] img src set, display:', img.style.display);
+    } catch (error) {
+      console.error('[Background] Failed:', error);
+      img.style.display = 'none';
+      document.documentElement.setAttribute('data-custom-bg', 'false');
+    }
+  }
+
+  // ==================== 启动加载遮罩 ====================
+  
+  private showSplash() {
+    const app = document.getElementById('app');
+    if (!app) return;
+    app.innerHTML = `
+      <div class="splash-overlay" id="splash">
+        <div class="splash-brand" id="splash-brand">
+          <div class="splash-title">XIGUASecurity</div>
+          <div class="splash-subtitle">EndPoint Security</div>
+        </div>
+      </div>
+    `;
+    
+    // 等待下一帧确保 DOM 已渲染，然后显示窗口并启动动画
+    requestAnimationFrame(() => {
+      requestAnimationFrame(async () => {
+        try {
+          await invoke('show_startup_window');
+        } catch (e) {
+          console.error('[Startup] Failed to show startup window:', e);
+        }
+        const brand = document.getElementById('splash-brand');
+        if (brand) brand.classList.add('animate');
+      });
+    });
+  }
+
+  private hideSplash() {
+    const splash = document.getElementById('splash');
+    if (splash) {
+      splash.classList.add('hidden');
+      setTimeout(() => splash.remove(), 500);
+    }
+  }
+
+  // 渲染OOBE界面
+  private renderOOBE() {
+    const app = document.getElementById('app');
+    if (!app) return;
+
+    const steps = [
+      this.renderOOBEWelcome(),
+      this.renderOOBELanguage(),
+      this.renderOOBETerms(),
+      this.renderOOBETheme(),
+      this.renderOOBEComplete()
+    ];
+
+    const isLastStep = this.oobeStep === 4;
+    const isFirstStep = this.oobeStep === 0;
+
+    app.innerHTML = `
+      <div class="oobe-container">
+        <div class="oobe-titlebar" data-tauri-drag-region>
+          <div class="oobe-titlebar-text">XIGUA Security - 首次启动向导</div>
+          <div class="oobe-titlebar-controls">
+            <button class="oobe-titlebar-btn" id="oobe-minimize-btn">
+              <svg width="12" height="12" viewBox="0 0 12 12"><rect x="1" y="5" width="10" height="2" fill="currentColor"/></svg>
+            </button>
+            <button class="oobe-titlebar-btn oobe-close-btn" id="oobe-close-btn">
+              <svg width="12" height="12" viewBox="0 0 12 12"><path d="M1 1L11 11M1 11L11 1" stroke="currentColor" stroke-width="1.5"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="oobe-content">
+          <div class="oobe-progress">
+            ${this.renderOOBEProgress()}
+          </div>
+          <div class="oobe-card">
+            <div class="oobe-step-content">
+              ${steps[this.oobeStep]}
+            </div>
+            <div class="oobe-navigation">
+              <div class="oobe-nav-left">
+                ${!isFirstStep ? `<button class="oobe-prev-btn">${this.t('oobePrevBtn')}</button>` : '<div></div>'}
+                ${this.oobeStep === 2 ? `
+                  <label class="oobe-checkbox-label oobe-nav-checkbox">
+                    <input type="checkbox" id="oobe-agree-terms" ${this.oobeAgreedToTerms ? 'checked' : ''}>
+                    <span>${this.t('oobeAgreeTerms')}</span>
+                  </label>
+                ` : ''}
+              </div>
+              <div class="oobe-next-area">
+                <span class="oobe-timer-text">${this.t('oobeWaitText')} <span class="oobe-countdown">${this.oobeCountdown}</span> ${this.t('oobeSeconds')}</span>
+                <button class="oobe-next-btn" disabled>${isLastStep ? this.t('oobeStartUsing') : this.t('oobeNextBtn')}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    this.attachOOBEEventListeners();
+    this.attachOOBETitlebarListeners();
+    this.startOOBECountdown();
+    
+    // OOBE 渲染完成后显示窗口
+    requestAnimationFrame(() => {
+      requestAnimationFrame(async () => {
+        try {
+          await invoke('show_startup_window');
+        } catch (e) {
+          console.error('[Startup] Failed to show startup window:', e);
+        }
+      });
+    });
+  }
+
+  // 附加OOBE标题栏事件监听器
+  private attachOOBETitlebarListeners() {
+    document.getElementById('oobe-minimize-btn')?.addEventListener('click', () => {
+      invoke('minimize_window');
+    });
+
+    document.getElementById('oobe-close-btn')?.addEventListener('click', () => {
+      invoke('close_window');
+    });
+  }
+
+  // 渲染OOBE进度指示器
+  private renderOOBEProgress(): string {
+    const steps = [
+      this.t('oobeStepWelcome'),
+      this.t('oobeStepLanguage'),
+      this.t('oobeStepTerms'),
+      this.t('oobeStepTheme'),
+      this.t('oobeStepComplete')
+    ];
+    const checkmarkSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+    return steps.map((step, index) => `
+      <div class="oobe-progress-step ${index === this.oobeStep ? 'active' : ''} ${index < this.oobeStep ? 'completed' : ''}">
+        <div class="oobe-progress-circle">${index < this.oobeStep ? checkmarkSvg : index + 1}</div>
+        <div class="oobe-progress-label">${step}</div>
+      </div>
+    `).join('');
+  }
+
+  // 渲染欢迎页面
+  private renderOOBEWelcome(): string {
+    return `
+      <div class="oobe-page oobe-welcome">
+        <div class="oobe-welcome-icon">
+          <img src="icons/icon.png" alt="XIGUA Security" class="oobe-app-logo">
+        </div>
+        <h1 class="oobe-title">${this.t('oobeWelcomeTitle')}</h1>
+        <p class="oobe-description">${this.t('oobeWelcomeDesc1')}</p>
+        <p class="oobe-description">${this.t('oobeWelcomeDesc2')}</p>
+      </div>
+    `;
+  }
+
+  // 渲染协议页面
+  private renderOOBETerms(): string {
+    return `
+      <div class="oobe-page oobe-terms oobe-page-fill">
+        <h1 class="oobe-title">${this.t('oobeTermsTitle')}</h1>
+        <div class="oobe-terms-content">
+          <h3>${this.t('oobeTermsSubtitle')}</h3>
+          <p>${this.t('oobeTermsIntro')}</p>
+
+          <h4>${this.t('oobeTermsSection1')}</h4>
+          <p>${this.t('oobeTermsContent1')}</p>
+
+          <h4>${this.t('oobeTermsSection2')}</h4>
+          <p>${this.t('oobeTermsContent2')}</p>
+
+          <h4>${this.t('oobeTermsSection3')}</h4>
+          <p>${this.t('oobeTermsContent3')}</p>
+
+          <h4>${this.t('oobeTermsSection4')}</h4>
+          <p>${this.t('oobeTermsContent4')}</p>
+
+          <h4>${this.t('oobeTermsSection5')}</h4>
+          <p>${this.t('oobeTermsContent5')}</p>
+        </div>
+      </div>
+    `;
+  }
+
+  // 渲染语言选择页面
+  private renderOOBELanguage(): string {
+    const languages = [
+      { id: 'zh-CN', name: this.t('langZhCN') },
+      { id: 'zh-TW', name: this.t('langZhTW') },
+      { id: 'en-US', name: this.t('langEnUS') }
+    ];
+
+    const currentLang = this.localizationManager.getLanguage();
+
+    return `
+      <div class="oobe-page oobe-language">
+        <h1 class="oobe-title">${this.t('oobeLanguageTitle')}</h1>
+        <p class="oobe-description">${this.t('oobeLanguageDesc')}</p>
+        <div class="oobe-settings-list">
+          <div class="oobe-setting-item">
+            <div class="oobe-setting-info">
+              <div class="oobe-setting-title">${this.t('displayLanguage')}</div>
+              <div class="oobe-setting-desc">${this.t('displayLanguageDesc')}</div>
+            </div>
+            <select class="select" id="oobe-language-select">
+              ${languages.map(l => `
+                <option value="${l.id}" ${currentLang === l.id ? 'selected' : ''}>${l.name}</option>
+              `).join('')}
+            </select>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // 渲染主题设置页面
+  private renderOOBETheme(): string {
+    const themes = [
+      { id: 'blue', name: this.t('themeBlue') },
+      { id: 'purple', name: this.t('themePurple') },
+      { id: 'green', name: this.t('themeGreen') },
+      { id: 'orange', name: this.t('themeOrange') },
+      { id: 'pink', name: this.t('themePink') },
+      { id: 'teal', name: this.t('themeTeal') }
+    ];
+
+    // 从 ThemeManager 获取当前实际主题
+    const currentTheme = this.themeManager.getTheme();
+
+    return `
+      <div class="oobe-page oobe-theme">
+        <h1 class="oobe-title">${this.t('oobeThemeTitle')}</h1>
+        <p class="oobe-description">${this.t('oobeThemeDesc')}</p>
+        <div class="oobe-settings-list">
+          <div class="oobe-setting-item">
+            <div class="oobe-setting-info">
+              <div class="oobe-setting-title">${this.t('colorTheme')}</div>
+              <div class="oobe-setting-desc">${this.t('colorThemeDesc')}</div>
+            </div>
+            <select class="select" id="oobe-theme-select">
+              ${themes.map(t => `
+                <option value="${t.id}" ${currentTheme === t.id ? 'selected' : ''}>${t.name}</option>
+              `).join('')}
+            </select>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // 渲染完成页面
+  private renderOOBEComplete(): string {
+    return `
+      <div class="oobe-page oobe-complete">
+        <div class="oobe-complete-icon">
+          <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/>
+            <path d="M9 12l2 2 4-4"/>
+          </svg>
+        </div>
+        <h1 class="oobe-title">${this.t('oobeCompleteTitle')}</h1>
+        <p class="oobe-description">${this.t('oobeCompleteDesc1')}</p>
+        <p class="oobe-description">${this.t('oobeCompleteDesc2')}</p>
+      </div>
+    `;
+  }
+
+  // 启动OOBE倒计时
+  private startOOBECountdown() {
+    this.oobeCountdown = 3;
+    this.oobeNextButtonEnabled = false;
+    
+    if (this.oobeTimer) {
+      clearInterval(this.oobeTimer);
+    }
+    
+    this.oobeTimer = window.setInterval(() => {
+      this.oobeCountdown--;
+      
+      const countdownEl = document.querySelector('.oobe-countdown');
+      if (countdownEl) {
+        countdownEl.textContent = String(this.oobeCountdown);
+      }
+      
+      if (this.oobeCountdown <= 0) {
+        if (this.oobeTimer) {
+          clearInterval(this.oobeTimer);
+          this.oobeTimer = null;
+        }
+        this.oobeNextButtonEnabled = true;
+        
+        const timerText = document.querySelector('.oobe-timer-text');
+        if (timerText) {
+          timerText.innerHTML = this.t('oobeReady');
+          timerText.classList.add('ready');
+        }
+        
+        const nextBtn = document.querySelector('.oobe-next-btn') as HTMLButtonElement;
+        if (nextBtn) {
+          nextBtn.disabled = false;
+          nextBtn.classList.add('ready');
+        }
+      }
+    }, 1000);
+  }
+
+  // 附加OOBE事件监听器
+  private attachOOBEEventListeners() {
+    // 下一步按钮
+    const nextBtn = document.querySelector('.oobe-next-btn');
+    nextBtn?.addEventListener('click', async () => {
+      if (!this.oobeNextButtonEnabled) return;
+
+      // 协议页面需要勾选同意
+      if (this.oobeStep === 2 && !this.oobeAgreedToTerms) {
+        alert(this.t('oobeTermsAlert'));
+        return;
+      }
+
+      this.oobeStep++;
+
+      if (this.oobeStep >= 5) {
+        await this.completeOOBE();
+      } else {
+        this.renderOOBE();
+      }
+    });
+
+    // 上一步按钮
+    const prevBtn = document.querySelector('.oobe-prev-btn');
+    prevBtn?.addEventListener('click', () => {
+      if (this.oobeStep > 0) {
+        this.oobeStep--;
+        this.renderOOBE();
+      }
+    });
+
+    // 协议复选框
+    const agreeCheckbox = document.querySelector('#oobe-agree-terms') as HTMLInputElement;
+    agreeCheckbox?.addEventListener('change', (e) => {
+      this.oobeAgreedToTerms = (e.target as HTMLInputElement).checked;
+    });
+
+    // 语言选择 - 实时生效
+    const languageSelect = document.querySelector('#oobe-language-select') as HTMLSelectElement;
+    languageSelect?.addEventListener('change', async (e) => {
+      const lang = (e.target as HTMLSelectElement).value;
+      this.localizationManager.setLanguage(lang as 'zh-CN' | 'zh-TW' | 'en-US');
+      try {
+        await invoke('set_language', { lang });
+      } catch (err) {
+        console.error('[OOBE] Failed to sync language to backend:', err);
+      }
+      // 重新渲染以更新界面语言
+      this.renderOOBE();
+    });
+
+    // 主题选择 - 实时生效
+    const themeSelect = document.querySelector('#oobe-theme-select') as HTMLSelectElement;
+    themeSelect?.addEventListener('change', (e) => {
+      this.oobeSelectedTheme = (e.target as HTMLSelectElement).value;
+      this.themeManager.setTheme(this.oobeSelectedTheme);
+    });
+  }
+
+  // 完成OOBE
+  private async completeOOBE() {
+    // 保存OOBE完成状态
+    localStorage.setItem('oobe_completed', 'true');
+    this.oobeCompleted = true;
+
+    // 应用用户选择的设置
+    this.themeManager.setTheme(this.oobeSelectedTheme);
+
+    // 首次安装默认启用文件防护、云端哈希库和新拦截窗口
+    try {
+      await this.fileProtectionManager.setEnabled(true, this.fileProtectionManager.getScope());
+      this.cloudHashManager.setEnabled(true);
+      await this.driverProtectionManager.setNewInterceptWindow(true);
+      console.log('[OOBE] First-install defaults enabled: file protection, cloud hash, new intercept window');
+    } catch (e) {
+      console.error('[OOBE] Failed to enable first-install defaults:', e);
+    }
+
+    // 重新初始化应用
+    this.init();
+  }
+
+  // 重置OOBE
+  public resetOOBE() {
+    localStorage.removeItem('oobe_completed');
+    this.oobeCompleted = false;
+    this.oobeStep = 0;
+    this.oobeNextButtonEnabled = false;
+    this.oobeCountdown = 3;
+    this.oobeSelectedTheme = 'blue';
+    this.oobeAgreedToTerms = false;
+
+    this.renderOOBE();
+  }
+
+  private render() {
+    const app = document.getElementById('app');
+    if (!app) return;
+
+    if (this.isScanning || this.scanProgress >= 100) {
+      app.innerHTML = `
+        ${this.renderBackgroundImage()}
+        ${this.renderTitleBar()}
+        <div class="main-container">
+          ${this.renderSidebar()}
+          <div class="content">
+            ${this.renderScanningPage()}
+          </div>
+        </div>
+      `;
+    } else if (this.currentPage === 'quarantine') {
+      app.innerHTML = `
+        ${this.renderBackgroundImage()}
+        ${this.renderTitleBar()}
+        <div class="main-container">
+          ${this.renderSidebar()}
+          <div class="content">
+            ${this.renderQuarantineSection()}
+          </div>
+        </div>
+      `;
+    } else if (this.currentPage === 'security_log') {
+      app.innerHTML = `
+        ${this.renderBackgroundImage()}
+        ${this.renderTitleBar()}
+        <div class="main-container">
+          ${this.renderSidebar()}
+          <div class="content">
+            ${this.renderSecurityLogSection()}
+          </div>
+        </div>
+      `;
+    } else if (this.currentPage === 'toolbox_popup') {
+      app.innerHTML = `
+        ${this.renderBackgroundImage()}
+        ${this.renderTitleBar()}
+        <div class="main-container">
+          ${this.renderSidebar()}
+          <div class="content">
+            ${this.renderToolboxPopupSection()}
+          </div>
+        </div>
+      `;
+    } else if (this.currentPage === 'toolbox_cleaner') {
+      app.innerHTML = `
+        ${this.renderBackgroundImage()}
+        ${this.renderTitleBar()}
+        <div class="main-container">
+          ${this.renderSidebar()}
+          <div class="content">
+            ${this.renderToolboxCleanerSection()}
+          </div>
+        </div>
+      `;
+    } else if (this.currentPage === 'toolbox_edr_reports') {
+      app.innerHTML = `
+        ${this.renderBackgroundImage()}
+        ${this.renderTitleBar()}
+        <div class="main-container">
+          ${this.renderSidebar()}
+          <div class="content">
+            ${this.renderEdrReportsSection()}
+          </div>
+        </div>
+      `;
+    } else if (this.currentPage === 'toolbox_process_manager') {
+      app.innerHTML = `
+        ${this.renderBackgroundImage()}
+        ${this.renderTitleBar()}
+        <div class="main-container">
+          ${this.renderSidebar()}
+          <div class="content">
+            ${this.renderToolboxProcessManagerSection()}
+          </div>
+        </div>
+      `;
+    } else if (this.currentPage === 'toolbox_system_repair') {
+      app.innerHTML = `
+        ${this.renderBackgroundImage()}
+        ${this.renderTitleBar()}
+        <div class="main-container">
+          ${this.renderSidebar()}
+          <div class="content">
+            ${this.renderSystemRepairSection()}
+          </div>
+        </div>
+      `;
+    } else if (this.currentPage === 'edr') {
+      // EDR 模式入口已从侧边栏和设置中隐藏，若仍通过旧状态进入则重定向到首页
+      this.currentPage = 'home';
+      this.render();
+      return;
+    } else if (this.currentPage === 'chat') {
+      app.innerHTML = `
+        ${this.renderBackgroundImage()}
+        ${this.renderTitleBar()}
+        <div class="main-container">
+          ${this.renderSidebar()}
+          <div class="content">
+            ${this.renderChatPage()}
+          </div>
+        </div>
+      `;
+    } else {
+      app.innerHTML = `
+        ${this.renderBackgroundImage()}
+        ${this.renderTitleBar()}
+        <div class="main-container">
+          ${this.renderSidebar()}
+          <div class="content">
+            <div class="scroll-container">
+              ${this.renderHomeSection()}
+              ${this.renderScanSection()}
+              ${this.renderNotificationsSection()}
+              ${this.renderProcessSection()}
+              ${this.edrModeManager?.isEnabled() ? this.renderEdrSection() : ''}
+              ${this.renderSettingsSection()}
+            </div>
+          </div>
+        </div>
+        ${this.renderIconSettingsModal()}
+      `;
+    }
+
+    this.attachEventListeners();
+    
+    // 初始化自定义下拉框
+    setTimeout(() => {
+      this.initCustomSelect('scan-sensitivity-custom', 'scan-sensitivity-select');
+      this.initCustomSelect('theme-mode-custom', 'theme-mode-select');
+      this.initCustomSelect('theme-custom', 'theme-select');
+      this.initCustomSelect('language-custom', 'language-select');
+      this.initCustomSelect('backdrop-custom', 'backdrop-select');
+      this.initCustomSelect('bg-mode-custom', 'bg-mode-select');
+    }, 0);
+    
+    // 异步加载背景图片
+    this.loadBackgroundImageAsync();
+    
+    // 应用一滑到底设置
+    this.applyContinuousScrollSetting();
+    
+    if (!this.isScanning && this.scanProgress < 100) {
+      this.observeSections();
+    }
+    
+    // 渲染完成后更新活动日志标题
+    if (this.currentPage !== 'quarantine' && !this.isScanning) {
+      this.updateActivityLogHeader();
+    }
+    
+    // 应用侧边栏阴影样式
+    this.sidebarShadowManager.applyStyle();
+    
+    // 重新渲染后更新通知角标
+    this.updateNotificationBadge();
+  }
+
+  private renderTitleBar(): string {
+    // 始终显示应用标题，不再显示受限模式
+    const titleText = this.t('appTitle');
+    return `
+      <div class="titlebar" data-tauri-drag-region>
+        <div class="titlebar-left">
+          <div class="titlebar-icon">
+            <img src="icons/icon.png" alt="XIGUA Security" style="width: 20px; height: 20px;">
+          </div>
+          <div class="titlebar-brand">
+            <span class="titlebar-text">${titleText}</span>
+          </div>
+        </div>
+        <div class="titlebar-controls">
+          <button class="titlebar-btn" id="notification-btn" title="${this.t('notificationCenter')}" style="position: relative;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+            <span id="notification-badge" style="position: absolute; top: 2px; right: 2px; width: 8px; height: 8px; border-radius: 50%; background: #d13438; display: none;"></span>
+          </button>
+          <div class="titlebar-menu-container">
+            ${this.cloudHashConnectionStatus === 'disconnected' ? `<div class="cloud-connection-warning" title="云端哈希连接失败"><svg class="cloud-warning-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="7"/><path d="M8 5v4"/><circle cx="8" cy="11.5" r="0.5" fill="currentColor" stroke="none"/></svg>云端哈希连接失败！</div>` : ''}
+            <button class="titlebar-btn" id="menu-btn" title="菜单">
+              ${Icons.menu}
+            </button>
+            <div class="titlebar-menu-dropdown" id="menu-dropdown">
+              <div class="menu-dropdown-item" id="menu-chat">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 16px; height: 16px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                <span>云平台</span>
+              </div>
+              <div class="menu-dropdown-item" id="menu-engine-overview">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 16px; height: 16px;"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+                <span>引擎概览</span>
+              </div>
+              <div class="menu-dropdown-item" id="menu-demo-mode">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 16px; height: 16px;"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><circle cx="12" cy="8" r="0.5" fill="currentColor" stroke="none"/></svg>
+                <span>演示模式</span>
+              </div>
+            </div>
+          </div>
+          <button class="titlebar-btn" id="minimize-btn" title="${this.t('minimize')}">
+            ${Icons.minimize}
+          </button>
+          <button class="titlebar-btn close" id="close-btn" title="${this.t('close')}">
+            ${Icons.close}
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  private renderSidebar(): string {
+    const items = [
+      { id: 'home', icon: Icons.home, label: this.t('navOverview') },
+      { id: 'scan', icon: Icons.search, label: this.t('navVirusScan') },
+      { id: 'notifications', icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>`, label: this.t('notificationCenter') },
+      { id: 'process', icon: Icons.grid, label: this.t('navToolbox') },
+    ];
+
+    return `
+      <div class="sidebar${this.sidebarCollapsed ? ' collapsed' : ''}">
+        <div class="sidebar-top">
+          ${items.map(item => `
+            <div class="sidebar-item ${(this.currentPage === item.id || this.currentPage.startsWith(item.id + '_')) ? 'active' : ''}" 
+                 data-page="${item.id}" 
+                 title="${item.label}">
+              ${item.icon}
+              <span class="sidebar-label">${item.label}</span>
+            </div>
+          `).join('')}
+        </div>
+        <div class="sidebar-bottom">
+          <div class="sidebar-item ${this.currentPage === 'settings' ? 'active' : ''}" 
+               data-page="settings" 
+               title="${this.t('settings')}">
+            ${Icons.settings}
+            <span class="sidebar-label">${this.t('settings')}</span>
+          </div>
+          <div class="sidebar-item sidebar-collapse-btn" id="sidebar-collapse-btn" title="${this.sidebarCollapsed ? this.t('expandSidebar') : this.t('collapseSidebar')}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transition: transform 0.3s ease;${this.sidebarCollapsed ? ' transform: rotate(180deg);' : ''}"><path d="m15 18-6-6 6-6"/></svg>
+            <span class="sidebar-label">${this.sidebarCollapsed ? '' : this.t('collapseSidebar')}</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // 自定义下拉框渲染（替代原生 select，支持样式和动画）
+  private renderCustomSelect(options: Array<{value: string, label: string}>, selectedValue: string, id: string, width?: string): string {
+    const selected = options.find(o => o.value === selectedValue);
+    return `
+      <div class="custom-select" id="${id}" style="${width ? `width:${width};` : ''}">
+        <div class="custom-select-trigger">
+          <span class="custom-select-value">${selected?.label || ''}</span>
+          <svg class="arrow" viewBox="0 0 16 16" fill="none">
+            <path d="M4 6L8 10L12 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <div class="custom-select-dropdown">
+          ${options.map(opt => `
+            <div class="custom-select-option${opt.value === selectedValue ? ' selected' : ''}" data-value="${opt.value}">
+              <span>${opt.label}</span>
+              <svg class="check" viewBox="0 0 16 16" fill="none">
+                <path d="M3 8L6.5 11.5L13 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  // 初始化自定义下拉框
+  private initCustomSelect(customId: string, nativeSelectId: string): void {
+    const container = document.getElementById(customId);
+    if (!container) return;
+    const trigger = container.querySelector('.custom-select-trigger') as HTMLElement;
+    const dropdown = container.querySelector('.custom-select-dropdown') as HTMLElement;
+    if (!trigger || !dropdown) return;
+    // 避免重复初始化
+    if (container.getAttribute('data-initialized')) return;
+    container.setAttribute('data-initialized', 'true');
+
+    const closeAllDropdowns = () => {
+      document.querySelectorAll('.custom-select-dropdown.open').forEach(el => {
+        el.classList.remove('open');
+        el.closest('.custom-select')?.querySelector('.custom-select-trigger')?.classList.remove('open');
+      });
+    };
+
+    const toggleDropdown = (e: Event) => {
+      e.stopPropagation();
+      const isOpen = dropdown.classList.contains('open');
+      closeAllDropdowns();
+      if (!isOpen) {
+        dropdown.classList.add('open');
+        trigger.classList.add('open');
+      }
+    };
+
+    // 点击触发器切换下拉框
+    trigger.addEventListener('click', toggleDropdown);
+
+    // 点击选项
+    dropdown.querySelectorAll('.custom-select-option').forEach(opt => {
+      opt.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const value = (opt as HTMLElement).dataset.value || '';
+        const label = (opt as HTMLElement).querySelector('span')?.textContent || '';
+
+        // 更新选中状态
+        dropdown.querySelectorAll('.custom-select-option').forEach(o => o.classList.remove('selected'));
+        opt.classList.add('selected');
+
+        // 更新触发器文本
+        const valueEl = container.querySelector('.custom-select-value');
+        if (valueEl) valueEl.textContent = label;
+
+        // 同步原生 select
+        const nativeSelect = document.getElementById(nativeSelectId) as HTMLSelectElement;
+        if (nativeSelect) {
+          nativeSelect.value = value;
+          nativeSelect.dispatchEvent(new Event('change'));
+        }
+
+        closeAllDropdowns();
+      });
+    });
+
+    // 点击页面其他区域关闭下拉框（仅全局绑定一次）
+    if (!(window as any).__customSelectListenerAttached) {
+      (window as any).__customSelectListenerAttached = true;
+      document.addEventListener('click', () => {
+        setTimeout(() => {
+          document.querySelectorAll('.custom-select-dropdown.open').forEach(el => {
+            el.classList.remove('open');
+            el.closest('.custom-select')?.querySelector('.custom-select-trigger')?.classList.remove('open');
+          });
+        }, 0);
+      });
+    }
+  }
+
+  private renderHomeSection(): string {
+    // 初始渲染时直接同步计算状态，避免整页渲染后还要异步刷新导致闪烁
+    const defaultStatus = this.getDeviceStatusSync();
+
+    const lastScanTime = this.lastScanInfo?.time || '--';
+    const protectedDays = Math.max(1, Math.floor((Date.now() - this.appStartTime) / (1000 * 60 * 60 * 24)));
+
+    const rtDriverActive = this.driverProtectionManager.isEnabled();
+    const rtBasicActive = this.basicProtectionManager.isEnabled();
+    const rtFileActive = this.fileProtectionManager.isEnabled();
+    const rtSilentActive = this.silentModeManager.isEnabled();
+
+    // 根据防护状态决定 Hero 卡片渐变状态（静默模式不纳入安全状态判定）
+    const heroStatusClass = defaultStatus.color === 'var(--success)'
+      ? 'status-safe'
+      : defaultStatus.color === 'var(--error)'
+        ? 'status-danger'
+        : 'status-warning';
+
+    const arrowDownIcon = `<svg class="hero-scan-arrow" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>`;
+    const checkIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>`;
+
+    return `
+      <section class="page-section home-section" id="section-home">
+        <div class="home-grid">
+          <!-- Hero 卡片 -->
+          <div class="hero-card ${heroStatusClass}" id="hero-card">
+            <div class="hero-bg"></div>
+            <div class="hero-content">
+              <h2 class="hero-title" id="home-status-title">${this.isMsStore ? this.t('scannerReady') : (defaultStatus.color === 'var(--success)' ? `${this.t('protectedComputer')} ${protectedDays} ${this.t('days')}` : defaultStatus.title)}</h2>
+              <p class="hero-subtitle" id="home-status-subtitle">${defaultStatus.subtitle}</p>
+              <div class="hero-actions">
+                <div class="hero-scan-dropdown" id="hero-scan-dropdown">
+                  <button class="btn btn-primary hero-scan-btn" id="hero-scan-trigger">
+                    <span class="hero-scan-label">${this.t('quickScan')}</span>
+                    ${arrowDownIcon}
+                  </button>
+                  <div class="hero-scan-menu" id="hero-scan-menu">
+                    <div class="hero-scan-option" data-scan="quick">${this.t('quickScan')}</div>
+                    <div class="hero-scan-option" data-scan="custom">${this.t('customScan')}</div>
+                    <div class="hero-scan-option" data-scan="full">${this.t('fullScan')}</div>
+                  </div>
+                </div>
+                <div class="hero-meta">
+                  <span class="hero-last-scan">${this.t('lastScan')}：${lastScanTime}</span>
+                  <a href="#" class="hero-link" id="open-scan-history-link">${this.t('scanHistory')}</a>
+                </div>
+              </div>
+            </div>
+            <div class="hero-shield-placeholder" id="hero-shield-placeholder"></div>
+          </div>
+
+          ${this.isMsStore ? '' : `
+          <!-- 实时防护面板 -->
+          <div class="realtime-panel card">
+            <div class="realtime-header">
+              <h3 class="realtime-title">${this.t('realtimeProtection')}</h3>
+            </div>
+            <div class="realtime-list">
+              <div class="realtime-item">
+                <div class="realtime-info">
+                  <div class="realtime-name">${this.t('driverProtection')}</div>
+                  <div class="realtime-desc">${this.t('driverProtectionDesc')}</div>
+                </div>
+                <div class="toggle ${rtDriverActive ? 'active' : ''}" id="rt-driver-toggle" data-rt="driver"><div class="toggle-thumb"></div></div>
+              </div>
+              <div class="realtime-item">
+                <div class="realtime-info">
+                  <div class="realtime-name">${this.t('basicProtection')}</div>
+                  <div class="realtime-desc">${this.t('basicProtectionDesc')}</div>
+                </div>
+                <div class="toggle ${rtBasicActive ? 'active' : ''}" id="rt-basic-toggle" data-rt="basic"><div class="toggle-thumb"></div></div>
+              </div>
+              <div class="realtime-item">
+                <div class="realtime-info">
+                  <div class="realtime-name">${this.t('fileProtection')}</div>
+                  <div class="realtime-desc">${this.t('fileProtectionDesc')}</div>
+                </div>
+                <div class="toggle ${rtFileActive ? 'active' : ''}" id="rt-file-toggle" data-rt="file"><div class="toggle-thumb"></div></div>
+              </div>
+              <div class="realtime-item">
+                <div class="realtime-info">
+                  <div class="realtime-name">${this.t('silentMode')}</div>
+                  <div class="realtime-desc">${this.t('silentModeDesc')}</div>
+                </div>
+                <div class="toggle ${rtSilentActive ? 'active' : ''}" id="rt-silent-toggle" data-rt="silent"><div class="toggle-thumb"></div></div>
+              </div>
+            </div>
+          </div>
+          `}
+
+          <!-- 功能卡片 -->
+          <div class="feature-cards">
+            <div class="feature-card" data-feature="scan">
+              <div class="feature-icon feature-icon-blue">${Icons.scan}</div>
+              <div class="feature-info">
+                <div class="feature-title">${this.t('featureVirusScan')}</div>
+                <div class="feature-desc">${this.t('featureVirusScanDesc')}</div>
+              </div>
+              <div class="feature-arrow">${Icons.arrowRight}</div>
+            </div>
+            <div class="feature-card" data-feature="quarantine">
+              <div class="feature-icon feature-icon-green">${Icons.shield}</div>
+              <div class="feature-info">
+                <div class="feature-title">${this.t('featureQuarantine')}</div>
+                <div class="feature-desc">${this.t('featureQuarantineDesc')}</div>
+              </div>
+              <div class="feature-arrow">${Icons.arrowRight}</div>
+            </div>
+            <div class="feature-card" data-feature="optimize">
+              <div class="feature-icon feature-icon-orange">${Icons.cpu}</div>
+              <div class="feature-info">
+                <div class="feature-title">${this.t('featureSystemOptimize')}</div>
+                <div class="feature-desc">${this.t('featureSystemOptimizeDesc')}</div>
+              </div>
+              <div class="feature-arrow">${Icons.arrowRight}</div>
+            </div>
+            <div class="feature-card" data-feature="privacy">
+              <div class="feature-icon feature-icon-purple">${Icons.eye}</div>
+              <div class="feature-info">
+                <div class="feature-title">${this.t('featurePrivacy')}</div>
+                <div class="feature-desc">${this.t('featurePrivacyDesc')}</div>
+              </div>
+              <div class="feature-arrow">${Icons.arrowRight}</div>
+            </div>
+          </div>
+
+          <!-- 统计行 -->
+          <div class="stats-row card">
+            ${this.isMsStore ? '' : `
+            <div class="stat-item">
+              <span class="stat-num" id="stat-checked-count">${this.driverProcessCheckCount.toLocaleString()}</span>
+              <span class="stat-label">${this.t('checkedFiles')}</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-num" id="stat-intercept-count">${this.driverInterceptCount}</span>
+              <span class="stat-label">${this.t('interceptedActions')}</span>
+            </div>
+            `}
+            <div class="stat-item">
+              <span class="stat-num" id="stat-protected-days">${this.isMsStore ? this.t('scannerReady') : '--'}</span>
+              <span class="stat-label">${this.isMsStore ? '' : this.t('protectedDays')}</span>
+            </div>
+            ${this.isMsStore ? '' : `
+            <div class="stat-protection">
+              <span class="stat-protection-label">${this.t('realtimeProtection')}</span>
+              <div class="toggle ${this.driverProtectionManager.isEnabled() ? 'active' : ''}" id="stat-protection-toggle">
+                <div class="toggle-thumb"></div>
+              </div>
+            </div>
+            `}
+          </div>
+
+          <!-- 最近日志 -->
+          <div class="logs-panel card">
+            <div class="logs-header">
+              <h3 class="logs-title">${this.t('recentLogs')}</h3>
+              <a href="#" class="logs-view-all" id="open-security-log-btn">${this.t('viewAll')}</a>
+            </div>
+            <div class="logs-list thin-scrollbar" id="home-logs-list">
+              ${this.logs.length > 0
+                ? this.logs.slice(0, 6).map(log => `<div class="log-entry">${log}</div>`).join('')
+                : `<div class="log-entry">[${new Date().toLocaleString()}] XIGUASecurity Start</div>`}
+            </div>
+          </div>
+
+          <!-- 底部状态栏 -->
+          <div class="bottom-status-bar">
+            <div class="bottom-status-left">
+              <span>${this.t('virusDatabase')} ${this.rulesManager.getVersion()}</span>
+              <span class="bottom-status-divider">|</span>
+              <span>${this.t('lastUpdate')} ${this.rulesManager.getUpdatedAt()}</span>
+              <a href="#" class="bottom-status-link" id="check-update-link">${this.t('checkUpdate')}</a>
+            </div>
+            <div class="bottom-status-right">
+              <span>${this.t('engineStatus')}</span>
+              <span class="engine-status-value">${checkIcon} ${this.t('normal')}</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  // 异步更新主页状态
+  private async updateHomeStatus(): Promise<void> {
+    const status = this.getDeviceStatusSync();
+    const protectedDays = Math.max(1, Math.floor((Date.now() - this.appStartTime) / (1000 * 60 * 60 * 24)));
+
+    const homeStatusTitle = document.getElementById('home-status-title');
+    const homeStatusSubtitle = document.getElementById('home-status-subtitle');
+    if (homeStatusTitle) {
+      if (this.isMsStore) {
+        homeStatusTitle.textContent = this.t('scannerReady');
+      } else if (status.color === 'var(--success)') {
+        homeStatusTitle.textContent = `${this.t('protectedComputer')} ${protectedDays} ${this.t('days')}`;
+      } else {
+        homeStatusTitle.textContent = status.title;
+      }
+    }
+    if (homeStatusSubtitle) {
+      homeStatusSubtitle.textContent = status.subtitle;
+    }
+
+    // 同步更新统计卡片上的保护天数（MS Store 版显示"扫描器就绪"）
+    const statProtectedDays = document.getElementById('stat-protected-days');
+    if (statProtectedDays) {
+      if (this.isMsStore) {
+        statProtectedDays.textContent = this.t('scannerReady');
+      } else {
+        statProtectedDays.textContent = `${protectedDays} ${this.t('days')}`;
+      }
+    }
+
+    // 根据实时防护状态更新 Hero 卡片渐变光照效果，与状态文本保持一致
+    // 标题颜色由 CSS 类统一控制，避免内联 style.color 不生效的问题
+    const heroCard = document.getElementById('hero-card');
+    if (heroCard) {
+      heroCard.classList.remove('status-safe', 'status-warning', 'status-danger');
+      if (status.color === 'var(--success)') {
+        heroCard.classList.add('status-safe');
+      } else if (status.color === 'var(--error)') {
+        heroCard.classList.add('status-danger');
+      } else {
+        heroCard.classList.add('status-warning');
+      }
+    }
+
+    // 同步更新实时防护面板开关
+    this.updateRealtimeProtectionToggles();
+    if (!this.isMsStore) {
+      // 同步更新统计卡片上的防护开关状态
+      this.updateStatsProtectionToggle();
+      // 同步更新设置页面的防护开关状态
+      this.updateDriverProtectionToggle();
+    }
+
+    // 同时用异步方式校验一次真实驱动状态并刷新缓存，避免缓存长期偏离实际
+    if (!this.isMsStore) {
+      this.driverProtectionManager.isProcessRunning().then(running => {
+        const currentStatus = this.getDeviceStatusSync();
+        // 只有状态发生变化时才再次刷新主页
+        if ((running !== this.driverProtectionManager.isProcessRunningSync()) ||
+            (currentStatus.color !== status.color)) {
+          this.refreshHomeStatus();
+        }
+      }).catch(() => {});
+    }
+  }
+
+  // 轻量同步刷新主页状态（不触发异步 IPC）
+  private refreshHomeStatus(): void {
+    const status = this.getDeviceStatusSync();
+    const protectedDays = Math.max(1, Math.floor((Date.now() - this.appStartTime) / (1000 * 60 * 60 * 24)));
+
+    const homeStatusTitle = document.getElementById('home-status-title');
+    const homeStatusSubtitle = document.getElementById('home-status-subtitle');
+    if (homeStatusTitle) {
+      if (this.isMsStore) {
+        homeStatusTitle.textContent = this.t('scannerReady');
+      } else if (status.color === 'var(--success)') {
+        homeStatusTitle.textContent = `${this.t('protectedComputer')} ${protectedDays} ${this.t('days')}`;
+      } else {
+        homeStatusTitle.textContent = status.title;
+      }
+    }
+    if (homeStatusSubtitle) {
+      homeStatusSubtitle.textContent = status.subtitle;
+    }
+
+    const heroCard = document.getElementById('hero-card');
+    if (heroCard) {
+      heroCard.classList.remove('status-safe', 'status-warning', 'status-danger');
+      if (status.color === 'var(--success)') {
+        heroCard.classList.add('status-safe');
+      } else if (status.color === 'var(--error)') {
+        heroCard.classList.add('status-danger');
+      } else {
+        heroCard.classList.add('status-warning');
+      }
+    }
+  }
+
+  // 更新实时防护面板开关状态
+  private updateRealtimeProtectionToggles(): void {
+    const driverToggle = document.getElementById('rt-driver-toggle');
+    const basicToggle = document.getElementById('rt-basic-toggle');
+    const fileToggle = document.getElementById('rt-file-toggle');
+    const silentToggle = document.getElementById('rt-silent-toggle');
+
+    const setToggle = (el: HTMLElement | null, active: boolean) => {
+      if (!el) return;
+      if (active) el.classList.add('active');
+      else el.classList.remove('active');
+    };
+
+    setToggle(driverToggle, this.driverProtectionManager.isEnabled());
+    setToggle(basicToggle, this.basicProtectionManager.isEnabled());
+    setToggle(fileToggle, this.fileProtectionManager.isEnabled());
+    setToggle(silentToggle, this.silentModeManager.isEnabled());
+  }
+
+  // 异步加载图标设置模态框中的预览图标
+  private async loadIconPreviewsAsync(): Promise<void> {
+    try {
+      const previewImages = document.querySelectorAll('img[data-icon-preview]');
+      for (const img of previewImages) {
+        const iconPath = img.getAttribute('data-icon-path');
+        if (iconPath) {
+          const iconUrl = await this.animeStyleManager.getIconUrl(iconPath);
+          (img as HTMLImageElement).src = iconUrl;
+        }
+      }
+    } catch (e) {
+      console.error('Failed to load icon previews:', e);
+    }
+  }
+
+  // 局部更新规则库显示
+  private updateRulesDisplay(): void {
+    const rulesInfo = document.getElementById('rules-info');
+    if (rulesInfo) {
+      rulesInfo.innerHTML = `
+        <div style="font-size: 13px; color: var(--text-secondary);">
+          <div>版本: ${this.rulesManager.getVersion()}</div>
+          <div>规则数: ${this.rulesManager.getHashCount()}</div>
+          <div>更新时间: ${this.rulesManager.getUpdatedAt()}</div>
+        </div>
+      `;
+    }
+  }
+
+  // 局部更新防护状态显示（Hero 标题、侧边栏状态、各开关）
+  private updateProtectionStatus(): void {
+    // 使用完整的设备状态重新渲染 Hero 区域，确保威胁、其他杀软等状态同步
+    this.updateHomeStatus().catch(e => console.error('Failed to update home status:', e));
+    // 同步各防护开关视觉状态
+    this.updateRealtimeProtectionToggles();
+    this.updateStatsProtectionToggle();
+    this.updateDriverProtectionToggle();
+  }
+
+  // 局部更新驱动防护开关状态
+  private updateDriverProtectionToggle(): void {
+    const isEnabled = this.driverProtectionManager.isEnabled();
+
+    // 更新主页开关
+    const toggle = document.getElementById('driver-protection-toggle') as HTMLInputElement;
+    if (toggle) {
+      toggle.checked = isEnabled;
+    }
+
+    // 更新设置页面的驱动防护复选框
+    const settingCheckbox = document.getElementById('driver-protection-checkbox') as HTMLInputElement;
+    if (settingCheckbox) {
+      settingCheckbox.checked = isEnabled;
+    }
+
+    // 同时更新防护类型选项的禁用状态（勒索软件防护改为 R3 级，不依赖驱动）
+    const protectionCheckboxes = [
+      'boot-protection-checkbox',
+      'registry-protection-checkbox',
+      'process-protection-checkbox',
+      'memory-protection-checkbox',
+      'new-intercept-window-checkbox'
+    ];
+    protectionCheckboxes.forEach(id => {
+      const cb = document.getElementById(id) as HTMLInputElement;
+      if (cb) {
+        cb.disabled = !isEnabled;
+      }
+    });
+    // 勒索软件防护为 R3 级，保持其独立状态
+    const ransomwareCb = document.getElementById('ransomware-protection-checkbox') as HTMLInputElement;
+    if (ransomwareCb) {
+      ransomwareCb.disabled = false;
+    }
+  }
+
+  // 更新主页统计卡片上的防护开关状态
+  private updateStatsProtectionToggle(): void {
+    const toggle = document.getElementById('stat-protection-toggle');
+    if (toggle) {
+      const isEnabled = this.driverProtectionManager.isEnabled();
+      if (isEnabled) {
+        toggle.classList.add('active');
+      } else {
+        toggle.classList.remove('active');
+      }
+    }
+  }
+
+  // 显示驱动启动提示窗口 — 已移除（驱动防护不再弹窗）
+  private showDriverLaunchHint(): void {
+    // 空实现
+  }
+
+  // 显示勒索软件防护开启确认对话框 (Fluent Design 风格)
+  private showRansomwareProtectionConfirm(fileCount: number, totalSize: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      // 创建确认对话框
+      const confirmModal = document.createElement('div');
+      confirmModal.id = 'ransomware-confirm-modal';
+      confirmModal.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.25);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 10001;
+        backdrop-filter: blur(4px);
+      `;
+
+      confirmModal.innerHTML = `
+        <div style="
+          background: #FFFFFF;
+          border-radius: 8px;
+          max-width: 400px;
+          width: 90%;
+          box-shadow: 0 32px 64px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.05);
+          animation: contentDialogShow 0.2s cubic-bezier(0.0, 0.0, 0.2, 1);
+          font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
+          overflow: hidden;
+        ">
+          <!-- 图标和标题区域 -->
+          <div style="
+            display: flex;
+            align-items: flex-start;
+            gap: 16px;
+            padding: 24px 24px 16px 24px;
+          ">
+            <!-- 警告图标 (Fluent InfoBar 风格) -->
+            <div style="
+              width: 20px;
+              height: 20px;
+              flex-shrink: 0;
+              margin-top: 2px;
+            ">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M10 2C14.4183 2 18 5.58172 18 10C18 14.4183 14.4183 18 10 18C5.58172 18 2 14.4183 2 10C2 5.58172 5.58172 2 10 2ZM10 3C6.13401 3 3 6.13401 3 10C3 13.866 6.13401 17 10 17C13.866 17 17 13.866 17 10C17 6.13401 13.866 3 10 3ZM10 13.5C10.4142 13.5 10.75 13.8358 10.75 14.25C10.75 14.6642 10.4142 15 10 15C9.58579 15 9.25 14.6642 9.25 14.25C9.25 13.8358 9.58579 13.5 10 13.5ZM10 5.5C10.2761 5.5 10.5 5.72386 10.5 6V11C10.5 11.2761 10.2761 11.5 10 11.5C9.72386 11.5 9.5 11.2761 9.5 11V6C9.5 5.72386 9.72386 5.5 10 5.5Z" fill="#9C5F00"/>
+              </svg>
+            </div>
+
+            <div style="flex: 1;">
+              <!-- 标题 -->
+              <div style="
+                font-size: 18px;
+                font-weight: 600;
+                color: #1C1C1C;
+                line-height: 1.4;
+                margin-bottom: 8px;
+              ">${this.t('ransomwareProtectionConfirmTitle')}</div>
+
+              <!-- 描述 -->
+              <div style="
+                font-size: 14px;
+                color: #5F5F5F;
+                line-height: 1.5;
+              ">${this.t('ransomwareProtectionConfirmDesc').replace('{count}', String(fileCount)).replace('{size}', totalSize)}</div>
+            </div>
+          </div>
+
+          <!-- 按钮区域 (Fluent Button 风格 + 灰色背景) -->
+          <div style="
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+            padding: 16px 24px 24px 24px;
+            background: #F3F3F3;
+            border-top: 1px solid rgba(0, 0, 0, 0.05);
+          ">
+            <button id="ransomware-confirm-cancel" style="
+              padding: 6px 16px;
+              border: 1px solid rgba(0, 0, 0, 0.1);
+              background: #FFFFFF;
+              border-radius: 4px;
+              font-size: 14px;
+              font-weight: 400;
+              color: #1C1C1C;
+              cursor: pointer;
+              font-family: inherit;
+              transition: all 0.15s ease;
+              min-width: 80px;
+              box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+            " onmouseover="this.style.background='#F9F9F9'; this.style.borderColor='rgba(0, 0, 0, 0.15)'" 
+               onmouseout="this.style.background='#FFFFFF'; this.style.borderColor='rgba(0, 0, 0, 0.1)'"
+               onmousedown="this.style.background='#F0F0F0'"
+               onmouseup="this.style.background='#F9F9F9'">${this.t('ransomwareProtectionCancelBtn')}</button>
+            <button id="ransomware-confirm-ok" style="
+              padding: 6px 16px;
+              border: none;
+              background: #005FB8;
+              border-radius: 4px;
+              font-size: 14px;
+              font-weight: 400;
+              color: white;
+              cursor: pointer;
+              font-family: inherit;
+              transition: all 0.15s ease;
+              min-width: 80px;
+              box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+            " onmouseover="this.style.background='#0066C7'" 
+               onmouseout="this.style.background='#005FB8'"
+               onmousedown="this.style.background='#004E92'"
+               onmouseup="this.style.background='#0066C7'">${this.t('ransomwareProtectionConfirmBtn')}</button>
+          </div>
+        </div>
+        <style>
+          @keyframes contentDialogShow {
+            from {
+              opacity: 0;
+              transform: scale(0.95) translateY(-10px);
+            }
+            to {
+              opacity: 1;
+              transform: scale(1) translateY(0);
+            }
+          }
+        </style>
+      `;
+
+      document.body.appendChild(confirmModal);
+
+      // 绑定事件
+      const cancelBtn = document.getElementById('ransomware-confirm-cancel');
+      const okBtn = document.getElementById('ransomware-confirm-ok');
+
+      cancelBtn?.addEventListener('click', () => {
+        confirmModal.remove();
+        resolve(false);
+      });
+
+      okBtn?.addEventListener('click', () => {
+        confirmModal.remove();
+        resolve(true);
+      });
+
+      // 点击背景关闭
+      confirmModal.addEventListener('click', (e) => {
+        if (e.target === confirmModal) {
+          confirmModal.remove();
+          resolve(false);
+        }
+      });
+    });
+  }
+
+  // 显示/更新勒索软件备份进度弹窗
+  private updateRansomwareBackupProgress(progress: RansomwareBackupProgress) {
+    let modal = document.getElementById('ransomware-backup-progress-modal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'ransomware-backup-progress-modal';
+      modal.style.cssText = `
+        position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+        z-index: 10002; display: flex; align-items: center; justify-content: center;
+        font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
+        background: rgba(0,0,0,0.25); backdrop-filter: blur(4px);
+      `;
+      document.body.appendChild(modal);
+    }
+
+    const totalSize = this.formatBytes(progress.total_size_bytes);
+    const percent = progress.total > 0 ? Math.round((progress.backed_up / progress.total) * 100) : 0;
+    const currentFile = progress.current_file ? progress.current_file.split('\\').pop() || progress.current_file : '';
+
+    modal.innerHTML = `
+      <div style="background:var(--bg-primary);border-radius:var(--radius-md);max-width:480px;width:90%;box-shadow:0 32px 64px rgba(0,0,0,0.15),0 0 0 1px var(--border-color);overflow:hidden;padding:24px;">
+        <div style="font-size:18px;font-weight:600;color:var(--text-primary);margin-bottom:8px;">${this.t('ransomwareBackupProgressTitle')}</div>
+        <div style="font-size:14px;color:var(--text-secondary);line-height:1.5;margin-bottom:16px;">
+          ${progress.completed
+            ? this.t('ransomwareBackupCompleted').replace('{count}', String(progress.backed_up)).replace('{total}', String(progress.total)).replace('{size}', totalSize)
+            : this.t('ransomwareBackupProgressDesc').replace('{count}', String(progress.backed_up)).replace('{total}', String(progress.total)).replace('{size}', totalSize)}
+        </div>
+        <div style="height:8px;background:var(--bg-secondary);border-radius:4px;overflow:hidden;margin-bottom:8px;">
+          <div style="height:100%;width:${percent}%;background:linear-gradient(90deg, var(--accent-primary), #00d4aa);border-radius:4px;transition:width 0.3s ease;"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text-tertiary);margin-bottom:12px;">
+          <span>${percent}%</span>
+          <span>${progress.backed_up} / ${progress.total}</span>
+        </div>
+        <div style="font-size:12px;color:var(--text-tertiary);word-break:break-all;min-height:18px;">
+          ${progress.completed ? '' : this.escapeHtml(currentFile)}
+        </div>
+        ${progress.completed ? `
+          <div style="display:flex;justify-content:flex-end;margin-top:16px;">
+            <button id="ransomware-backup-progress-ok" class="btn-fluent-primary" style="padding:6px 16px;font-size:14px;">确定</button>
+          </div>
+        ` : ''}
+      </div>
+    `;
+
+    if (progress.completed) {
+      document.getElementById('ransomware-backup-progress-ok')?.addEventListener('click', () => {
+        modal?.remove();
+      });
+      // 5 秒后自动关闭
+      setTimeout(() => modal?.remove(), 5000);
+    }
+  }
+
+  private formatBytes(bytes: number): string {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  }
+
+  // 关闭云端哈希库确认弹窗
+  private showCloudHashDisableDialog(): Promise<boolean> {
+    return new Promise((resolve) => {
+      const confirmModal = document.createElement('div');
+      confirmModal.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.25);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 10001;
+        backdrop-filter: blur(4px);
+      `;
+
+      confirmModal.innerHTML = `
+        <div style="
+          background: #FFFFFF;
+          border-radius: 8px;
+          max-width: 480px;
+          width: 90%;
+          box-shadow: 0 32px 64px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.05);
+          animation: contentDialogShow 0.2s cubic-bezier(0.0, 0.0, 0.2, 1);
+          font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
+          overflow: hidden;
+        ">
+          <div style="display: flex; align-items: flex-start; gap: 16px; padding: 24px 24px 16px 24px;">
+            <div style="width: 20px; height: 20px; flex-shrink: 0; margin-top: 2px;">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M10 2C14.4183 2 18 5.58172 18 10C18 14.4183 14.4183 18 10 18C5.58172 18 2 14.4183 2 10C2 5.58172 5.58172 2 10 2ZM10 3C6.13401 3 3 6.13401 3 10C3 13.866 6.13401 17 10 17C13.866 17 17 13.866 17 10C17 6.13401 13.866 3 10 3ZM10 13.5C10.4142 13.5 10.75 13.8358 10.75 14.25C10.75 14.6642 10.4142 15 10 15C9.58579 15 9.25 14.6642 9.25 14.25C9.25 13.8358 9.58579 13.5 10 13.5ZM10 5.5C10.2761 5.5 10.5 5.72386 10.5 6V11C10.5 11.2761 10.2761 11.5 10 11.5C9.72386 11.5 9.5 11.2761 9.5 11V6C9.5 5.72386 9.72386 5.5 10 5.5Z" fill="#9C5F00"/>
+              </svg>
+            </div>
+            <div style="flex: 1;">
+              <div style="font-size: 18px; font-weight: 600; color: #1C1C1C; line-height: 1.4; margin-bottom: 8px;">关闭云端哈希查询</div>
+              <div style="font-size: 14px; color: #5F5F5F; line-height: 1.6;">
+                <p style="margin: 0 0 8px 0;">关闭后，扫描时将不会查询云端哈希库进行文件匹配。</p>
+                <p style="margin: 0 0 8px 0; color: #D13438; font-weight: 500;">这可能导致以下问题：</p>
+                <ul style="margin: 0 0 8px 0; padding-left: 18px;">
+                  <li>无法利用云端最新病毒库进行检测</li>
+                  <li>扫描结果精准度可能降低</li>
+                  <li>部分已知恶意文件可能无法识别</li>
+                </ul>
+                <p style="margin: 0;">建议保持开启以获得最佳防护效果。</p>
+              </div>
+            </div>
+          </div>
+          <div style="display: flex; gap: 8px; justify-content: flex-end; padding: 16px 24px 24px 24px; background: #F3F3F3; border-top: 1px solid rgba(0, 0, 0, 0.05);">
+            <button id="cloud-hash-disable-cancel" style="padding: 6px 16px; border: 1px solid rgba(0,0,0,0.1); background: #FFFFFF; border-radius: 4px; font-size: 14px; font-weight: 400; color: #1C1C1C; cursor: pointer; font-family: inherit; transition: all 0.15s ease; min-width: 80px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" onmouseover="this.style.background='#F9F9F9'; this.style.borderColor='rgba(0,0,0,0.15)'" onmouseout="this.style.background='#FFFFFF'; this.style.borderColor='rgba(0,0,0,0.1)'" onmousedown="this.style.background='#F0F0F0'" onmouseup="this.style.background='#F9F9F9'">取消</button>
+            <button id="cloud-hash-disable-ok" style="padding: 6px 16px; border: none; background: #005FB8; border-radius: 4px; font-size: 14px; font-weight: 400; color: white; cursor: pointer; font-family: inherit; transition: all 0.15s ease; min-width: 80px; box-shadow: 0 1px 2px rgba(0,0,0,0.1);" onmouseover="this.style.background='#0066C7'" onmouseout="this.style.background='#005FB8'" onmousedown="this.style.background='#004E92'" onmouseup="this.style.background='#0066C7'">确定关闭</button>
+          </div>
+        </div>
+        <style>
+          @keyframes contentDialogShow {
+            from { opacity: 0; transform: scale(0.95) translateY(-10px); }
+            to { opacity: 1; transform: scale(1) translateY(0); }
+          }
+        </style>
+      `;
+
+      document.body.appendChild(confirmModal);
+
+      document.getElementById('cloud-hash-disable-cancel')?.addEventListener('click', () => {
+        confirmModal.remove();
+        resolve(false);
+      });
+
+      document.getElementById('cloud-hash-disable-ok')?.addEventListener('click', () => {
+        confirmModal.remove();
+        resolve(true);
+      });
+
+      confirmModal.addEventListener('click', (e) => {
+        if (e.target === confirmModal) { confirmModal.remove(); resolve(false); }
+      });
+    });
+  }
+
+  // 启动时检查更新
+  private async checkUpdateAtStartup() {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const result = await invoke<string>('check_update_command');
+      const info = JSON.parse(result);
+      if (info.has_update) {
+        this.addLog('INFO', `发现新版本: v${info.latest_version}`);
+      } else {
+        this.addLog('INFO', `已是最新版本: v${info.current_version}`);
+      }
+    } catch {
+      // 更新检查失败不阻塞启动
+    }
+  }
+
+  // 请求安全桌面确认（关闭防护/退出等高危操作前调用）
+  // 返回 true 表示用户长按确认，false 表示取消
+  private async requestSecureConfirm(title: string, description: string, action: string): Promise<boolean> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const confirmed = await invoke<boolean>('show_secure_confirm_command', {
+        title,
+        description,
+        action
+      });
+      return confirmed;
+    } catch (e) {
+      console.error('[SecureConfirm] Failed to request secure confirm:', e);
+      // 后端不可用时放行，避免功能卡死（防护状态仍由管理器自身控制）
+      return true;
+    }
+  }
+
+  // 检查云端哈希库连接状态（真正查询一个hash，而不是ping）
+  private async checkCloudHashConnection(): Promise<void> {
+    if (!this.cloudHashManager?.isEnabled()) {
+      this.cloudHashConnectionStatus = 'unknown';
+      return;
+    }
+    try {
+      const testHash = '0000000000000000000000000000000000000000000000000000000000000000';
+      // 4 秒超时：断网/云端高延迟时快速失败，不阻塞启动和定期检测
+      const res = await Promise.race([
+        this.cloudHashManager.checkHash(testHash),
+        new Promise<null>(r => setTimeout(() => r(null), 4000)),
+      ]);
+      const newStatus = res ? 'connected' : 'disconnected';
+      const previousStatus = this.cloudHashConnectionStatus;
+      this.cloudHashConnectionStatus = newStatus;
+      console.log('[CloudHash] - Connection status:', newStatus);
+      if (previousStatus !== newStatus && this.startupComplete) {
+        this.render();
+      }
+    } catch (e) {
+      console.error('[CloudHash] Failed to check cloud hash connection:', e);
+      if (this.cloudHashConnectionStatus !== 'disconnected' && this.startupComplete) {
+        this.cloudHashConnectionStatus = 'disconnected';
+        this.render();
+      } else if (!this.startupComplete) {
+        this.cloudHashConnectionStatus = 'disconnected';
+      }
+    }
+  }
+
+  // 扫描引擎初始化失败提示框（Fluent 风格）
+  private showEngineInitFailedDialog(engineType: 'cloud_hash' | 'onnx'): void {
+    // 防止重复弹出
+    if (document.getElementById('engine-init-failed-dialog')) {
+      return;
+    }
+
+    const titles: Record<string, string> = {
+      'cloud_hash': '云端哈希库初始化失败',
+      'onnx': '本地扫描引擎初始化失败'
+    };
+
+    const descriptions: Record<string, string> = {
+      'cloud_hash': '无法连接到云端哈希库服务器，云端黑白名单查询功能暂时不可用。扫描将继续使用本地引擎。',
+      'onnx': '本地扫描引擎模型文件缺失或损坏，无法执行病毒扫描。请检查程序完整性或重新安装软件。'
+    };
+
+    const dialog = document.createElement('div');
+    dialog.id = 'engine-init-failed-dialog';
+    dialog.className = 'engine-init-failed-dialog';
+    dialog.innerHTML = `
+      <div class="engine-init-failed-overlay"></div>
+      <div class="engine-init-failed-content">
+        <!-- 内容区域 -->
+        <div style="padding: 24px;">
+          <div style="
+            display: flex;
+            align-items: flex-start;
+            gap: 16px;
+            margin-bottom: 16px;
+          ">
+            <!-- 错误图标 (Fluent InfoBar 风格) -->
+            <div style="
+              width: 20px;
+              height: 20px;
+              flex-shrink: 0;
+              margin-top: 2px;
+            ">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M10 2C14.4183 2 18 5.58172 18 10C18 14.4183 14.4183 18 10 18C5.58172 18 2 14.4183 2 10C2 5.58172 5.58172 2 10 2ZM10 3C6.13401 3 3 6.13401 3 10C3 13.866 6.13401 17 10 17C13.866 17 17 13.866 17 10C17 6.13401 13.866 3 10 3ZM9.5 13.5C9.5 13.2239 9.72386 13 10 13C10.2761 13 10.5 13.2239 10.5 13.5C10.5 13.7761 10.2761 14 10 14C9.72386 14 9.5 13.7761 9.5 13.5ZM10 5.5C10.2761 5.5 10.5 5.72386 10.5 6V11C10.5 11.2761 10.2761 11.5 10 11.5C9.72386 11.5 9.5 11.2761 9.5 11V6C9.5 5.72386 9.72386 5.5 10 5.5Z" fill="#D13438"/>
+              </svg>
+            </div>
+
+            <div style="flex: 1;">
+              <!-- 标题 -->
+              <div style="
+                font-size: 18px;
+                font-weight: 600;
+                color: #1C1C1C;
+                line-height: 1.4;
+                margin-bottom: 12px;
+              ">${titles[engineType]}</div>
+
+              <!-- 内容区域 -->
+              <div style="
+                font-size: 14px;
+                color: #5F5F5F;
+                line-height: 1.6;
+              ">
+                <p style="margin: 0 0 12px 0;">${descriptions[engineType]}</p>
+                ${engineType === 'onnx' 
+                  ? '<p style="margin: 0; color: #D13438; font-weight: 500;">扫描已暂停，请修复后重新启动扫描。</p>'
+                  : '<p style="margin: 0; color: #D13438; font-weight: 500;">建议检查网络连接或联系技术支持。</p>'
+                }
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 按钮区域 (Fluent Button 风格 + 灰色背景) -->
+        <div style="
+          display: flex;
+          gap: 8px;
+          justify-content: flex-end;
+          padding: 16px 24px 24px 24px;
+          background: #F3F3F3;
+          border-top: 1px solid rgba(0, 0, 0, 0.05);
+        ">
+          <button id="engine-init-failed-ok" style="
+            padding: 6px 16px;
+            border: none;
+            background: #005FB8;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: 400;
+            color: white;
+            cursor: pointer;
+            font-family: inherit;
+            transition: all 0.15s ease;
+            min-width: 80px;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+          " onmouseover="this.style.background='#0066C7'"
+             onmouseout="this.style.background='#005FB8'"
+             onmousedown="this.style.background='#004E92'"
+             onmouseup="this.style.background='#0066C7'">我知道了</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(dialog);
+
+    // 添加样式
+    const style = document.createElement('style');
+    style.textContent = `
+      .engine-init-failed-dialog {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 10000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .engine-init-failed-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.25);
+        backdrop-filter: blur(4px);
+      }
+      .engine-init-failed-content {
+        position: relative;
+        background: #FFFFFF;
+        border-radius: 8px;
+        max-width: 480px;
+        width: 90%;
+        box-shadow: 0 32px 64px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.05);
+        animation: engineInitFailedDialogShow 0.2s cubic-bezier(0.0, 0.0, 0.2, 1);
+        font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
+        overflow: hidden;
+      }
+      @keyframes engineInitFailedDialogShow {
+        from {
+          opacity: 0;
+          transform: scale(0.95) translateY(-10px);
+        }
+        to {
+          opacity: 1;
+          transform: scale(1) translateY(0);
+        }
+      }
+    `;
+    document.head.appendChild(style);
+
+    // 绑定事件
+    document.getElementById('engine-init-failed-ok')?.addEventListener('click', () => {
+      dialog.remove();
+      style.remove();
+    });
+
+    // 点击遮罩关闭
+    dialog.querySelector('.engine-init-failed-overlay')?.addEventListener('click', () => {
+      dialog.remove();
+      style.remove();
+    });
+  }
+
+  // 白名单管理弹窗（进程名白名单，同步到 EDR 驱动白名单）
+  private async showWhitelistDialog(): Promise<void> {
+    const { invoke } = await import('@tauri-apps/api/core');
+
+    // 加载当前白名单进程名
+    let processes: string[] = [];
+    try {
+      processes = await invoke('get_whitelist_processes_command');
+    } catch (e) {
+      console.error('[Whitelist] Failed to load processes:', e);
+    }
+
+    const renderList = (): string => {
+      if (processes.length === 0) {
+        return `<div style="text-align: center; padding: 32px 0; color: #999; font-size: 14px;">${this.t('whitelistEmpty')}</div>`;
+      }
+      return processes.map((p, i) => `
+        <div style="display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid #f0f0f0;">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style="flex-shrink: 0;">
+            <path d="M8 1C4.68629 1 2 3.68629 2 7C2 10.3137 4.68629 13 8 13C11.3137 13 14 10.3137 14 7C14 3.68629 11.3137 1 8 1ZM8 2C10.7614 2 13 4.23858 13 7C13 9.76142 10.7614 12 8 12C5.23858 12 3 9.76142 3 7C3 4.23858 5.23858 2 8 2Z" fill="#666"/>
+          </svg>
+          <span style="flex: 1; font-size: 13px; color: #333; word-break: break-all; line-height: 1.4;">${p.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</span>
+          <button class="whitelist-remove-btn" data-index="${i}" style="padding: 4px 10px; border: 1px solid rgba(0,0,0,0.1); background: #fff; border-radius: 4px; font-size: 12px; color: #D13438; cursor: pointer; flex-shrink: 0; font-family: inherit;">${this.t('whitelistRemove')}</button>
+        </div>
+      `).join('');
+    };
+
+    const modal = document.createElement('div');
+    modal.style.cssText = `
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0, 0, 0, 0.25); display: flex; align-items: center;
+      justify-content: center; z-index: 10001; backdrop-filter: blur(4px);
+    `;
+
+    modal.innerHTML = `
+      <div style="
+        background: #FFFFFF; border-radius: 8px; max-width: 560px; width: 90%;
+        box-shadow: 0 32px 64px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.05);
+        animation: whitelistDialogShow 0.2s cubic-bezier(0.0,0.0,0.2,1);
+        font-family: 'Segoe UI Variable','Segoe UI',system-ui,-apple-system,sans-serif;
+        overflow: hidden; max-height: 80vh; display: flex; flex-direction: column;
+      ">
+        <div style="padding: 24px 24px 0 24px;">
+          <div style="font-size: 18px; font-weight: 600; color: #1C1C1C; margin-bottom: 4px;">${this.t('whitelistDialogTitle')}</div>
+          <div style="font-size: 14px; color: #5F5F5F; margin-bottom: 16px;">${this.t('whitelistMgmtDesc')}</div>
+          <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+            <input id="whitelist-process-input" type="text" placeholder="${this.t('whitelistProcessPlaceholder')}" style="flex: 1; padding: 6px 12px; border: 1px solid rgba(0,0,0,0.1); border-radius: 4px; font-size: 14px; font-family: inherit; outline: none;" />
+            <button id="whitelist-add-process" style="padding: 6px 16px; border: 1px solid rgba(0,0,0,0.1); background: #fff; border-radius: 4px; font-size: 14px; color: #1C1C1C; cursor: pointer; font-family: inherit; display: flex; align-items: center; gap: 6px; transition: all 0.15s; white-space: nowrap;">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1C7.27614 1 7.5 1.22386 7.5 1.5V6.5H12.5C12.7761 6.5 13 6.72386 13 7C13 7.27614 12.7761 7.5 12.5 7.5H7.5V12.5C7.5 12.7761 7.27614 13 7 13C6.72386 13 6.5 12.7761 6.5 12.5V7.5H1.5C1.22386 7.5 1 7.27614 1 7C1 6.72386 1.22386 6.5 1.5 6.5H6.5V1.5C6.5 1.22386 6.72386 1 7 1Z" fill="#666"/></svg>
+              ${this.t('whitelistAddProcess')}
+            </button>
+          </div>
+          <div style="font-size: 12px; color: #D13438; margin-bottom: 4px; line-height: 1.4;">${this.t('whitelistProcessHint')}</div>
+          <div style="font-size: 12px; color: #8A8A8A; margin-bottom: 12px; line-height: 1.4;">${this.t('whitelistRestartHint')}</div>
+        </div>
+        <div style="flex: 1; overflow-y: auto; padding: 0 24px; min-height: 60px;" id="whitelist-list-container">
+          ${renderList()}
+        </div>
+        <div style="display: flex; justify-content: flex-end; padding: 16px 24px 24px 24px; background: #F3F3F3; border-top: 1px solid rgba(0,0,0,0.05);">
+          <button id="whitelist-dialog-close" style="padding: 6px 16px; border: none; background: #005FB8; border-radius: 4px; font-size: 14px; font-weight: 400; color: white; cursor: pointer; font-family: inherit; min-width: 80px; box-shadow: 0 1px 2px rgba(0,0,0,0.1);">${this.t('complete')}</button>
+        </div>
+      </div>
+      <style>
+        @keyframes whitelistDialogShow {
+          from { opacity: 0; transform: scale(0.95) translateY(-10px); }
+          to { opacity: 1; transform: scale(1) translateY(0); }
+        }
+      </style>
+    `;
+
+    document.body.appendChild(modal);
+
+    // 刷新列表
+    const refreshList = async () => {
+      try {
+        processes = await invoke('get_whitelist_processes_command');
+      } catch (_) {}
+      const container = document.getElementById('whitelist-list-container');
+      if (container) container.innerHTML = renderList();
+      bindRemoveButtons();
+    };
+
+    // 绑定移除按钮
+    const bindRemoveButtons = () => {
+      document.querySelectorAll('.whitelist-remove-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const idx = parseInt((btn as HTMLElement).dataset.index || '0');
+          const processName = processes[idx];
+          if (!processName) return;
+          if (!confirm(this.t('whitelistConfirmRemove'))) return;
+          try {
+            await invoke('remove_whitelist_process_command', { name: processName });
+            await refreshList();
+            this.basicProtectionManager.reloadWhitelistedProcesses();
+          } catch (e) {
+            console.error('[Whitelist] Failed to remove:', e);
+          }
+        });
+      });
+    };
+
+    // 添加进程名
+    const addProcess = async () => {
+      const input = document.getElementById('whitelist-process-input') as HTMLInputElement;
+      const name = input?.value.trim();
+      if (!name) return;
+      if (!name.includes('.')) {
+        alert(this.t('whitelistProcessHint'));
+        return;
+      }
+      try {
+        await invoke('add_whitelist_process_command', { name });
+        if (input) input.value = '';
+        await refreshList();
+        this.basicProtectionManager.reloadWhitelistedProcesses();
+      } catch (e) {
+        console.error('[Whitelist] Failed to add process:', e);
+      }
+    };
+
+    document.getElementById('whitelist-add-process')?.addEventListener('click', addProcess);
+    document.getElementById('whitelist-process-input')?.addEventListener('keydown', (e) => {
+      if ((e as KeyboardEvent).key === 'Enter') addProcess();
+    });
+
+    // 关闭
+    document.getElementById('whitelist-dialog-close')?.addEventListener('click', () => {
+      modal.remove();
+    });
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) modal.remove();
+    });
+
+    bindRemoveButtons();
+  }
+
+  // 显示规则库对话框
+  private async showRulesLibraryDialog(): Promise<void> {
+    const modal = document.createElement('div');
+    modal.style.cssText = `
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0, 0, 0, 0.25); display: flex; align-items: center;
+      justify-content: center; z-index: 10001; backdrop-filter: blur(4px);
+    `;
+
+    modal.innerHTML = `
+      <div style="
+        background: #FFFFFF; border-radius: 8px; max-width: 600px; width: 90%;
+        box-shadow: 0 32px 64px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.05);
+        animation: whitelistDialogShow 0.2s cubic-bezier(0.0,0.0,0.2,1);
+        font-family: 'Segoe UI Variable','Segoe UI',system-ui,-apple-system,sans-serif;
+        overflow: hidden; max-height: 80vh; display: flex; flex-direction: column;
+      ">
+        <div style="padding: 24px 24px 0 24px;">
+          <div style="font-size: 18px; font-weight: 600; color: #1C1C1C; margin-bottom: 4px;">病毒家族规则库</div>
+          <div style="font-size: 14px; color: #5F5F5F; margin-bottom: 8px;">已加载的病毒家族检测规则</div>
+        </div>
+        <div id="rules-library-content" style="flex: 1; overflow-y: auto; overflow-x: auto; padding: 0 24px; min-height: 60px;">
+          <div style="text-align: center; padding: 32px 0; color: #999; font-size: 14px;">加载中...</div>
+        </div>
+        <div style="display: flex; justify-content: flex-end; padding: 16px 24px 24px 24px; background: #F3F3F3; border-top: 1px solid rgba(0,0,0,0.05); gap: 8px;">
+          <button id="rules-library-reload" style="padding: 6px 16px; border: 1px solid rgba(0,0,0,0.1); background: #ffffff; border-radius: 4px; font-size: 14px; font-weight: 400; color: #1C1C1C; cursor: pointer; font-family: inherit; transition: all 0.15s ease;" onmouseover="this.style.background='#F9F9F9'" onmouseout="this.style.background='#ffffff'">重新加载</button>
+          <button id="rules-library-close" style="padding: 6px 16px; border: 1px solid rgba(0,0,0,0.1); background: #ffffff; border-radius: 4px; font-size: 14px; font-weight: 400; color: #1C1C1C; cursor: pointer; font-family: inherit; transition: all 0.15s ease; min-width: 80px;" onmouseover="this.style.background='#F9F9F9'" onmouseout="this.style.background='#ffffff'">关闭</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+
+    // 注入滚动条样式
+    const styleId = 'rules-library-scrollbar-style';
+    if (!document.getElementById(styleId)) {
+      const style = document.createElement('style');
+      style.id = styleId;
+      style.textContent = `
+        #rules-library-content::-webkit-scrollbar { width: 6px; height: 6px; }
+        #rules-library-content::-webkit-scrollbar-track { background: transparent; }
+        #rules-library-content::-webkit-scrollbar-thumb { background: #D0D0D0; border-radius: 3px; }
+        #rules-library-content::-webkit-scrollbar-thumb:hover { background: #A0A0A0; }
+        #rules-library-content table { width: 100%; min-width: 500px; }
+      `;
+      document.head.appendChild(style);
+    }
+
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const info = await invoke<any>('get_virus_family_rules_command');
+      const data = typeof info === 'string' ? JSON.parse(info) : info;
+
+      const sigs = data.signatures || [];
+      const sourcePath = data.source_path || null;
+      let html = '';
+
+      // 显示加载来源
+      if (sourcePath) {
+        html += '<div style="font-size: 11px; color: #999; margin-bottom: 12px; word-break: break-all;">加载来源: ' + sourcePath + '</div>';
+      } else {
+        html += '<div style="font-size: 11px; color: #D13438; margin-bottom: 12px;">未加载到外部规则文件（规则为空）</div>';
+      }
+
+      // 签名列表
+      if (sigs.length > 0) {
+        html += '<div style="margin-bottom: 4px;"><span style="font-size: 14px; font-weight: 500; color: #1C1C1C;">特征签名</span><span style="font-size: 12px; color: #888; margin-left: 8px;">共 ' + sigs.length + ' 条</span></div>';
+        html += '<table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 13px;">';
+        html += '<thead><tr style="border-bottom: 1px solid #E5E5E5;"><th style="padding: 8px 8px 8px 0; text-align: left; color: #666; font-weight: 500;">名称</th><th style="padding: 8px; text-align: left; color: #666; font-weight: 500;">家族</th><th style="padding: 8px; text-align: left; color: #666; font-weight: 500;">分类</th><th style="padding: 8px 0 8px 8px; text-align: left; color: #666; font-weight: 500;">特征</th></tr></thead><tbody>';
+        for (const sig of sigs) {
+          const features = [];
+          const behReqs = sig.behavior_req ? Object.keys(sig.behavior_req).map(k => `${k}≥${sig.behavior_req[k]}`) : [];
+          if (behReqs.length > 0) features.push(behReqs.join(' '));
+          if (sig.unique_strings && sig.unique_strings.length > 0) features.push('字符串:' + sig.unique_strings.join(','));
+          if (sig.packer) features.push('加壳:' + sig.packer);
+          if (sig.compiler) features.push('编译:' + sig.compiler);
+          html += '<tr style="border-bottom: 1px solid #F3F3F3;">';
+          html += '<td style="padding: 10px 8px 10px 0; color: #1C1C1C; font-weight: 500;">' + sig.name + '</td>';
+          html += '<td style="padding: 10px 8px; color: #005FB8;">' + sig.family + '</td>';
+          html += '<td style="padding: 10px 8px; color: #666;">' + (sig.malware_type || '-') + '</td>';
+          html += '<td style="padding: 10px 0 10px 8px; color: #888; font-size: 12px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">' + (features.join(' | ') || '-') + '</td>';
+          html += '</tr>';
+        }
+        html += '</tbody></table>';
+      }
+
+      if (!html) html = '<div style="text-align: center; padding: 32px 0; color: #999; font-size: 14px;">暂无规则</div>';
+      document.getElementById('rules-library-content')!.innerHTML = html;
+    } catch (e) {
+      document.getElementById('rules-library-content')!.innerHTML = '<div style="text-align: center; padding: 32px 0; color: #D13438; font-size: 14px;">加载规则失败</div>';
+    }
+
+    document.getElementById('rules-library-reload')?.addEventListener('click', async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('reload_virus_family_rules_command');
+        // 重新加载后刷新显示
+        modal.remove();
+        this.showRulesLibraryDialog();
+      } catch (e) {
+        document.getElementById('rules-library-content')!.innerHTML = '<div style="text-align: center; padding: 32px 0; color: #D13438; font-size: 14px;">重新加载失败</div>';
+      }
+    });
+    document.getElementById('rules-library-close')?.addEventListener('click', () => modal.remove());
+    modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+  }
+
+  private renderScanningPage(): string {
+    const isComplete = this.scanProgress >= 100;
+    const elapsedTime = this.scanStartTime > 0 ? Math.floor((Date.now() - this.scanStartTime) / 1000) : 0;
+    
+    // Fluent Design 风格扫描完成界面
+    if (isComplete) {
+      return `
+        <div class="scanning-page">
+          <div class="scan-simple-header">
+            <div>
+              <div class="scan-simple-title">${this.t('virusScan')}</div>
+              <div class="scan-simple-subtitle">${this.t('scanResultSummary').replace('{threats}', String(this.scanThreats)).replace('{scanned}', String(this.totalFilesCount)).replace('{time}', String(elapsedTime))}</div>
+            </div>
+            <div style="display: flex; gap: 10px;">
+              ${this.scanThreats > 0 ? `<button class="btn-fluent-primary" id="scan-handle-threats-btn">${this.t('handle')}</button>` : ''}
+              <button class="btn-fluent-secondary" id="scan-complete-btn">${this.t('complete')}</button>
+            </div>
+          </div>
+
+          ${this.scanThreats > 0 ? `
+            <div class="scan-simple-list">
+              ${this.detectedThreats.map((threat) => `
+                <div class="scan-simple-item" data-path="${this.escapeHtml(threat.path)}">
+                  <input type="checkbox" class="threat-checkbox" checked data-path="${this.escapeHtml(threat.path)}">
+                  ${this.getThreatCategory(threat) ? `<span class="threat-category-badge">${this.getThreatCategory(threat)}</span>` : ''}
+                  <span class="threat-name">${this.virusFamilyAnalysisManager.isEnabled() ? (threat.virus_family || 'Trojan.Win32.General') : 'Trojan.Generic'}</span>
+                  <span class="threat-path-simple">${this.escapeHtml(threat.path)}</span>
+                </div>
+              `).join('')}
+            </div>
+          ` : `
+            <div class="scan-simple-empty">
+              <div class="scan-success-anim">
+                <svg width="72" height="72" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="1.5">
+                   <circle cx="12" cy="12" r="10"/>
+                   <path d="M9 12l2 2 4-4"/>
+                 </svg>
+              </div>
+              <div class="scan-success-text">${this.t('noThreatsFound')}</div>
+              <div class="scan-success-sub">${this.t('deviceSecure')}</div>
+            </div>
+          `}
+        </div>
+      `;
+    }
+
+    // 扫描中界面 — 带动画
+    const hasThreats = this.scanThreats > 0;
+    const scanColor = hasThreats ? 'var(--danger)' : 'var(--accent-primary)';
+    const scanColorLight = hasThreats ? 'rgba(209, 52, 56, 0.12)' : 'var(--accent-light)';
+    return `
+      <div class="scanning-page">
+        <div class="scan-main-card">
+          <div class="scan-card-header">
+            <div class="scan-header-left">
+              <div class="scan-anim-container">
+                <svg class="scan-anim-icon" width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" overflow="visible">
+                  <defs>
+                    <linearGradient id="trail-up" x1="0" y1="1" x2="0" y2="0">
+                      <stop offset="0%" stop-color="${scanColor}" stop-opacity="0.35"/>
+                      <stop offset="100%" stop-color="${scanColor}" stop-opacity="0"/>
+                    </linearGradient>
+                    <linearGradient id="trail-down" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="${scanColor}" stop-opacity="0.35"/>
+                      <stop offset="100%" stop-color="${scanColor}" stop-opacity="0"/>
+                    </linearGradient>
+                  </defs>
+                  <!-- 文档背景 -->
+                  <rect x="10" y="6" width="28" height="36" rx="4" stroke="${scanColor}" stroke-width="1.8" fill="${scanColorLight}" opacity="0.5"/>
+                  <!-- 文档折角 -->
+                  <path d="M28 6v8h8" stroke="${scanColor}" stroke-width="1.5" fill="none" opacity="0.4"/>
+                  <!-- 文字行 -->
+                  <rect x="16" y="18" width="16" height="2.5" rx="1" fill="${scanColor}" opacity="0.3"/>
+                  <rect x="16" y="24" width="12" height="2.5" rx="1" fill="${scanColor}" opacity="0.2"/>
+                  <rect x="16" y="30" width="14" height="2.5" rx="1" fill="${scanColor}" opacity="0.25"/>
+                  <!-- 向上拖尾 — 仅向下运动时显示 -->
+                  <rect class="scan-trail" x="4" y="-60" width="40" height="12" rx="1.5" fill="url(#trail-up)">
+                    <animate attributeName="y" values="-6;26;-6" keyTimes="0;0.5;1" calcMode="spline" keySplines="0.33 0 0.67 1;0.33 0 0.67 1" dur="1.8s" repeatCount="indefinite"/>
+                    <animate attributeName="opacity" values="1;1;0;0;1" keyTimes="0;0.30;0.50;0.70;1" calcMode="spline" keySplines="0 0 1 1;0.33 0 0.67 1;0 0 1 1;0.33 0 0.67 1" dur="1.8s" repeatCount="indefinite"/>
+                  </rect>
+                  <!-- 向下拖尾 — 仅向上运动时显示 -->
+                  <rect class="scan-trail" x="4" y="50" width="40" height="12" rx="1.5" fill="url(#trail-down)">
+                    <animate attributeName="y" values="8;40;8" keyTimes="0;0.5;1" calcMode="spline" keySplines="0.33 0 0.67 1;0.33 0 0.67 1" dur="1.8s" repeatCount="indefinite"/>
+                    <animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.30;0.50;0.70;1" calcMode="spline" keySplines="0 0 1 1;0.33 0 0.67 1;0 0 1 1;0.33 0 0.67 1" dur="1.8s" repeatCount="indefinite"/>
+                  </rect>
+                  <!-- 扫描线 -->
+                  <rect class="scan-beam" x="4" y="6" width="40" height="2.5" rx="1.25" fill="${scanColor}" opacity="0.75">
+                    <animate attributeName="y" values="6;38;6" keyTimes="0;0.5;1" calcMode="spline" keySplines="0.33 0 0.67 1;0.33 0 0.67 1" dur="1.8s" repeatCount="indefinite"/>
+                  </rect>
+                  <!-- 扫描线高光 -->
+                  <rect class="scan-beam-glow" x="4" width="40" height="1" rx="0.5" fill="#fff" opacity="0.6">
+                    <animate attributeName="y" values="7;39;7" keyTimes="0;0.5;1" calcMode="spline" keySplines="0.33 0 0.67 1;0.33 0 0.67 1" dur="1.8s" repeatCount="indefinite"/>
+                  </rect>
+                </svg>
+              </div>
+              <div>
+                <div class="scan-card-title">${hasThreats ? `${this.t('scanDetected')} <span class="scan-threat-count">${this.scanThreats}</span> 个${this.t('threats')}` : this.t('scanning')}</div>
+                <div class="scanning-file-path">${this.currentScanFileIndex > 0 ? SCAN_FILES[this.currentScanFileIndex - 1] : SCAN_FILES[0]}</div>
+              </div>
+            </div>
+            <button class="btn-fluent-secondary" id="stop-scan-btn" style="flex-shrink: 0;">${this.t('stop')}</button>
+          </div>
+
+          <div class="scan-progress-area">
+            <div class="progress-bar scan-progress-bar${hasThreats ? ' danger' : ''}${this.isTraversing ? ' indeterminate' : ''}">
+              <div class="progress-fill${hasThreats ? ' danger' : ''}" style="width: ${this.scanProgress}%"></div>
+            </div>
+            <div class="scan-progress-text">${this.isTraversing ? '0%' : Math.floor(this.scanProgress) + '%'}</div>
+          </div>
+
+          <div class="scan-stats-row">
+            <div class="scan-stat">
+              <span class="stat-num">${this.scanThreats}</span>
+              <span class="stat-name">${this.t('threats')}</span>
+            </div>
+            <div class="scan-stat">
+              <span class="stat-num">${this.scannedFilesCount}</span>
+              <span class="stat-name">${this.t('scanned')}</span>
+            </div>
+            <div class="scan-stat">
+              <span class="stat-num">${this.totalFilesCount}</span>
+              <span class="stat-name">${this.t('totalFiles')}</span>
+            </div>
+            <div class="scan-stat">
+              <span class="stat-num scan-speed">0</span>
+              <span class="stat-name">${this.t('speed')}</span>
+            </div>
+            <div class="scan-stat">
+              <span class="stat-num">${elapsedTime}s</span>
+              <span class="stat-name">${this.t('elapsedTime')}</span>
+            </div>
+          </div>
+
+          <div class="scan-threats-area thin-scrollbar" id="scan-threats-area">
+            ${this.detectedThreats.length > 0 ? this.detectedThreats.map((threat) => `
+              <div class="scan-threat-entry" data-path="${this.escapeHtml(threat.path)}">
+                <input type="checkbox" class="threat-checkbox" checked data-path="${this.escapeHtml(threat.path)}">
+                ${this.getThreatCategory(threat) ? `<span class="threat-category-badge">${this.getThreatCategory(threat)}</span>` : ''}
+                <span class="threat-name">${this.escapeHtml(threat.virus_family || 'Trojan.Generic')}</span>
+                <span class="threat-path-simple" title="${this.escapeHtml(threat.path)}">${this.escapeHtml(threat.path)}</span>
+                <span class="scan-threat-prob">${(threat.probability * 100).toFixed(1)}%</span>
+              </div>
+            `).join('') : `
+              <div class="scan-threats-empty" id="scan-threats-empty">
+                ${Icons.shieldCheck || '✓'}
+                <span>${this.t('scanningNoThreats')}</span>
+              </div>
+            `}
+          </div>
+
+          <div class="scan-engine-footer">
+            <img src="/icons/shield_green_transparent.png" alt="" style="width: 18px; height: 18px; object-fit: contain; display: block;">
+            <span style="font-size: 11px; color: var(--text-tertiary); line-height: 1;">威胁检测引擎联合设计 · HeySafe x 西瓜杀毒</span>
+            <img src="/icons/shield_blue_transparent.png" alt="" style="width: 14px; height: 14px; object-fit: contain; display: block;">
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  private renderScanSection(): string {
+    return `
+      <section class="page-section" id="section-scan">
+        <div class="page-header">
+          <div class="page-title">${this.t('virusScan')}</div>
+          <div class="page-subtitle">${this.t('scanSubtitle')}</div>
+        </div>
+
+        <div class="action-grid">
+          <div class="action-card" id="start-quick-scan">
+            <div class="action-icon">
+              ${Icons.zap}
+            </div>
+            <div class="action-content">
+              <div class="action-title">${this.t('quickScan')}</div>
+              <div class="action-desc">${this.t('quickScanDesc')}</div>
+            </div>
+            <div class="action-arrow">
+              ${Icons.arrowRight}
+            </div>
+          </div>
+
+          <div class="action-card" id="start-full-scan">
+            <div class="action-icon">
+              ${Icons.shield}
+            </div>
+            <div class="action-content">
+              <div class="action-title">${this.t('fullScan')}</div>
+              <div class="action-desc">${this.t('fullScanDesc')}</div>
+            </div>
+            <div class="action-arrow">
+              ${Icons.arrowRight}
+            </div>
+          </div>
+
+          <div class="action-card" id="start-custom-scan">
+            <div class="action-icon">
+              ${Icons.folder}
+            </div>
+            <div class="action-content">
+              <div class="action-title">${this.t('customScan')}</div>
+              <div class="action-desc">${this.t('customScanDesc')}</div>
+            </div>
+            <div class="action-arrow">
+              ${Icons.arrowRight}
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top: 20px;">
+          <div class="card-header">
+            <span class="card-title">${this.t('lastScan')}</span>
+          </div>
+          <div style="color: var(--text-secondary); font-size: 13px;">
+            <div style="margin-bottom: 8px;">
+              <span style="color: var(--success); font-weight: 500;">✓</span> 
+              ${this.t('scanCompleted')}
+            </div>
+            <div style="color: var(--text-tertiary); font-size: 12px;">
+              ${this.lastScanInfo ? `${this.lastScanInfo.time} | ${this.lastScanInfo.files} files | ${this.lastScanInfo.duration}s` : '暂无扫描记录'}
+            </div>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  private renderProcessSection(): string {
+    return `
+      <section class="page-section" id="section-process">
+        <div class="page-header">
+          <div class="page-title">${this.t('toolbox')}</div>
+          <div class="page-subtitle">${this.t('toolboxSubtitle')}</div>
+        </div>
+
+        <div class="settings-list">
+          <div class="setting-group">
+            <div class="setting-group-title">${this.t('systemTools')}</div>
+            <div class="setting-item" data-tool="popup" style="cursor: pointer;">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('popupBlocker')}</div>
+                <div class="setting-desc">${this.t('popupBlockerDesc')}</div>
+              </div>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-tertiary);">
+                <path d="M9 18l6-6-6-6"/>
+              </svg>
+            </div>
+            <div class="setting-item" data-tool="cleaner" style="cursor: pointer;">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('junkCleaner')}</div>
+                <div class="setting-desc">${this.t('junkCleanerDesc')}</div>
+              </div>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-tertiary);">
+                <path d="M9 18l6-6-6-6"/>
+              </svg>
+            </div>
+            ${this.isMsStore ? '' : `
+            <div class="setting-item" data-tool="edr_reports" style="cursor: pointer;">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('edrReports')}</div>
+                <div class="setting-desc">${this.t('edrReportsDesc')}</div>
+              </div>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-tertiary);">
+                <path d="M9 18l6-6-6-6"/>
+              </svg>
+            </div>
+            `}
+            ${this.isMsStore ? '' : `
+            <div class="setting-item" data-tool="process_manager" style="cursor: pointer;">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('processTool')}</div>
+                <div class="setting-desc">${this.t('processToolDesc')}</div>
+              </div>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-tertiary);">
+                <path d="M9 18l6-6-6-6"/>
+              </svg>
+            </div>
+            `}
+            ${this.isMsStore ? '' : `
+            <div class="setting-item" data-tool="system_repair" style="cursor: pointer;">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('systemRepair')}</div>
+                <div class="setting-desc">${this.t('systemRepairDesc')}</div>
+              </div>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-tertiary);">
+                <path d="M9 18l6-6-6-6"/>
+              </svg>
+            </div>
+            `}
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  private renderToolboxPopupSection(): string {
+    const enabled = this.popupInterceptorEnabled;
+    const hiddenCount = this.hiddenPopups.length;
+    const ruleCount = this.popupRules.length;
+    return `
+      <section class="page-section" style="display: flex; flex-direction: column; height: 100%;">
+        <div style="display: flex; align-items: center; gap: 12px; padding: 20px 24px; border-bottom: 1px solid var(--border-color); flex-shrink: 0;">
+          <div id="back-btn" style="cursor: pointer; display: flex; align-items: center; color: var(--text-secondary); padding: 4px; flex-shrink: 0;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M15 18l-6-6 6-6"/>
+            </svg>
+          </div>
+          <div class="page-title" style="margin: 0;">${this.t('popupBlocker')}</div>
+        </div>
+        <div class="setting-content thin-scrollbar" style="flex: 1; overflow-y: auto; padding: 24px;">
+          <!-- 总开关 -->
+          <div class="setting-item" style="margin-bottom: 20px;">
+            <div class="setting-info">
+              <div class="setting-title">${this.t('popupBlockerEnable')}</div>
+              <div class="setting-desc">${this.t('popupBlockerEnableDesc')}</div>
+            </div>
+            <div class="toggle ${enabled ? 'active' : ''}" id="popup-interceptor-toggle">
+              <div class="toggle-thumb"></div>
+            </div>
+          </div>
+
+          <!-- 统计 -->
+          <div class="card" style="padding: 16px; margin-bottom: 20px; display: flex; gap: 16px;">
+            <div style="flex: 1; text-align: center;">
+              <div style="font-size: 22px; font-weight: 700; color: var(--accent-primary);">${hiddenCount}</div>
+              <div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">${this.t('popupBlockerHiddenCount')}</div>
+            </div>
+            <div style="flex: 1; text-align: center;">
+              <div style="font-size: 22px; font-weight: 700; color: var(--accent-primary);">${ruleCount}</div>
+              <div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">${this.t('popupBlockerRuleCount')}</div>
+            </div>
+          </div>
+
+          <!-- 自定义规则 -->
+          <div class="setting-group" style="margin-bottom: 20px;">
+            <div class="setting-group-title">${this.t('popupBlockerRules')}</div>
+            <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+              <input type="text" id="popup-rule-input" class="text-input" placeholder="${this.t('popupBlockerRulePlaceholder')}" style="flex: 1;" />
+              <button id="popup-rule-add-btn" class="btn btn-primary">${this.t('popupBlockerAddRule')}</button>
+            </div>
+            <div id="popup-rules-list" style="display: flex; flex-direction: column; gap: 8px;">
+              ${this.popupRules.length > 0
+                ? this.popupRules.map(rule => {
+                    const isTitleRule = rule.toLowerCase().startsWith('title:');
+                    const displayRule = isTitleRule ? rule.substring(6) : rule;
+                    const ruleLabel = isTitleRule ? this.t('popupBlockerTitleRule') : this.t('popupBlockerKeywordRule');
+                    return `
+                  <div class="popup-rule-item" style="display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; background: var(--bg-tertiary); border-radius: 6px; border: 1px solid var(--border-color);">
+                    <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
+                      <span style="font-size: 11px; padding: 2px 6px; border-radius: 4px; background: var(--bg-secondary); color: var(--text-secondary); border: 1px solid var(--border-color); flex-shrink: 0;">${ruleLabel}</span>
+                      <span style="font-size: 13px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${this.escapeHtml(displayRule)}</span>
+                    </div>
+                    <button class="popup-rule-remove-btn btn-fluent-secondary" data-rule="${this.escapeHtml(rule)}" style="padding: 4px 10px; font-size: 12px; min-width: auto;">${this.t('whitelistRemove')}</button>
+                  </div>
+                `;
+                  }).join('')
+                : `<div style="padding: 16px; text-align: center; color: var(--text-secondary); font-size: 13px;">${this.t('popupBlockerNoRules')}</div>`
+              }
+            </div>
+          </div>
+
+          <!-- 已净化弹窗 -->
+          <div class="setting-group">
+            <div class="setting-group-title">${this.t('popupBlockerHidden')}</div>
+            <div id="popup-hidden-list" style="display: flex; flex-direction: column; gap: 8px;">
+              ${this.hiddenPopups.length > 0
+                ? this.hiddenPopups.map(popup => `
+                  <div class="popup-hidden-item" style="display: flex; flex-direction: column; gap: 6px; padding: 12px; background: var(--bg-tertiary); border-radius: 6px; border: 1px solid var(--border-color);">
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+                      <span style="font-size: 13px; font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;">${this.escapeHtml(popup.title)}</span>
+                      <span style="font-size: 11px; color: var(--text-secondary); flex-shrink: 0;">${this.escapeHtml(popup.hidden_at)}</span>
+                    </div>
+                    <div style="font-size: 12px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${this.escapeHtml(popup.process_path || popup.process_name)}</div>
+                    <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px;">
+                      <button class="popup-hidden-remove-btn btn-fluent-secondary" data-hwnd="${popup.hwnd}" style="padding: 4px 12px; font-size: 12px; min-width: auto;">${this.t('removeRecord')}</button>
+                      <button class="popup-hidden-restore-btn btn-fluent-primary" data-hwnd="${popup.hwnd}" data-title="${this.escapeHtml(popup.title)}" style="padding: 4px 12px; font-size: 12px; min-width: auto;">${this.t('restorePopup')}</button>
+                    </div>
+                  </div>
+                `).join('')
+                : `<div style="padding: 16px; text-align: center; color: var(--text-secondary); font-size: 13px;">${this.t('popupBlockerNoHidden')}</div>`
+              }
+            </div>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  private async loadPopupInterceptorState(shouldRender: boolean = true) {
+    try {
+      const state = await invoke('get_popup_interceptor_state') as { enabled: boolean; total_hidden: number; rule_count: number };
+      this.popupInterceptorEnabled = state.enabled;
+      this.popupRules = await invoke('get_popup_rules') as string[];
+      this.hiddenPopups = await invoke('get_hidden_popups') as any[];
+    } catch (e) {
+      console.error('[PopupBlocker] Failed to load state:', e);
+    }
+    if (shouldRender) {
+      this.render();
+    }
+  }
+
+  private async initPopupInterceptor() {
+    const enabled = localStorage.getItem('popup_interceptor_enabled') === 'true';
+    if (enabled) {
+      try {
+        await invoke('start_popup_interceptor');
+      } catch (e) {
+        console.error('[PopupBlocker] Failed to start on init:', e);
+      }
+    }
+    await this.loadPopupInterceptorState(false);
+  }
+
+  private async togglePopupInterceptor() {
+    try {
+      if (this.popupInterceptorEnabled) {
+        const state = await invoke('stop_popup_interceptor') as { enabled: boolean; total_hidden: number; rule_count: number };
+        this.popupInterceptorEnabled = state.enabled;
+        localStorage.setItem('popup_interceptor_enabled', 'false');
+      } else {
+        const state = await invoke('start_popup_interceptor') as { enabled: boolean; total_hidden: number; rule_count: number };
+        this.popupInterceptorEnabled = state.enabled;
+        localStorage.setItem('popup_interceptor_enabled', 'true');
+      }
+      this.render();
+    } catch (e) {
+      console.error('[PopupBlocker] Failed to toggle:', e);
+    }
+  }
+
+  private async addPopupRuleFromInput() {
+    const input = document.getElementById('popup-rule-input') as HTMLInputElement;
+    if (!input) return;
+    const rule = input.value.trim();
+    if (!rule) return;
+    try {
+      await invoke('add_popup_rule', { rule });
+      await this.loadPopupInterceptorState();
+      this.render();
+      input.value = '';
+    } catch (e) {
+      console.error('[PopupBlocker] Failed to add rule:', e);
+    }
+  }
+
+  private async removePopupRule(rule: string) {
+    try {
+      await invoke('remove_popup_rule', { rule });
+      await this.loadPopupInterceptorState();
+      this.render();
+    } catch (e) {
+      console.error('[PopupBlocker] Failed to remove rule:', e);
+    }
+  }
+
+  private async removePopupRecord(hwnd: number) {
+    try {
+      await invoke('remove_popup_record', { hwnd });
+      await this.loadPopupInterceptorState();
+      this.render();
+    } catch (e) {
+      console.error('[PopupBlocker] Failed to remove record:', e);
+    }
+  }
+
+  private async restorePopup(hwnd: number, title: string) {
+    try {
+      await invoke('restore_popup', { hwnd });
+      await this.loadPopupInterceptorState();
+      this.render();
+      this.addLog('INFO', `已恢复弹窗：${title}`);
+    } catch (e) {
+      console.error('[PopupBlocker] Failed to restore popup:', e);
+    }
+  }
+
+  private attachPopupBlockerListeners() {
+    document.getElementById('popup-interceptor-toggle')?.addEventListener('click', () => this.togglePopupInterceptor());
+
+    document.getElementById('popup-rule-add-btn')?.addEventListener('click', () => this.addPopupRuleFromInput());
+    document.getElementById('popup-rule-input')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') this.addPopupRuleFromInput();
+    });
+
+    document.querySelectorAll('.popup-rule-remove-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const rule = (e.currentTarget as HTMLElement).dataset.rule;
+        if (rule) this.removePopupRule(rule);
+      });
+    });
+
+    document.querySelectorAll('.popup-hidden-remove-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const hwnd = parseInt((e.currentTarget as HTMLElement).dataset.hwnd || '0', 10);
+        if (hwnd) this.removePopupRecord(hwnd);
+      });
+    });
+
+    document.querySelectorAll('.popup-hidden-restore-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const el = e.currentTarget as HTMLElement;
+        const hwnd = parseInt(el.dataset.hwnd || '0', 10);
+        const title = el.dataset.title || '';
+        if (hwnd) this.restorePopup(hwnd, title);
+      });
+    });
+  }
+
+  private renderToolboxCleanerSection(): string {
+    return `
+      <section class="page-section" style="display: flex; flex-direction: column; height: 100%;">
+        <div style="display: flex; align-items: center; gap: 12px; padding: 20px 24px; border-bottom: 1px solid var(--border-color); flex-shrink: 0;">
+          <div id="back-btn" style="cursor: pointer; display: flex; align-items: center; color: var(--text-secondary); padding: 4px; flex-shrink: 0;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M15 18l-6-6 6-6"/>
+            </svg>
+          </div>
+          <div class="page-title" style="margin: 0;">${this.t('junkCleaner')}</div>
+          <div id="cleaner-status" style="margin-left: auto; font-size: 13px; color: var(--text-secondary); display: none;"></div>
+        </div>
+
+        <div class="settings-list" style="padding: 20px 24px; overflow-y: auto; flex: 1;">
+          <!-- 扫描类别 -->
+          <div class="setting-group">
+            <div class="setting-group-title">扫描类别</div>
+            <div id="junk-categories">
+              <label class="setting-item" style="cursor: pointer; display: flex; align-items: center; gap: 12px; padding: 10px 16px;" data-category="temp">
+                <div class="setting-info" style="flex: 1;">
+                  <div class="setting-title">临时文件</div>
+                  <div class="setting-desc">%TEMP% 目录中的临时文件</div>
+                </div>
+                <span class="junk-size" style="font-size: 13px; color: var(--text-secondary); white-space: nowrap;">-</span>
+                <input type="checkbox" checked class="junk-cb" data-category="temp" style="width: 16px; height: 16px; accent-color: var(--accent-primary);">
+              </label>
+              <label class="setting-item" style="cursor: pointer; display: flex; align-items: center; gap: 12px; padding: 10px 16px;" data-category="prefetch">
+                <div class="setting-info" style="flex: 1;">
+                  <div class="setting-title">预读取文件</div>
+                  <div class="setting-desc">Windows Prefetch 缓存</div>
+                </div>
+                <span class="junk-size" style="font-size: 13px; color: var(--text-secondary); white-space: nowrap;">-</span>
+                <input type="checkbox" checked class="junk-cb" data-category="prefetch" style="width: 16px; height: 16px; accent-color: var(--accent-primary);">
+              </label>
+              <label class="setting-item" style="cursor: pointer; display: flex; align-items: center; gap: 12px; padding: 10px 16px;" data-category="recycle">
+                <div class="setting-info" style="flex: 1;">
+                  <div class="setting-title">回收站</div>
+                  <div class="setting-desc">清空回收站中的文件</div>
+                </div>
+                <span class="junk-size" style="font-size: 13px; color: var(--text-secondary); white-space: nowrap;">-</span>
+                <input type="checkbox" checked class="junk-cb" data-category="recycle" style="width: 16px; height: 16px; accent-color: var(--accent-primary);">
+              </label>
+              <label class="setting-item" style="cursor: pointer; display: flex; align-items: center; gap: 12px; padding: 10px 16px;" data-category="browser">
+                <div class="setting-info" style="flex: 1;">
+                  <div class="setting-title">浏览器缓存</div>
+                  <div class="setting-desc">Chrome / Edge / Firefox 缓存</div>
+                </div>
+                <span class="junk-size" style="font-size: 13px; color: var(--text-secondary); white-space: nowrap;">-</span>
+                <input type="checkbox" checked class="junk-cb" data-category="browser" style="width: 16px; height: 16px; accent-color: var(--accent-primary);">
+              </label>
+              <label class="setting-item" style="cursor: pointer; display: flex; align-items: center; gap: 12px; padding: 10px 16px;" data-category="logs">
+                <div class="setting-info" style="flex: 1;">
+                  <div class="setting-title">系统日志</div>
+                  <div class="setting-desc">Windows 日志文件（.log）</div>
+                </div>
+                <span class="junk-size" style="font-size: 13px; color: var(--text-secondary); white-space: nowrap;">-</span>
+                <input type="checkbox" checked class="junk-cb" data-category="logs" style="width: 16px; height: 16px; accent-color: var(--accent-primary);">
+              </label>
+              <label class="setting-item" style="cursor: pointer; display: flex; align-items: center; gap: 12px; padding: 10px 16px;" data-category="dumps">
+                <div class="setting-info" style="flex: 1;">
+                  <div class="setting-title">内存转储</div>
+                  <div class="setting-desc">系统崩溃转储文件（.dmp）</div>
+                </div>
+                <span class="junk-size" style="font-size: 13px; color: var(--text-secondary); white-space: nowrap;">-</span>
+                <input type="checkbox" checked class="junk-cb" data-category="dumps" style="width: 16px; height: 16px; accent-color: var(--accent-primary);">
+              </label>
+            </div>
+          </div>
+
+          <!-- 操作按钮 -->
+          <div style="display: flex; gap: 12px; margin-top: 20px;">
+            <button id="scan-junk-btn" style="padding: 8px 24px; border: none; background: #005FB8; border-radius: 4px; font-size: 14px; font-weight: 500; color: white; cursor: pointer; font-family: inherit;">
+              扫描
+            </button>
+            <button id="clean-junk-btn" disabled style="padding: 8px 24px; border: none; background: #D13438; border-radius: 4px; font-size: 14px; font-weight: 500; color: white; cursor: pointer; font-family: inherit; opacity: 0.5;">
+              清理
+            </button>
+          </div>
+
+          <!-- 扫描结果 -->
+          <div id="junk-results" style="display: none; margin-top: 20px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--border-color);">
+              <div style="font-size: 14px; font-weight: 500; color: var(--text-primary);">扫描结果</div>
+              <div id="junk-total-size" style="font-size: 14px; font-weight: 600; color: #D13438;"></div>
+            </div>
+            <div id="junk-file-list" style="max-height: 240px; overflow-y: auto; margin-top: 4px;"></div>
+          </div>
+
+          <!-- 进度 -->
+          <div id="junk-progress" style="display: none; margin-top: 20px;">
+            <div style="height: 4px; background: var(--border-color); border-radius: 2px; overflow: hidden;">
+              <div id="junk-progress-bar" style="height: 100%; width: 0%; background: #005FB8; border-radius: 2px; transition: width 0.3s;"></div>
+            </div>
+            <div id="junk-progress-text" style="font-size: 12px; color: var(--text-secondary); margin-top: 6px;"></div>
+          </div>
+        </div>
+
+        <style>
+          #junk-file-list::-webkit-scrollbar { width: 5px; }
+          #junk-file-list::-webkit-scrollbar-track { background: transparent; }
+          #junk-file-list::-webkit-scrollbar-thumb { background: #D0D0D0; border-radius: 3px; }
+          #junk-categories .setting-item:hover { background: transparent; }
+          #junk-categories .setting-item input[type="checkbox"]:checked + .setting-info .setting-title { color: var(--text-primary); }
+        </style>
+      </section>
+    `;
+  }
+
+  private renderEdrReportsSection(): string {
+    return `
+      <section class="page-section" style="display: flex; flex-direction: column; height: 100%;">
+        <div style="display: flex; align-items: center; gap: 12px; padding: 20px 24px; border-bottom: 1px solid var(--border-color); flex-shrink: 0;">
+          <div id="back-btn" style="cursor: pointer; display: flex; align-items: center; color: var(--text-secondary); padding: 4px; flex-shrink: 0;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M15 18l-6-6 6-6"/>
+            </svg>
+          </div>
+          <div class="page-title edr-reports-page-title" style="margin: 0;">${this.t('edrReports')}</div>
+          <div id="edr-reports-count" style="margin-left: auto; font-size: 13px; color: var(--text-secondary);"></div>
+        </div>
+
+        <div style="padding: 20px 24px; overflow-y: auto; flex: 1;" id="edr-reports-list">
+          <div style="text-align: center; color: var(--text-secondary); padding: 60px 20px;">
+            <div style="font-size: 14px; margin-bottom: 8px;">正在加载历史报告...</div>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  private renderToolboxProcessManagerSection(): string {
+    return `
+      <section class="page-section pm-section" style="display: flex; flex-direction: column; height: 100%;">
+        <div class="pm-header">
+          <div id="back-btn" class="pm-back-btn">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M15 18l-6-6 6-6"/>
+            </svg>
+          </div>
+          <div class="page-title" style="margin: 0;">${this.t('processTool')}</div>
+          <div id="pm-count" class="pm-count"></div>
+        </div>
+
+        <div class="pm-toolbar">
+          <div class="pm-search-box">
+            <svg class="pm-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
+            </svg>
+            <input type="text" id="pm-search" placeholder="搜索进程名称、路径或 PID..." class="pm-search-input">
+          </div>
+        </div>
+
+        <div class="pm-table-container" id="pm-list">
+          <div class="pm-loading">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity: 0.5;">
+              <circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>
+            </svg>
+            <div style="font-size: 13px;">正在加载进程列表...</div>
+          </div>
+        </div>
+
+        <div class="pm-footer">
+          <button id="pm-kill-btn" disabled class="pm-kill-btn">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <path d="M18 6L6 18M6 6l12 12"/>
+            </svg>
+            驱动终止进程
+          </button>
+          <button id="pm-refresh-btn" class="pm-refresh-btn">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M1 4v6h6M23 20v-6h-6"/>
+              <path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/>
+            </svg>
+            刷新
+          </button>
+        </div>
+      </section>
+    `;
+  }
+
+  private renderSystemRepairSection(): string {
+    const hasIssues = this.systemRepairIssues.length > 0;
+    const issuesHtml = hasIssues ? `
+      <div id="system-repair-issue-list" style="border: 1px solid var(--border-color); border-radius: var(--radius-md); overflow: hidden; margin-top: 12px;">
+        <div style="display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: var(--bg-secondary); border-bottom: 1px solid var(--border-color);">
+          <input type="checkbox" id="sr-select-all" checked style="width: 16px; height: 16px; accent-color: var(--accent-primary);">
+          <span style="font-size: 13px; color: var(--text-secondary);">全选</span>
+          <span style="margin-left: auto; font-size: 13px; color: var(--text-secondary);">高 ${this.systemRepairSummary.high} / 中 ${this.systemRepairSummary.medium} / 低 ${this.systemRepairSummary.low}</span>
+        </div>
+        ${this.systemRepairIssues.map((issue) => `
+          <label class="setting-item" style="cursor: pointer; display: flex; align-items: flex-start; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border-color); margin: 0;">
+            <input type="checkbox" class="sr-issue-cb" data-id="${this.escapeHtml(issue.id)}" ${issue.selected !== false ? 'checked' : ''} style="width: 16px; height: 16px; margin-top: 2px; accent-color: var(--accent-primary); flex-shrink: 0;">
+            <div class="setting-info" style="flex: 1; min-width: 0;">
+              <div class="setting-title" style="font-weight: 600; color: var(--text-primary);">${this.escapeHtml(issue.name)}</div>
+              <div class="setting-desc" style="margin-top: 2px; color: var(--text-secondary);">${this.escapeHtml(issue.description)}</div>
+              <div style="font-size: 12px; color: var(--text-tertiary); margin-top: 4px; display: flex; gap: 12px; flex-wrap: wrap;">
+                <span>${this.t('srIssueCategory')}: ${this.escapeHtml(issue.category)}</span>
+                <span style="color: ${issue.severity === 'High' ? '#D13438' : issue.severity === 'Medium' ? '#F9A825' : 'var(--text-tertiary)'};">${this.t('srIssueSeverity')}: ${this.escapeHtml(issue.severity)}</span>
+              </div>
+              <div style="font-size: 12px; color: var(--text-tertiary); margin-top: 2px; word-break: break-all;">
+                ${this.escapeHtml(issue.path)}${issue.current_value ? ` = ${this.escapeHtml(issue.current_value)}` : ''}
+              </div>
+            </div>
+          </label>
+        `).join('')}
+      </div>
+    ` : `
+      <div id="system-repair-empty" style="padding: 48px 0; text-align: center; color: var(--text-secondary); font-size: 14px;">
+        ${this.systemRepairScanning ? this.t('srScanning') : this.t('srNoIssues')}
+      </div>
+    `;
+
+    return `
+      <section class="page-section" style="display: flex; flex-direction: column; height: 100%;">
+        <div style="display: flex; align-items: center; gap: 12px; padding: 20px 24px; border-bottom: 1px solid var(--border-color); flex-shrink: 0;">
+          <div id="back-btn" style="cursor: pointer; display: flex; align-items: center; color: var(--text-secondary); padding: 4px; flex-shrink: 0;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M15 18l-6-6 6-6"/>
+            </svg>
+          </div>
+          <div class="page-title" style="margin: 0;">${this.t('systemRepairTitle')}</div>
+          <div id="system-repair-status" style="margin-left: auto; font-size: 13px; color: var(--text-secondary); display: none;"></div>
+        </div>
+
+        <div class="settings-list" style="padding: 20px 24px; overflow-y: auto; flex: 1;">
+          <div class="setting-group" style="max-width: 900px;">
+            <div class="setting-group-title">${this.t('systemRepairSubtitle')}</div>
+            <div style="font-size: 13px; color: var(--text-secondary); margin-top: 4px;">
+              ${hasIssues ? this.t('srIssuesFound').replace('{count}', String(this.systemRepairSummary.total)) : this.t('srNoIssues')}
+            </div>
+
+            <div style="display: flex; align-items: center; gap: 12px; margin-top: 16px; flex-wrap: wrap;">
+              <button id="scan-system-repair-btn" class="btn-fluent-primary" ${this.systemRepairScanning ? 'disabled' : ''} style="padding: 8px 24px; font-size: 14px; border-radius: var(--radius-sm);">
+                ${this.systemRepairScanning ? this.t('srScanning') : this.t('srStartScan')}
+              </button>
+              <button id="fix-system-repair-btn" class="btn-fluent-primary" ${!hasIssues || this.systemRepairFixing ? 'disabled' : ''} style="padding: 8px 24px; font-size: 14px; border-radius: var(--radius-sm);">
+                ${this.systemRepairFixing ? this.t('srFixing') : this.t('srFixSelected')}
+              </button>
+            </div>
+
+            <div id="system-repair-progress" style="display: ${this.systemRepairScanning || this.systemRepairFixing ? 'block' : 'none'}; margin-top: 16px;">
+              <div style="height: 4px; background: var(--border-color); border-radius: 2px; overflow: hidden;">
+                <div id="system-repair-progress-bar" style="height: 100%; width: ${this.systemRepairScanning || this.systemRepairFixing ? '60%' : '0%'}; background: var(--accent-primary); border-radius: 2px; transition: width 0.3s;"></div>
+              </div>
+              <div id="system-repair-progress-text" style="font-size: 12px; color: var(--text-secondary); margin-top: 6px;">
+                ${this.systemRepairScanning ? this.t('srScanning') : this.systemRepairFixing ? this.t('srFixing') : ''}
+              </div>
+            </div>
+
+            <div id="system-repair-issues" style="margin-top: 16px;">
+              ${issuesHtml}
+            </div>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  private async bindSystemRepairEvents() {
+    const scanBtn = document.getElementById('scan-system-repair-btn');
+    const fixBtn = document.getElementById('fix-system-repair-btn') as HTMLButtonElement | null;
+    const selectAll = document.getElementById('sr-select-all') as HTMLInputElement | null;
+
+    scanBtn?.addEventListener('click', async () => {
+      this.systemRepairScanning = true;
+      this.systemRepairIssues = [];
+      this.systemRepairSummary = { total: 0, high: 0, medium: 0, low: 0, fixed: 0 };
+      this.render();
+
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const resultStr = await invoke<string>('system_repair_scan');
+        const result = JSON.parse(resultStr);
+        this.systemRepairIssues = (result.issues || []).map((issue: any) => ({ ...issue, selected: true }));
+        this.systemRepairSummary = result.summary || { total: 0, high: 0, medium: 0, low: 0, fixed: 0 };
+      } catch (e) {
+        console.error('[SystemRepair] Scan failed:', e);
+        this.addLog('ERROR', `系统修复扫描失败: ${e}`);
+      } finally {
+        this.systemRepairScanning = false;
+        this.render();
+      }
+    });
+
+    fixBtn?.addEventListener('click', async () => {
+      const checkboxes = document.querySelectorAll('.sr-issue-cb:checked') as NodeListOf<HTMLInputElement>;
+      const ids = Array.from(checkboxes).map(cb => cb.dataset.id || '').filter(Boolean);
+      if (ids.length === 0) {
+        alert('请先选择要修复的问题');
+        return;
+      }
+      if (!confirm(`确定要修复选中的 ${ids.length} 个问题吗？`)) return;
+
+      this.systemRepairFixing = true;
+      this.render();
+
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const resultStr = await invoke<string>('system_repair_fix', { issueIds: ids });
+        const result = JSON.parse(resultStr);
+        this.systemRepairSummary.fixed += result.fixed_ids?.length || 0;
+        // 移除已修复项
+        this.systemRepairIssues = this.systemRepairIssues.filter(issue => !result.fixed_ids?.includes(issue.id));
+        this.systemRepairSummary.total = this.systemRepairIssues.length;
+        this.addLog('INFO', `系统修复: ${result.message}`);
+      } catch (e) {
+        console.error('[SystemRepair] Fix failed:', e);
+        this.addLog('ERROR', `系统修复失败: ${e}`);
+      } finally {
+        this.systemRepairFixing = false;
+        this.render();
+      }
+    });
+
+    selectAll?.addEventListener('change', () => {
+      const checkboxes = document.querySelectorAll('.sr-issue-cb') as NodeListOf<HTMLInputElement>;
+      checkboxes.forEach(cb => { cb.checked = selectAll.checked; });
+    });
+  }
+
+  private async bindProcessManagerEvents() {
+    const list = document.getElementById('pm-list');
+    const search = document.getElementById('pm-search') as HTMLInputElement;
+    const killBtn = document.getElementById('pm-kill-btn') as HTMLButtonElement;
+    const countEl = document.getElementById('pm-count');
+    if (!list) return;
+
+    let processes: Array<{pid: number, name: string, path: string}> = [];
+    let selectedPid: number | null = null;
+    let filterText = '';
+    let savedScrollTop = 0;
+
+    const loadProcesses = async (showLoading = false) => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        if (showLoading) {
+          list.innerHTML = `<div class="pm-loading">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity: 0.5;">
+              <circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>
+            </svg>
+            <div style="font-size: 13px;">正在加载进程列表...</div>
+          </div>`;
+        }
+        processes = await invoke('get_process_list');
+        // 保存滚动位置
+        savedScrollTop = list.scrollTop;
+        renderList();
+        // 恢复滚动位置
+        requestAnimationFrame(() => { list.scrollTop = savedScrollTop; });
+      } catch (e) {
+        list.innerHTML = `<div class="pm-empty">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity: 0.4;">
+            <circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/>
+          </svg>
+          <div style="font-size: 13px;">加载失败: ${e}</div>
+        </div>`;
+      }
+    };
+
+    const renderList = () => {
+      const filtered = processes.filter(p => {
+        if (!filterText) return true;
+        const q = filterText.toLowerCase();
+        return p.name.toLowerCase().includes(q)
+          || p.path.toLowerCase().includes(q)
+          || String(p.pid).includes(q);
+      });
+
+      if (countEl) countEl.textContent = `${filtered.length} / ${processes.length} 个进程`;
+
+      if (filtered.length === 0) {
+        list.innerHTML = `<div class="pm-empty">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity: 0.4;">
+            <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
+          </svg>
+          <div style="font-size: 13px;">无匹配进程</div>
+        </div>`;
+        return;
+      }
+
+      const rows = filtered.map(p => {
+        const name = p.name || 'Unknown';
+        const path = p.path || this.t('unknownPath');
+        const pid = p.pid;
+        const checked = selectedPid === pid ? 'checked' : '';
+        const selectedClass = selectedPid === pid ? 'selected' : '';
+        return `
+          <tr class="pm-row ${selectedClass}" data-pid="${pid}">
+            <td><input type="radio" name="pm-select" data-pid="${pid}" ${checked}></td>
+            <td class="pm-name-cell" title="${this.escapeHtml(name)}">${this.escapeHtml(name)}</td>
+            <td class="pm-pid-cell">${pid}</td>
+            <td class="pm-path-cell" title="${this.escapeHtml(path)}">${this.escapeHtml(path)}</td>
+          </tr>
+        `;
+      }).join('');
+
+      list.innerHTML = `
+        <table class="pm-table">
+          <thead>
+            <tr>
+              <th>${this.t('pmSelect')}</th>
+              <th>${this.t('pmName')}</th>
+              <th>${this.t('pmPid')}</th>
+              <th>${this.t('pmPath')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows}
+          </tbody>
+        </table>
+      `;
+
+      // 绑定行点击和单选按钮事件
+      list.querySelectorAll('.pm-row').forEach(el => {
+        el.addEventListener('click', (e) => {
+          // 如果点击的是单选按钮本身，由 change 事件处理
+          if ((e.target as HTMLElement).tagName === 'INPUT') return;
+          const row = el as HTMLElement;
+          const pid = Number(row.dataset.pid);
+          selectedPid = pid;
+          killBtn.disabled = false;
+          killBtn.style.opacity = '1';
+          renderList();
+        });
+      });
+
+      list.querySelectorAll('input[name="pm-select"]').forEach(radio => {
+        radio.addEventListener('change', (e) => {
+          const target = e.target as HTMLInputElement;
+          if (target.checked) {
+            selectedPid = Number(target.dataset.pid);
+            killBtn.disabled = false;
+            killBtn.style.opacity = '1';
+            renderList();
+          }
+        });
+      });
+    };
+
+    // 搜索过滤
+    if (search) {
+      search.addEventListener('input', () => {
+        filterText = search.value;
+        renderList();
+      });
+    }
+
+    // 杀进程按钮
+    killBtn.addEventListener('click', async () => {
+      if (selectedPid === null) return;
+      const proc = processes.find(p => p.pid === selectedPid);
+      if (!proc) return;
+      const confirmed = await this.showProcessKillConfirmDialog(proc.name, proc.pid);
+      if (!confirmed) return;
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('kill_process_via_driver', { pid: selectedPid });
+        setTimeout(loadProcesses, 500);
+        killBtn.disabled = true;
+        killBtn.style.opacity = '0.4';
+        selectedPid = null;
+      } catch (e) {
+        const msg = String(e);
+        if (msg.includes('管道不可用') || msg.includes('连接驱动')) {
+          alert('驱动防护未启用，无法使用驱动终止进程。\n请前往「设置 → 驱动防护」开启后重试。');
+        } else {
+          alert('驱动终止进程失败: ' + msg + '\n\n提示：请确认「设置 → 驱动防护」已开启，或尝试以管理员身份运行本程序。');
+        }
+      }
+    });
+
+    // 刷新按钮
+    const refreshBtn = document.getElementById('pm-refresh-btn');
+    if (refreshBtn) {
+      refreshBtn.addEventListener('click', () => loadProcesses(true));
+    }
+
+    // 初始加载
+    loadProcesses();
+    // 每 5 秒刷新
+    const interval = setInterval(loadProcesses, 5000);
+    // 页面离开时清理
+    const observer = new MutationObserver(() => {
+      if (!document.getElementById('pm-list')) {
+        clearInterval(interval);
+        observer.disconnect();
+      }
+    });
+    observer.observe(document.getElementById('app')!, { childList: true, subtree: true });
+  }
+
+  private showProcessKillConfirmDialog(processName: string, pid: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const modal = document.createElement('div');
+      modal.style.cssText = `position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+        background: rgba(0,0,0,0.25); display: flex; align-items: center; justify-content: center;
+        z-index: 10001; backdrop-filter: blur(4px);`;
+
+      modal.innerHTML = `
+        <div style="background: #FFFFFF; border-radius: 8px; max-width: 420px; width: 90%;
+          box-shadow: 0 32px 64px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.05);
+          animation: contentDialogShow 0.2s cubic-bezier(0.0,0.0,0.2,1);
+          font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
+          overflow: hidden;">
+          <div style="display: flex; align-items: flex-start; gap: 16px; padding: 24px 24px 12px 24px;">
+            <div style="width: 20px; height: 20px; flex-shrink: 0; margin-top: 2px;">
+              <svg viewBox="0 0 20 20" fill="none">
+                <circle cx="10" cy="10" r="9" fill="#D13438" stroke="#D13438" stroke-width="0.5"/>
+                <path d="M10 6v4M10 13v1" stroke="white" stroke-width="1.8" stroke-linecap="round"/>
+              </svg>
+            </div>
+            <div style="flex: 1;">
+              <div style="font-size: 18px; font-weight: 600; color: #1C1C1C; line-height: 1.3;">${this.t('processKillTitle')}</div>
+              <div style="font-size: 14px; color: #1C1C1C; margin-top: 8px; line-height: 1.5;">
+                希望使用驱动结束 <span style="font-weight: 500;">${this.escapeHtml(processName)}</span>（PID: ${pid}）吗？
+              </div>
+              <div style="font-size: 12px; color: #5F5F5F; margin-top: 12px; line-height: 1.5; background: #FFF3F3; padding: 10px 12px; border-radius: 6px; border: 1px solid #FFD7D7;">
+                <div style="margin-bottom: 4px;">${this.t('processKillContent')}</div>
+                <div style="color: #D13438; font-weight: 500;">${this.t('processKillWarning')}</div>
+              </div>
+            </div>
+          </div>
+          <div style="display: flex; gap: 8px; justify-content: flex-end; padding: 16px 24px 24px 24px;
+            background: #F3F3F3; border-top: 1px solid rgba(0,0,0,0.05);">
+            <button id="pk-cancel" style="padding: 6px 20px; border: 1px solid rgba(0,0,0,0.1); background: #FFFFFF;
+              border-radius: 4px; font-size: 14px; font-family: inherit; cursor: pointer; color: #1C1C1C;
+              transition: background 0.1s;">${this.t('cancel')}</button>
+            <button id="pk-confirm" style="padding: 6px 20px; border: none; background: #D13438;
+              border-radius: 4px; font-size: 14px; font-weight: 500; font-family: inherit; cursor: pointer;
+              color: white; transition: background 0.1s;">${this.t('confirm')}</button>
+          </div>
+        </div>
+        <style>
+          @keyframes contentDialogShow { from { opacity: 0; transform: scale(0.9); } to { opacity: 1; transform: scale(1); } }
+        </style>`;
+
+      document.body.appendChild(modal);
+
+      modal.querySelector('#pk-cancel')!.addEventListener('click', () => {
+        document.body.removeChild(modal);
+        resolve(false);
+      });
+      modal.querySelector('#pk-confirm')!.addEventListener('click', () => {
+        document.body.removeChild(modal);
+        resolve(true);
+      });
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+          document.body.removeChild(modal);
+          resolve(false);
+        }
+      });
+    });
+  }
+
+  private async bindEdrReportsEvents() {
+    const list = document.getElementById('edr-reports-list');
+    const countEl = document.getElementById('edr-reports-count');
+    if (!list) return;
+
+    try {
+      const reports = await invoke<string>('list_edr_reports');
+      const items: Array<{file_name: string, report_code: string, process_name: string, pid: number, total_score: number, result: string, report_time: string}> = JSON.parse(reports);
+
+      if (countEl) {
+        countEl.textContent = `${items.length} 个报告`;
+      }
+
+      if (items.length === 0) {
+        list.innerHTML = `
+          <div style="text-align: center; color: var(--text-secondary); padding: 60px 20px;">
+            <div style="font-size: 14px; margin-bottom: 8px;">${this.t('noReports')}</div>
+          </div>
+        `;
+        return;
+      }
+
+      list.innerHTML = items.map(item => `
+        <div class="edr-report-card" data-code="${this.escapeHtml(item.report_code)}" data-pid="${item.pid}" data-process="${this.escapeHtml(item.process_name)}"
+             style="display: flex; align-items: center; gap: 14px; padding: 14px 16px; margin-bottom: 10px; border: 1px solid var(--border-color); border-radius: 8px; cursor: pointer; background: var(--bg-secondary); transition: background 0.15s;">
+          <div style="width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-weight: 700; color: white; font-size: 14px; background: ${item.total_score >= 100 ? '#ff4d4f' : item.total_score >= 70 ? '#faad14' : '#2f8cff'};">
+            ${item.total_score || 0}
+          </div>
+          <div style="flex: 1; min-width: 0;">
+            <div style="font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 2px; display: flex; align-items: center; gap: 8px;">
+              <span>${this.escapeHtml(item.process_name || '未知进程')}</span>
+              <span style="font-size: 11px; color: var(--text-secondary); font-weight: 400;">PID: ${item.pid}</span>
+            </div>
+            <div style="font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+              ${this.escapeHtml(item.report_time || '未知时间')} · ${this.escapeHtml(item.result || '未知')} · ${this.escapeHtml(item.report_code)}
+            </div>
+          </div>
+          <div style="font-size: 13px; color: var(--text-secondary); flex-shrink: 0;">${this.t('viewReport')}</div>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-tertiary); flex-shrink: 0;">
+            <path d="M9 18l6-6-6-6"/>
+          </svg>
+        </div>
+      `).join('');
+
+      list.querySelectorAll('.edr-report-card').forEach(card => {
+        card.addEventListener('click', () => {
+          const process = (card as HTMLElement).dataset.process || '';
+          const pid = parseInt((card as HTMLElement).dataset.pid || '0');
+          const code = (card as HTMLElement).dataset.code || '';
+          invoke('show_edr_behavior_chain', {
+            process,
+            path: '',
+            score: 0,
+            pid,
+            parent: 0,
+            code
+          }).catch((err: any) => {
+            console.error('Failed to open EDR chain window:', err);
+          });
+        });
+      });
+    } catch (e) {
+      console.error('Failed to load EDR reports:', e);
+      list.innerHTML = `<div style="text-align: center; color: #ff4d4f; padding: 60px 20px;">加载失败: ${this.escapeHtml(String(e))}</div>`;
+    }
+  }
+
+  private escapeHtml(text: string): string {
+    if (!text) return '';
+    return String(text)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  // 初始化扫描结果右键菜单（全局只初始化一次）
+  private initScanResultContextMenu() {
+    if (this.scanResultContextMenu) return;
+
+    const menu = document.createElement('div');
+    menu.className = 'custom-context-menu';
+    menu.id = 'scan-result-context-menu';
+    menu.innerHTML = `
+      <div class="context-menu-item" data-action="open-location">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+        </svg>
+        <span>${this.t('openFileLocation')}</span>
+      </div>
+    `;
+    document.body.appendChild(menu);
+    this.scanResultContextMenu = menu;
+
+    let currentFilePath = '';
+
+    // 点击菜单项
+    menu.addEventListener('click', async (e) => {
+      const item = (e.target as HTMLElement).closest('.context-menu-item') as HTMLElement | null;
+      if (!item || !currentFilePath) return;
+
+      if (item.dataset.action === 'open-location') {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          await invoke('open_file_location', { filePath: currentFilePath });
+        } catch (err) {
+          console.error('[ContextMenu] Failed to open file location:', err);
+          alert('打开文件所在位置失败: ' + err);
+        }
+      }
+      this.hideScanResultContextMenu();
+    });
+
+    // 通过事件委托监听扫描结果项的右键
+    document.addEventListener('contextmenu', (e) => {
+      const item = (e.target as HTMLElement).closest('.scan-simple-item') as HTMLElement | null;
+      if (!item) return;
+
+      const path = item.dataset.path || '';
+      if (!path) return;
+
+      e.preventDefault();
+      currentFilePath = path;
+      this.showScanResultContextMenu(e.clientX, e.clientY);
+    });
+
+    // 点击空白处关闭菜单
+    document.addEventListener('click', () => {
+      this.hideScanResultContextMenu();
+    });
+
+    // 窗口大小变化/滚动时关闭菜单
+    window.addEventListener('resize', () => {
+      this.hideScanResultContextMenu();
+    });
+    window.addEventListener('scroll', () => {
+      this.hideScanResultContextMenu();
+    }, true);
+  }
+
+  private showScanResultContextMenu(x: number, y: number) {
+    if (!this.scanResultContextMenu) return;
+
+    const menu = this.scanResultContextMenu;
+    menu.classList.add('open');
+
+    // 边界检测，避免菜单超出窗口
+    requestAnimationFrame(() => {
+      const rect = menu.getBoundingClientRect();
+      const winW = window.innerWidth;
+      const winH = window.innerHeight;
+      let left = x;
+      let top = y;
+
+      if (left + rect.width > winW) {
+        left = winW - rect.width - 8;
+      }
+      if (top + rect.height > winH) {
+        top = winH - rect.height - 8;
+      }
+      if (left < 0) left = 8;
+      if (top < 0) top = 8;
+
+      menu.style.left = `${left}px`;
+      menu.style.top = `${top}px`;
+    });
+  }
+
+  private hideScanResultContextMenu() {
+    this.scanResultContextMenu?.classList.remove('open');
+  }
+
+  private async bindJunkCleanerEvents() {
+    const scanBtn = document.getElementById('scan-junk-btn');
+    const cleanBtn = document.getElementById('clean-junk-btn') as HTMLButtonElement | null;
+    if (!scanBtn) return;
+
+    // 格式化字节数
+    const fmtSize = (bytes: number): string => {
+      if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(2)} GB`;
+      if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(2)} MB`;
+      if (bytes >= 1024) return `${(bytes / 1024).toFixed(2)} KB`;
+      return `${bytes} B`;
+    };
+
+    scanBtn.addEventListener('click', async () => {
+      const statusEl = document.getElementById('cleaner-status');
+      const progress = document.getElementById('junk-progress');
+      const progressBar = document.getElementById('junk-progress-bar');
+      const progressText = document.getElementById('junk-progress-text');
+      const results = document.getElementById('junk-results');
+      const fileList = document.getElementById('junk-file-list');
+      const totalSize = document.getElementById('junk-total-size');
+
+      // 收集选中的类别
+      const cbs = document.querySelectorAll('.junk-cb:checked');
+      const categories: string[] = [];
+      cbs.forEach(cb => categories.push((cb as HTMLElement).dataset.category || ''));
+
+      if (categories.length === 0) {
+        if (statusEl) { statusEl.style.display = ''; statusEl.textContent = '请至少选择一项扫描类别'; statusEl.style.color = '#D13438'; }
+        return;
+      }
+
+      // 重置UI
+      if (statusEl) { statusEl.style.display = ''; statusEl.textContent = '正在扫描...'; statusEl.style.color = 'var(--text-secondary)'; }
+      if (progress) progress.style.display = '';
+      if (progressBar) progressBar.style.width = '0%';
+      if (progressText) progressText.textContent = '初始化扫描...';
+      if (results) results.style.display = 'none';
+      if (cleanBtn) { cleanBtn.disabled = true; cleanBtn.style.opacity = '0.5'; }
+
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const result = await invoke<any>('scan_junk_command', { categories });
+
+        if (progressBar) progressBar.style.width = '100%';
+        if (progressText) progressText.textContent = '扫描完成';
+
+        // 显示结果
+        let fileItems: any[] = [];
+        if (results && fileList && totalSize) {
+          results.style.display = '';
+          fileItems = result.items || [];
+          const total = fileItems.reduce((s: number, i: any) => s + i.size, 0);
+          totalSize.textContent = `共 ${fmtSize(total)}`;
+
+          if (fileItems.length === 0) {
+            fileList.innerHTML = '<div style="padding: 16px 0; text-align: center; color: var(--text-secondary); font-size: 13px;">未发现垃圾文件</div>';
+          } else {
+            fileList.innerHTML = fileItems.map((item: any, i: number) => `
+              <div style="display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border-color); font-size: 13px;">
+                <span style="color: var(--text-secondary); width: 24px; text-align: right; flex-shrink: 0;">${i+1}</span>
+                <span style="flex: 1; color: var(--text-primary); word-break: break-all;">${item.path}</span>
+                <span style="color: var(--text-secondary); white-space: nowrap; flex-shrink: 0;">${fmtSize(item.size)}</span>
+              </div>
+            `).join('');
+          }
+        }
+
+        // 启用清理按钮
+        if (fileItems.length > 0 && cleanBtn) { cleanBtn.disabled = false; cleanBtn.style.opacity = '1'; }
+        if (statusEl) { statusEl.textContent = `扫描完成，发现 ${fileItems.length} 个垃圾文件`; statusEl.style.color = '#107C10'; }
+
+        // 更新类别大小
+        result.categories?.forEach((cat: any) => {
+          const el = document.querySelector(`.junk-size[data-category="${cat.name}"]`) || 
+                      document.querySelector(`label[data-category="${cat.name}"] .junk-size`);
+          if (el) el.textContent = fmtSize(cat.size);
+        });
+
+        setTimeout(() => { if (progress) progress.style.display = 'none'; }, 2000);
+      } catch (e: any) {
+        console.error('[Cleaner] Scan failed:', e);
+        if (statusEl) { statusEl.textContent = `扫描失败: ${e}`; statusEl.style.color = '#D13438'; }
+        if (progress) progress.style.display = 'none';
+      }
+    });
+
+    cleanBtn?.addEventListener('click', async () => {
+      const statusEl = document.getElementById('cleaner-status');
+      const progress = document.getElementById('junk-progress');
+      const progressBar = document.getElementById('junk-progress-bar');
+      const progressText = document.getElementById('junk-progress-text');
+
+      if (!statusEl || !confirm('确定要清理选中的垃圾文件吗？此操作不可恢复。')) return;
+
+      // 收集选中的类别
+      const cbs = document.querySelectorAll('.junk-cb:checked');
+      const categories: string[] = [];
+      cbs.forEach(cb => categories.push((cb as HTMLElement).dataset.category || ''));
+
+      statusEl.style.display = ''; statusEl.textContent = '正在清理...'; statusEl.style.color = 'var(--text-secondary)';
+      if (progress) progress.style.display = '';
+      if (progressBar) progressBar.style.width = '0%';
+      if (progressText) progressText.textContent = '正在清理垃圾文件...';
+      if (cleanBtn) { cleanBtn.disabled = true; cleanBtn.style.opacity = '0.5'; }
+
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const result = await invoke<any>('clean_junk_command', { categories });
+
+        if (progressBar) progressBar.style.width = '100%';
+        if (progressText) progressText.textContent = '清理完成';
+        statusEl.textContent = `清理完成，释放空间: ${fmtSize(result.freed_bytes || 0)}`;
+        statusEl.style.color = '#107C10';
+
+        // 隐藏结果
+        const results = document.getElementById('junk-results');
+        if (results) results.style.display = 'none';
+
+        // 重置大小显示
+        document.querySelectorAll('.junk-size').forEach(el => el.textContent = '-');
+
+        setTimeout(() => { if (progress) progress.style.display = 'none'; }, 2000);
+      } catch (e: any) {
+        console.error('[Cleaner] Clean failed:', e);
+        statusEl.textContent = `清理失败: ${e}`;
+        statusEl.style.color = '#D13438';
+        if (progress) progress.style.display = 'none';
+        if (cleanBtn) { cleanBtn.disabled = false; cleanBtn.style.opacity = '1'; }
+      }
+    });
+  }
+
+  private renderIconSettingsModal(): string {
+    const getIconPreview = (riskLevel: 'secure' | 'lowRisk' | 'mediumRisk' | 'highRisk') => {
+      const iconPath = this.animeStyleManager.getCustomIcon(riskLevel);
+      if (iconPath) {
+        // 使用 data 属性标记，稍后异步加载
+        return `<img data-icon-preview="${riskLevel}" data-icon-path="${iconPath}" style="width: 40px; height: 40px; object-fit: contain; border-radius: 50%;">`;
+      }
+      return `<div style="width: 40px; height: 40px; background: var(--border-color); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--text-secondary);">无</div>`;
+    };
+
+    return `
+      <div id="icon-settings-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
+        <div class="modal-content" style="background: var(--bg-card); border-radius: var(--radius-lg); padding: 24px; width: 400px; max-width: 90%; box-shadow: var(--shadow-lg);">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h3 style="margin: 0; font-size: 16px; color: var(--text-primary);">自定义状态图标</h3>
+            <button id="close-icon-modal" style="background: none; border: none; cursor: pointer; padding: 4px; color: var(--text-secondary);">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+          </div>
+
+          <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 20px;">
+            <div style="display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px; border: 1px solid var(--border-color); border-radius: var(--radius-md);">
+              <label style="font-size: 13px; color: var(--text-secondary);">安全状态</label>
+              ${getIconPreview('secure')}
+              <div style="display: flex; gap: 6px; width: 100%;">
+                <button class="btn-fluent-secondary" id="modal-icon-secure-btn" style="flex: 1; font-size: 11px; padding: 4px 8px;">选择</button>
+                ${this.animeStyleManager.getCustomIcon('secure') ? '<button class="btn-fluent-danger" id="modal-clear-icon-secure" style="font-size: 11px; padding: 4px 8px;">清除</button>' : ''}
+              </div>
+            </div>
+
+            <div style="display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px; border: 1px solid var(--border-color); border-radius: var(--radius-md);">
+              <label style="font-size: 13px; color: var(--text-secondary);">低风险</label>
+              ${getIconPreview('lowRisk')}
+              <div style="display: flex; gap: 6px; width: 100%;">
+                <button class="btn-fluent-secondary" id="modal-icon-lowrisk-btn" style="flex: 1; font-size: 11px; padding: 4px 8px;">选择</button>
+                ${this.animeStyleManager.getCustomIcon('lowRisk') ? '<button class="btn-fluent-danger" id="modal-clear-icon-lowrisk" style="font-size: 11px; padding: 4px 8px;">清除</button>' : ''}
+              </div>
+            </div>
+
+            <div style="display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px; border: 1px solid var(--border-color); border-radius: var(--radius-md);">
+              <label style="font-size: 13px; color: var(--text-secondary);">中风险</label>
+              ${getIconPreview('mediumRisk')}
+              <div style="display: flex; gap: 6px; width: 100%;">
+                <button class="btn-fluent-secondary" id="modal-icon-mediumrisk-btn" style="flex: 1; font-size: 11px; padding: 4px 8px;">选择</button>
+                ${this.animeStyleManager.getCustomIcon('mediumRisk') ? '<button class="btn-fluent-danger" id="modal-clear-icon-mediumrisk" style="font-size: 11px; padding: 4px 8px;">清除</button>' : ''}
+              </div>
+            </div>
+
+            <div style="display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px; border: 1px solid var(--border-color); border-radius: var(--radius-md);">
+              <label style="font-size: 13px; color: var(--text-secondary);">高风险</label>
+              ${getIconPreview('highRisk')}
+              <div style="display: flex; gap: 6px; width: 100%;">
+                <button class="btn-fluent-secondary" id="modal-icon-highrisk-btn" style="flex: 1; font-size: 11px; padding: 4px 8px;">选择</button>
+                ${this.animeStyleManager.getCustomIcon('highRisk') ? '<button class="btn-fluent-danger" id="modal-clear-icon-highrisk" style="font-size: 11px; padding: 4px 8px;">清除</button>' : ''}
+              </div>
+            </div>
+          </div>
+
+          <button class="btn-fluent-primary" id="save-icon-settings" style="width: 100%;">完成</button>
+        </div>
+      </div>
+    `;
+  }
+
+  // 加载并应用禁用一滑到底设置
+  loadContinuousScrollSetting(): void {
+    const stored = localStorage.getItem('disable_continuous_scroll');
+    this.disableContinuousScroll = stored === 'true';
+    // 不在构造函数中应用，等 DOM 就绪后在 render 中应用
+  }
+
+  // 加载开机自启动状态
+  private async loadAutoStartState(): Promise<void> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      this.autoStartEnabled = await invoke('is_in_startup_folder') as boolean;
+      // 如果设置页已打开，更新复选框状态
+      const checkbox = document.getElementById('auto-start-checkbox') as HTMLInputElement;
+      if (checkbox) {
+        checkbox.checked = this.autoStartEnabled;
+      }
+    } catch (err) {
+      console.error('[Settings] Failed to load auto-start state:', err);
+    }
+  }
+
+  // 加载扫描敏感度设置（仅 localStorage）
+  private loadScanSensitivity(): void {
+    const saved = localStorage.getItem('scan_sensitivity');
+    this.scanSensitivity = (saved === 'low' || saved === 'high') ? saved : 'high';
+    console.log('[Scanner] Loaded sensitivity:', this.scanSensitivity);
+  }
+
+  // 应用或清除一滑到底设置
+  applyContinuousScrollSetting(): void {
+    if (this.disableContinuousScroll) {
+      this.disableScrollSnap();
+    } else {
+      this.enableScrollSnap();
+    }
+  }
+
+  // 禁用一滑到底：各页面独立滚动
+  private disableScrollSnap(): void {
+    const container = document.querySelector('.scroll-container') as HTMLElement;
+    if (!container) return;
+
+    // 让当前页面独立滚动
+    const activeSection = document.getElementById(`section-${this.currentPage}`) as HTMLElement;
+    
+    container.style.overflow = 'hidden';
+    container.style.scrollSnapType = 'none';
+    container.style.height = '100%';
+
+    // 所有 section 固定为视口高度，当前页面可滚动
+    document.querySelectorAll('.page-section').forEach(section => {
+      const el = section as HTMLElement;
+      el.style.minHeight = '';
+      el.style.maxHeight = 'calc(100vh - 48px)';
+      el.style.overflowY = el.id === `section-${this.currentPage}` ? 'auto' : 'hidden';
+    });
+
+    // 当前页面如果存在，确保它能滚动
+    if (activeSection) {
+      activeSection.style.overflowY = 'auto';
+    }
+  }
+
+  // 启用一滑到底：恢复默认滚动
+  private enableScrollSnap(): void {
+    const container = document.querySelector('.scroll-container') as HTMLElement;
+    if (!container) return;
+
+    container.style.overflow = '';
+    container.style.scrollSnapType = '';
+    container.style.height = '';
+
+    document.querySelectorAll('.page-section').forEach(section => {
+      const el = section as HTMLElement;
+      el.style.minHeight = '';
+      el.style.maxHeight = '';
+      el.style.overflowY = '';
+    });
+  }
+
+  // 设置禁用一滑到底（由开关触发）
+  setContinuousScrollDisabled(disabled: boolean): void {
+    this.disableContinuousScroll = disabled;
+    localStorage.setItem('disable_continuous_scroll', String(disabled));
+    this.applyContinuousScrollSetting();
+  }
+
+  // 检查是否禁用一滑到底
+  isContinuousScrollDisabled(): boolean {
+    return this.disableContinuousScroll;
+  }
+
+  private renderSettingsSection(): string {
+    const themes = [
+      { id: 'blue', name: this.t('themeBlue') },
+      { id: 'purple', name: this.t('themePurple') },
+      { id: 'green', name: this.t('themeGreen') },
+      { id: 'orange', name: this.t('themeOrange') },
+      { id: 'pink', name: this.t('themePink') },
+      { id: 'teal', name: this.t('themeTeal') },
+    ];
+
+    const themeModes = [
+      { id: 'classic', name: this.t('themeClassic') },
+      { id: 'colorful', name: this.t('themeColorful') },
+      { id: 'dark', name: this.t('themeDark') },
+    ];
+
+    const currentLang = this.localizationManager.getLanguage();
+
+    return `
+      <section class="page-section" id="section-settings">
+        <div class="page-header">
+          <div class="page-title">${this.t('settingsTitle')}</div>
+          <div class="page-subtitle">${this.t('settingsSubtitle')}</div>
+        </div>
+
+        <div class="settings-list">
+          <!-- 防护设置组 -->
+          <div class="setting-group">
+            <div class="setting-group-title">${this.t('protectionSettings')}</div>
+            ${this.isMsStore ? '' : `
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('driverProtection')}</div>
+                <div class="setting-desc">${this.t('driverProtectionDesc')}</div>
+              </div>
+              <input type="checkbox" class="setting-checkbox" id="driver-protection-checkbox" ${this.driverProtectionManager.isEnabled() ? 'checked' : ''}>
+            </div>
+            `}
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('autoStart')}</div>
+                <div class="setting-desc">${this.t('autoStartDesc')}</div>
+              </div>
+              <input type="checkbox" class="setting-checkbox" id="auto-start-checkbox" ${this.autoStartEnabled ? 'checked' : ''}>
+            </div>
+
+            ${this.isMsStore ? '' : `
+            <!-- 基础防护设置 -->
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('basicProtection')}</div>
+                <div class="setting-desc">${this.t('basicProtectionDesc')}</div>
+              </div>
+              <input type="checkbox" class="setting-checkbox" id="basic-protection-checkbox" ${this.basicProtectionManager.isEnabled() ? 'checked' : ''}>
+            </div>
+
+            <!-- 文件防护设置 -->
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">文件防护</div>
+                <div class="setting-desc">监控下载、桌面、文档、临时目录等常见区域的文件变动，发现威胁后自动隔离并弹窗提示</div>
+              </div>
+              <input type="checkbox" class="setting-checkbox" id="file-protection-checkbox" ${this.fileProtectionManager.isEnabled() ? 'checked' : ''}>
+            </div>
+            `}
+
+            ${this.isMsStore ? '' : `
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('silentMode')}</div>
+                <div class="setting-desc">${this.t('silentModeDesc')}</div>
+              </div>
+              <input type="checkbox" class="setting-checkbox" id="silent-mode-checkbox" ${this.silentModeManager.isEnabled() ? 'checked' : ''}>
+            </div>
+            `}
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('scriptProtection')}</div>
+                <div class="setting-desc">${this.t('scriptProtectionDesc')}</div>
+              </div>
+              <input type="checkbox" class="setting-checkbox" id="script-protection-checkbox" ${this.scriptProtectionManager.isEnabled() ? 'checked' : ''}>
+            </div>
+
+            ${this.isMsStore ? '' : `
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('bootSectorProtection')}</div>
+                <div class="setting-desc">${this.t('bootSectorProtectionDesc')}</div>
+              </div>
+              <input type="checkbox" class="setting-checkbox" id="boot-protection-checkbox" ${this.protectionTypeManager.isBootEnabled() ? 'checked' : ''} ${!this.driverProtectionManager.isEnabled() ? 'disabled' : ''}>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('registryProtection')}</div>
+                <div class="setting-desc">${this.t('registryProtectionDesc')}</div>
+              </div>
+              <input type="checkbox" class="setting-checkbox" id="registry-protection-checkbox" ${this.protectionTypeManager.isRegistryEnabled() ? 'checked' : ''} ${!this.driverProtectionManager.isEnabled() ? 'disabled' : ''}>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('ransomwareProtection')}</div>
+                <div class="setting-desc">${this.t('ransomwareProtectionDesc')}</div>
+              </div>
+              <input type="checkbox" class="setting-checkbox" id="ransomware-protection-checkbox" ${this.protectionTypeManager.isRansomwareEnabled() ? 'checked' : ''}>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('processProtection')}</div>
+                <div class="setting-desc">${this.t('processProtectionDesc')}</div>
+              </div>
+              <input type="checkbox" class="setting-checkbox" id="process-protection-checkbox" ${this.protectionTypeManager.isProcessEnabled() ? 'checked' : ''} ${!this.driverProtectionManager.isEnabled() ? 'disabled' : ''}>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('memoryProtection')}</div>
+                <div class="setting-desc">${this.t('memoryProtectionDesc')}</div>
+              </div>
+              <input type="checkbox" class="setting-checkbox" id="memory-protection-checkbox" ${this.protectionTypeManager.isMemoryEnabled() ? 'checked' : ''} ${!this.driverProtectionManager.isEnabled() ? 'disabled' : ''}>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">PUA 捆绑软件拦截</div>
+                <div class="setting-desc">拦截 2345、快压、鲁大师、驱动精灵等捆绑软件，挂起进程后询问用户</div>
+              </div>
+              <input type="checkbox" class="setting-checkbox" id="pua-protection-checkbox" ${this.puaProtectionEnabled ? 'checked' : ''}>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">可疑文件拦截</div>
+                <div class="setting-desc">当模型检测概率高于 80% 时挂起进程，发送至云端沙箱进行深度分析</div>
+              </div>
+              <input type="checkbox" class="setting-checkbox" id="suspicious-intercept-checkbox" ${this.suspiciousInterceptEnabled ? 'checked' : ''}>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">启用新拦截窗口</div>
+                <div class="setting-desc">驱动防护拦截时使用主程序的 Fluent 窗口代替系统弹窗，支持用户交互决策</div>
+              </div>
+              <input type="checkbox" class="setting-checkbox" id="new-intercept-window-checkbox" ${this.driverProtectionManager.isNewInterceptWindowEnabled() ? 'checked' : ''} ${!this.driverProtectionManager.isEnabled() ? 'disabled' : ''}>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">通知模式</div>
+                <div class="setting-desc">开启后驱动防护威胁直接拦截并通过通知提示，基础防护拦截改为系统通知提示，均不再弹出拦截窗口</div>
+              </div>
+              <input type="checkbox" class="setting-checkbox" id="notification-mode-checkbox" ${this.notificationModeManager.isEnabled() ? 'checked' : ''}>
+            </div>
+
+            <!-- 自动沙盒分析 -->
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">自动沙盒分析</div>
+                <div class="setting-desc">启用后检测到可疑文件将通过隔离沙箱进行运行</div>
+              </div>
+              <input type="checkbox" class="setting-checkbox" id="sandbox-analysis-checkbox" ${this.sandboxAnalysisEnabled ? 'checked' : ''}>
+            </div>
+
+            <!-- 沙盒环境状态 -->
+            <div class="setting-item" id="sandbox-analysis-env-row" style="${this.sandboxAnalysisEnabled ? '' : 'display: none;'}">
+              <div class="setting-info">
+                <div class="setting-title">沙盒环境状态</div>
+                <div class="setting-desc" id="sandbox-env-status">${this.sandboxEnvStatus || '未配置'}</div>
+              </div>
+            </div>
+
+            <!-- 沙盒白名单记录 -->
+            <div class="setting-item" id="sandbox-whitelist-row" style="${this.sandboxAnalysisEnabled ? '' : 'display: none;'}">
+              <div class="setting-info">
+                <div class="setting-title">沙盒分析白名单</div>
+                <div class="setting-desc" id="sandbox-whitelist-desc">已信任 0 个文件</div>
+              </div>
+              <button class="btn-fluent-secondary" id="clear-sandbox-whitelist-btn">清除记录</button>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">浏览器防护</div>
+                <div class="setting-desc">拦截银狐病毒钓鱼网站和恶意域名，需要 Edge 浏览器支持</div>
+              </div>
+              <button class="btn-fluent-secondary" id="open-browser-protection">
+                打开浏览器
+              </button>
+            </div>
+            `}
+            
+            ${this.isMsStore ? '' : `
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('whitelistMgmt')}</div>
+                <div class="setting-desc">${this.t('whitelistMgmtDesc')}</div>
+              </div>
+              <button class="btn-fluent-secondary" id="whitelist-mgmt-btn">管理</button>
+            </div>
+            `}
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">病毒家族规则库</div>
+                <div class="setting-desc">查看已加载的病毒家族检测规则</div>
+              </div>
+              <button class="btn-fluent-secondary" id="rules-library-btn">查看</button>
+            </div>
+          </div>
+
+          <!-- 个性化设置 -->
+          <div class="setting-group">
+            <div class="setting-group-title">个性化</div>
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">桌面宠物</div>
+                <div class="setting-desc">在桌面右下角显示洛天依 Live2D 桌宠，可随意拖动位置</div>
+              </div>
+              <input type="checkbox" class="setting-checkbox" id="desktop-pet-checkbox" ${this.desktopPetEnabled ? 'checked' : ''}>
+            </div>
+          </div>
+
+          <!-- 扫描设置组 -->
+          <div class="setting-group">
+            <div class="setting-group-title">${this.t('scanSettings')}</div>
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('scanSensitivity')}</div>
+                <div class="setting-desc">${this.t('scanSensitivityDesc')}</div>
+              </div>
+              <select class="select" id="scan-sensitivity-select" style="width: 160px; display:none;">
+                <option value="high" ${this.scanSensitivity === 'high' ? 'selected' : ''}>${this.t('highSensitivity')}</option>
+                <option value="low" ${this.scanSensitivity === 'low' ? 'selected' : ''}>${this.t('lowSensitivity')}</option>
+              </select>
+              ${this.renderCustomSelect(
+                [{value:'high', label:this.t('highSensitivity')}, {value:'low', label:this.t('lowSensitivity')}],
+                this.scanSensitivity,
+                'scan-sensitivity-custom',
+                '160px'
+              )}
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('infectorDetection')}</div>
+                <div class="setting-desc">${this.t('infectorDetectionDesc')}</div>
+              </div>
+              <input type="checkbox" class="setting-checkbox" id="infector-detection-checkbox" ${this.infectorDetectionManager.isEnabled() ? 'checked' : ''}>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('skipLocalRules')}</div>
+                <div class="setting-desc">${this.t('skipLocalRulesDesc')}</div>
+              </div>
+              <input type="checkbox" class="setting-checkbox" id="skip-local-rules-checkbox" ${this.skipLocalRulesManager.isEnabled() ? 'checked' : ''}>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('virusFamilyAnalysis')}</div>
+                <div class="setting-desc">${this.t('virusFamilyAnalysisDesc')}</div>
+              </div>
+              <input type="checkbox" class="setting-checkbox" id="virus-family-checkbox" ${this.virusFamilyAnalysisManager.isEnabled() ? 'checked' : ''}>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('scanBatchSize')}</div>
+                <div class="setting-desc">${this.t('scanBatchSizeDesc')}</div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <input type="range" class="setting-slider" id="scan-batch-size-slider" min="5" max="100" value="${this.scanBatchSizeManager.getBatchSize()}" style="width: 120px;">
+                <span id="scan-batch-size-value" style="font-size: 14px; color: var(--text-primary); min-width: 30px;">${this.scanBatchSizeManager.getBatchSize()}</span>
+              </div>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('scriptScanEngine')}</div>
+                <div class="setting-desc">${this.t('scriptScanEngineDesc')}</div>
+              </div>
+              <input type="checkbox" class="setting-checkbox" id="script-scan-checkbox" ${this.scriptScanManager?.isEnabled() ? 'checked' : ''}>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('archiveScan')}</div>
+                <div class="setting-desc">${this.t('archiveScanDesc')}</div>
+              </div>
+              <input type="checkbox" class="setting-checkbox" id="archive-scan-checkbox" ${this.archiveScanManager?.isEnabled() ? 'checked' : ''}>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('cloudHashCheck')}</div>
+                <div class="setting-desc">${this.t('cloudHashCheckDesc')}</div>
+              </div>
+              <input type="checkbox" class="setting-checkbox" id="cloud-hash-checkbox" ${this.cloudHashManager?.isEnabled() ? 'checked' : ''}>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('auxiliaryCloudScan')}</div>
+                <div class="setting-desc">${this.t('auxiliaryCloudScanDesc')}</div>
+              </div>
+              <input type="checkbox" class="setting-checkbox" id="auxiliary-cloud-scan-checkbox" ${this.auxiliaryCloudScanManager.isEnabled() ? 'checked' : ''}>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">云端自动深度分析</div>
+                <div class="setting-desc">引擎未检出时自动提交云端沙箱深度分析；关闭后扫描完全跳过深度分析，提升扫描速度</div>
+              </div>
+              <input type="checkbox" class="setting-checkbox" id="cloud-deep-analysis-checkbox" ${this.cloudDeepAnalysisManager.isEnabled() ? 'checked' : ''}>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('contextMenuScan')}</div>
+                <div class="setting-desc">${this.t('contextMenuScanDesc')}</div>
+              </div>
+              <input type="checkbox" class="setting-checkbox" id="context-menu-checkbox" ${this.contextMenuManager?.isEnabled() ? 'checked' : ''}>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('logUpload')}</div>
+                <div class="setting-desc">${this.t('logUploadDesc')}</div>
+              </div>
+              <input type="checkbox" class="setting-checkbox" id="log-upload-checkbox" ${this.logUploadManager.isEnabled() ? 'checked' : ''}>
+            </div>
+          </div>
+
+          <!-- 外观设置组 -->
+          <div class="setting-group">
+            <div class="setting-group-title">${this.t('appearanceSettings')}</div>
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('themeMode')}</div>
+                <div class="setting-desc">${this.t('themeModeDesc')}</div>
+              </div>
+              <select class="select" id="theme-mode-select" style="display:none;">
+                ${themeModes.map(m => `
+                  <option value="${m.id}" ${this.themeManager.getThemeMode() === m.id ? 'selected' : ''}>
+                    ${m.name}
+                  </option>
+                `).join('')}
+              </select>
+              ${this.renderCustomSelect(themeModes.map(m => ({value: m.id, label: m.name})), this.themeManager.getThemeMode(), 'theme-mode-custom', '160px')}
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('colorTheme')}</div>
+                <div class="setting-desc">${this.t('colorThemeDesc')}</div>
+              </div>
+              <select class="select" id="theme-select" style="display:none;">
+                ${themes.map(t => `
+                  <option value="${t.id}" ${this.themeManager.getTheme() === t.id ? 'selected' : ''}>
+                    ${t.name}
+                  </option>
+                `).join('')}
+              </select>
+              ${this.renderCustomSelect(themes.map(t => ({value: t.id, label: t.name})), this.themeManager.getTheme(), 'theme-custom', '160px')}
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('displayLanguage')}</div>
+                <div class="setting-desc">${this.t('displayLanguageDesc')}</div>
+              </div>
+              <select class="select" id="language-select" style="display:none;">
+                <option value="zh-CN" ${currentLang === 'zh-CN' ? 'selected' : ''}>${this.t('langZhCN')}</option>
+                <option value="zh-TW" ${currentLang === 'zh-TW' ? 'selected' : ''}>${this.t('langZhTW')}</option>
+                <option value="en-US" ${currentLang === 'en-US' ? 'selected' : ''}>${this.t('langEnUS')}</option>
+              </select>
+              ${this.renderCustomSelect([{value:'zh-CN', label:this.t('langZhCN')}, {value:'zh-TW', label:this.t('langZhTW')}, {value:'en-US', label:this.t('langEnUS')}], currentLang, 'language-custom', '160px')}
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('windowBackdrop')}</div>
+                <div class="setting-desc">${this.t('windowBackdropDesc')}</div>
+              </div>
+              <select class="select" id="backdrop-select" style="display:none;">
+                <option value="none" ${this.animeStyleManager.getBackdrop() === 'none' ? 'selected' : ''}>${this.t('windowBackdropNone')}</option>
+                <option value="acrylic" ${this.animeStyleManager.getBackdrop() === 'acrylic' ? 'selected' : ''}>${this.t('windowBackdropAcrylic')}</option>
+                <option value="mica" ${this.animeStyleManager.getBackdrop() === 'mica' ? 'selected' : ''}>${this.t('windowBackdropMica')}</option>
+                <option value="micaAlt" ${this.animeStyleManager.getBackdrop() === 'micaAlt' ? 'selected' : ''}>${this.t('windowBackdropMicaAlt')}</option>
+              </select>
+              ${this.renderCustomSelect([
+                {value:'none', label:this.t('windowBackdropNone')},
+                {value:'acrylic', label:this.t('windowBackdropAcrylic')},
+                {value:'mica', label:this.t('windowBackdropMica')},
+                {value:'micaAlt', label:this.t('windowBackdropMicaAlt')}
+              ], this.animeStyleManager.getBackdrop(), 'backdrop-custom', '160px')}
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('liquidGlass')}</div>
+                <div class="setting-desc">${this.t('liquidGlassDesc')}</div>
+              </div>
+              <div class="toggle ${this.liquidGlassManager.isEnabled() ? 'active' : ''}" id="liquid-glass-toggle">
+                <div class="toggle-thumb"></div>
+              </div>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('hideSeparator')}</div>
+                <div class="setting-desc">${this.t('hideSeparatorDesc')}</div>
+              </div>
+              <div class="toggle ${this.separatorLineManager.isEnabled() ? 'active' : ''}" id="hide-separator-toggle">
+                <div class="toggle-thumb"></div>
+              </div>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('disableContinuousScroll')}</div>
+                <div class="setting-desc">${this.t('disableContinuousScrollDesc')}</div>
+              </div>
+              <div class="toggle ${this.isContinuousScrollDisabled() ? 'active' : ''}" id="disable-continuous-scroll-toggle">
+                <div class="toggle-thumb"></div>
+              </div>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('acrylicIntensity')}</div>
+                <div class="setting-desc">${this.t('acrylicIntensityDesc')}</div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <input type="range" id="opacity-slider" min="0" max="100" value="${Math.round(this.animeStyleManager.getOpacity() * 100)}" style="width: 100px;">
+                <span id="opacity-value" style="font-size: 12px; color: var(--text-secondary); min-width: 35px;">${Math.round(this.animeStyleManager.getOpacity() * 100)}%</span>
+              </div>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('customBackground')}</div>
+                <div class="setting-desc">${this.t('customBackgroundDesc')}</div>
+              </div>
+              <div style="display: flex; gap: 8px;">
+                <button class="btn-fluent-secondary" id="select-bg-btn">${this.t('selectImage')}</button>
+                <button class="btn-fluent-danger" id="clear-bg-btn" style="${this.animeStyleManager.getBackgroundImage() ? '' : 'display: none;'}">${this.t('clear')}</button>
+              </div>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('backgroundMode')}</div>
+                <div class="setting-desc">${this.t('backgroundModeDesc')}</div>
+              </div>
+              <select class="select" id="bg-mode-select" style="display:none;">
+                <option value="cover" ${this.animeStyleManager.getBackgroundMode() === 'cover' ? 'selected' : ''}>${this.t('bgModeCover')}</option>
+                <option value="contain" ${this.animeStyleManager.getBackgroundMode() === 'contain' ? 'selected' : ''}>${this.t('bgModeContain')}</option>
+                <option value="stretch" ${this.animeStyleManager.getBackgroundMode() === 'stretch' ? 'selected' : ''}>${this.t('bgModeStretch')}</option>
+                <option value="repeat" ${this.animeStyleManager.getBackgroundMode() === 'repeat' ? 'selected' : ''}>${this.t('bgModeRepeat')}</option>
+              </select>
+              ${this.renderCustomSelect([
+                {value:'cover', label:this.t('bgModeCover')},
+                {value:'contain', label:this.t('bgModeContain')},
+                {value:'stretch', label:this.t('bgModeStretch')},
+                {value:'repeat', label:this.t('bgModeRepeat')}
+              ], this.animeStyleManager.getBackgroundMode(), 'bg-mode-custom', '160px')}
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('customStatusIcon')}</div>
+                <div class="setting-desc">${this.t('customStatusIconDesc')}</div>
+              </div>
+              <button class="btn-fluent-secondary" id="open-icon-settings-btn">${this.t('setIcon')}</button>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('sidebarShadow')}</div>
+                <div class="setting-desc">${this.t('sidebarShadowDesc')}</div>
+              </div>
+              <input type="checkbox" class="setting-checkbox" id="sidebar-shadow-checkbox" ${this.sidebarShadowManager.isEnabled() ? 'checked' : ''}>
+            </div>
+          </div>
+
+          <!-- 更新设置组 -->
+          <div class="setting-group">
+            <div class="setting-group-title">${this.t('updateSettings')}</div>
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('softwareUpdate')}</div>
+                <div class="setting-desc">${this.t('softwareUpdateDesc')}</div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <span id="version-display" style="font-size: 12px; color: var(--text-secondary);">${this.t('version')}: ${this.t('loading')}</span>
+                <button class="btn-fluent-primary" id="check-update-btn">${this.t('checkUpdate')}</button>
+              </div>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('rulesUpdate')}</div>
+                <div class="setting-desc">${this.t('rulesUpdateDesc')} (${this.t('version')}: ${this.rulesManager.getVersion()})</div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <span id="rules-version-display" style="font-size: 12px; color: var(--text-secondary);">${this.rulesManager.hasUpdateAvailable() ? this.t('newVersion') : this.t('upToDate')}</span>
+                <button class="btn-fluent-primary" id="check-rules-update-btn">${this.t('checkUpdate')}</button>
+              </div>
+            </div>
+
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('rulesFolder')}</div>
+                <div class="setting-desc">${this.t('rulesFolderDesc')}</div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <button class="btn-fluent-secondary" id="open-rules-folder-btn">${this.t('openFolder')}</button>
+                <button class="btn-fluent-primary" id="scan-rules-btn">${this.t('scanRules')}</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 赞助设置组 -->
+          <div class="setting-group">
+            <div class="setting-group-title">${this.t('sponsorSettings')}</div>
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('sponsorDeveloper')}</div>
+                <div class="setting-desc">${this.t('sponsorDeveloperDesc')}</div>
+              </div>
+              <button class="btn-fluent-secondary" id="sponsor-btn" style="display:flex;align-items:center;gap:6px;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                ${this.t('sponsorAction')}
+              </button>
+            </div>
+          </div>
+
+          <!-- 问题反馈设置组 -->
+          <div class="setting-group">
+            <div class="setting-group-title">${this.t('feedbackSettings')}</div>
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('problemFeedback')}</div>
+                <div class="setting-desc">${this.t('problemFeedbackDesc')}</div>
+              </div>
+              <button class="btn-fluent-secondary" id="feedback-btn" style="display:flex;align-items:center;gap:6px;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                ${this.t('feedbackAction')}
+              </button>
+            </div>
+          </div>
+
+          <!-- OOBE设置组 -->
+          <div class="setting-group">
+            <div class="setting-group-title">${this.t('oobeSettings')}</div>
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">${this.t('resetOptions')}</div>
+                <div class="setting-desc">${this.t('resetOptionsDesc')}</div>
+              </div>
+              <button class="btn-fluent-secondary" id="reset-oobe-btn">${this.t('resetOOBE')}</button>
+            </div>
+          </div>
+
+          <div class="setting-item">
+            <div class="setting-info">
+              <div class="setting-title">${this.t('resetOptions')}</div>
+              <div class="setting-desc">${this.t('resetOptionsDesc')}</div>
+            </div>
+            <button class="btn-fluent-danger" id="reset-settings-btn">${this.t('reset')}</button>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  private quarantinedFiles: any[] = [];
+  private quarantineStats = { count: 0, totalSize: 0 };
+
+  private async loadQuarantineData() {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const result = await invoke('get_quarantined_files') as any;
+      if (result.success) {
+        this.quarantinedFiles = result.files || [];
+        this.quarantineStats = {
+          count: result.count || 0,
+          totalSize: result.total_size || 0
+        };
+      }
+    } catch (error) {
+      console.error('Failed to load quarantine data:', error);
+    }
+  }
+
+  private renderQuarantineSection(): string {
+    // 异步加载数据
+    this.loadQuarantineData();
+
+    const formatSize = (bytes: number): string => {
+      if (bytes === 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    };
+
+    return `
+      <section class="page-section page" id="section-quarantine" style="overflow-y: auto; max-height: calc(100vh - 80px);">
+        <div class="page-header">
+          <div class="page-title">${this.t('quarantineTitle')}</div>
+          <div class="page-subtitle">${this.t('quarantineSubtitle')}</div>
+        </div>
+
+        <div class="card" style="margin-bottom: 20px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; padding: 20px;">
+            <div style="display: flex; gap: 30px;">
+              <div style="text-align: center;">
+                <div style="font-size: 32px; font-weight: 600; color: var(--danger);">${this.quarantineStats.count}</div>
+                <div style="font-size: 12px; color: var(--text-secondary); margin-top: 5px;">${this.t('quarantinedFiles')}</div>
+              </div>
+              <div style="text-align: center;">
+                <div style="font-size: 32px; font-weight: 600; color: var(--text-primary);">${formatSize(this.quarantineStats.totalSize)}</div>
+                <div style="font-size: 12px; color: var(--text-secondary); margin-top: 5px;">${this.t('spaceUsed')}</div>
+              </div>
+            </div>
+            <button class="btn btn-secondary" id="refresh-quarantine-btn">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 5px;">
+                <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+                <path d="M3 3v5h5"/>
+                <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/>
+                <path d="M16 16h5v5"/>
+              </svg>
+              ${this.t('refresh')}
+            </button>
+          </div>
+        </div>
+
+        ${this.quarantinedFiles.length === 0 ? `
+          <div class="card" style="text-align: center; padding: 60px 20px;">
+            <div style="width: 64px; height: 64px; margin: 0 auto 20px; color: var(--success);">
+              ${Icons.shieldCheck}
+            </div>
+            <div style="font-size: 18px; font-weight: 500; margin-bottom: 10px;">${this.t('quarantineEmpty')}</div>
+            <div style="font-size: 14px; color: var(--text-secondary);">${this.t('noQuarantinedFiles')}</div>
+          </div>
+        ` : `
+          <div class="card">
+            <div style="padding: 15px 20px; border-bottom: 1px solid var(--border); font-weight: 500;">
+              ${this.t('quarantineFileList')}
+            </div>
+            <div style="max-height: 500px; overflow-y: auto;">
+              ${this.quarantinedFiles.map(file => `
+                <div class="quarantine-item" style="padding: 15px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+                  <div style="flex: 1; min-width: 0;">
+                    <div style="font-weight: 500; margin-bottom: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${file.file_name}</div>
+                    <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${this.t('originalLocation')}: ${file.original_path}</div>
+                    <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 3px;">${this.t('threatType')}: <span style="color: var(--danger);">${file.threat_name}</span></div>
+                    <div style="font-size: 12px; color: var(--text-secondary);">${this.t('quarantineTime')}: ${file.quarantine_date} | ${this.t('fileSize')}: ${formatSize(file.file_size)}</div>
+                  </div>
+                  <div style="display: flex; gap: 8px; margin-left: 15px;">
+                    <button class="btn btn-secondary btn-sm quarantine-restore-btn" data-id="${file.id}" title="恢复文件">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+                        <path d="M3 3v5h5"/>
+                      </svg>
+                    </button>
+                    <button class="btn btn-danger btn-sm quarantine-delete-btn" data-id="${file.id}" title="永久删除">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 6h18"/>
+                        <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>
+                        <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        `}
+      </section>
+    `;
+  }
+
+  // ==================== EDR 程序监控页面 ====================
+  private edrProcessList: any[] = [];
+  private selectedEdrProcess: any = null;
+  private edrLoading: boolean = false;
+  private edrLoaded: boolean = false;
+  private edrSearchKeyword: string = '';
+  private edrAutoRefreshTimer: number | null = null;
+
+  private async loadEdrProcessList() {
+    if (this.edrLoading) return;
+    this.edrLoading = true;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const processes = await invoke<any[]>('get_edr_process_list');
+      // 按风险排序：高风险 > 中风险 > 低风险
+      const riskOrder: Record<string, number> = { high: 0, medium: 1, low: 2 };
+      this.edrProcessList = (processes || []).sort((a, b) =>
+        (riskOrder[a.risk_level] ?? 2) - (riskOrder[b.risk_level] ?? 2)
+      );
+      this.edrLoaded = true;
+      console.log('[EDR] Loaded', this.edrProcessList.length, 'processes');
+      // 局部更新而非整页渲染
+      this.updateEdrProcessListDOM();
+    } catch (e) {
+      console.error('[EDR] Failed to load process list:', e);
+    } finally {
+      this.edrLoading = false;
+    }
+  }
+
+  // 启动 EDR 定期更新进程列表
+  private startEdrAutoRefresh() {
+    this.stopEdrAutoRefresh();
+    this.edrAutoRefreshTimer = window.setInterval(() => {
+      if (!this.selectedEdrProcess) {
+        this.loadEdrProcessList();
+      }
+    }, 3000);
+  }
+
+  private stopEdrAutoRefresh() {
+    if (this.edrAutoRefreshTimer !== null) {
+      clearInterval(this.edrAutoRefreshTimer);
+      this.edrAutoRefreshTimer = null;
+    }
+  }
+
+  private renderEdrSection(): string {
+    // 如果数据为空、未在加载中，触发异步加载
+    if (this.edrProcessList.length === 0 && !this.edrLoading) {
+      setTimeout(() => this.loadEdrProcessList(), 100);
+      // 如果还没数据，3秒后重试
+      if (!this.edrLoaded) {
+        setTimeout(() => {
+          if (this.edrProcessList.length === 0) {
+            this.loadEdrProcessList();
+          }
+        }, 3000);
+      }
+    }
+
+    return `
+      <section class="page-section" id="section-edr" style="${this.selectedEdrProcess ? 'overflow: hidden; padding: 0; height: 100vh;' : ''}">
+        ${this.selectedEdrProcess ? `
+          <!-- 进程详情视图 - 独立滚动区域 -->
+          <div style="height: 100%; display: flex; flex-direction: column; overflow: hidden;">
+            <!-- 详情头部 - 固定 -->
+            <div style="padding: 24px 24px 16px; border-bottom: 1px solid var(--border-color); flex-shrink: 0;">
+              <div style="display: flex; align-items: center; gap: 15px;">
+                <button class="btn btn-secondary" id="edr-back-btn" style="padding: 8px 12px;">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>
+                  </svg>
+                </button>
+                <div>
+                  <div style="display: flex; align-items: center; gap: 10px;">
+                    <span style="font-size: 20px; font-weight: 600;">${this.selectedEdrProcess.name}</span>
+                    ${this.selectedEdrProcess.threat_family ? `<span style="padding: 2px 10px; border-radius: 4px; font-size: 11px; ${this.selectedEdrProcess.risk_level === 'high' ? 'background: var(--danger); color: white;' : 'background: var(--warning); color: white;'}">${this.selectedEdrProcess.threat_family}</span><span style="font-size: 10px; color: var(--text-tertiary);">${this.selectedEdrProcess.threat_confidence || ''}</span>` : `<span style="padding: 2px 10px; border-radius: 4px; font-size: 11px; ${this.selectedEdrProcess.risk_level === 'high' ? 'background: var(--danger); color: white;' : this.selectedEdrProcess.risk_level === 'medium' ? 'background: var(--warning); color: white;' : 'background: var(--success); color: white;'}">${this.selectedEdrProcess.risk_level === 'high' ? '高风险' : this.selectedEdrProcess.risk_level === 'medium' ? '中风险' : '低风险'}</span>`}
+                  </div>
+                  <div style="font-size: 13px; color: var(--text-secondary);">PID: ${this.selectedEdrProcess.pid} | ${this.selectedEdrProcess.event_count + 1} 个事件</div>
+                </div>
+              </div>
+            </div>
+            <!-- 详情内容 - 可滚动 -->
+            <div style="flex: 1; overflow-y: auto; padding: 20px 24px; min-height: 0;">
+              ${this.renderEdrProcessTimeline(this.selectedEdrProcess)}
+            </div>
+          </div>
+        ` : `
+          <!-- 进程列表视图 -->
+          <div class="page-header">
+            <div class="page-title">${this.t('edrTitle')}</div>
+            <div class="page-subtitle">${this.t('edrSubtitle')}</div>
+          </div>
+          <div class="settings-list" style="margin-top: 0;">
+            <div class="setting-group" style="margin-top: 0;">
+              <div class="setting-group-title" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 0; padding-top: 0;">
+                <span>${this.t('monitoredPrograms')} (${this.edrProcessList.length})</span>
+                <!-- 搜索框 -->
+                <div style="position: relative; width: 240px;">
+                  <input type="text" id="edr-search-input" placeholder="${this.t('searchProcessOrPid')}" value="${this.edrSearchKeyword}"
+                    style="width: 100%; padding: 6px 10px 6px 32px; border: 1px solid var(--border-color); border-radius: 4px; font-size: 12px; background: var(--bg-secondary); color: var(--text-primary); outline: none; transition: border-color 0.2s; height: 32px; box-sizing: border-box;">
+                  <svg style="position: absolute; left: 8px; top: 50%; transform: translateY(-50%); width: 14px; height: 14px; color: var(--text-tertiary); pointer-events: none;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="11" cy="11" r="8"/>
+                    <path d="m21 21-4.35-4.35"/>
+                  </svg>
+                  ${this.edrSearchKeyword ? `
+                    <button id="edr-search-clear" style="position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 16px; height: 16px; border: none; background: var(--text-tertiary); border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0;">
+                      <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3">
+                        <path d="M18 6L6 18M6 6l12 12"/>
+                      </svg>
+                    </button>
+                  ` : ''}
+                </div>
+              </div>
+              <div class="edr-process-list" style="display: flex; flex-direction: column; gap: 6px;">
+                ${(() => {
+                  const filteredList = this.edrSearchKeyword 
+                    ? this.edrProcessList.filter(p => 
+                        p.name.toLowerCase().includes(this.edrSearchKeyword.toLowerCase()) || 
+                        p.pid.toString().includes(this.edrSearchKeyword)
+                      )
+                    : this.edrProcessList;
+                  
+                  if (this.edrProcessList.length === 0) {
+                    return `
+                      <div class="edr-empty-state" style="text-align: center; padding: 40px; color: var(--text-secondary);">
+                        <div style="width: 48px; height: 48px; margin: 0 auto 16px;">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+                            <line x1="8" y1="21" x2="16" y2="21"/>
+                            <line x1="12" y1="17" x2="12" y2="21"/>
+                          </svg>
+                        </div>
+                        <div style="font-size: 14px;">${this.t('collectingProcessData')}</div>
+                      </div>
+                    `;
+                  }
+
+                  if (filteredList.length === 0) {
+                    return `
+                      <div class="edr-empty-state" style="text-align: center; padding: 40px; color: var(--text-secondary);">
+                        <div style="width: 48px; height: 48px; margin: 0 auto 16px;">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="11" cy="11" r="8"/>
+                            <path d="m21 21-4.35-4.35"/>
+                          </svg>
+                        </div>
+                        <div style="font-size: 14px;">${this.t('noMatchingProcess')}</div>
+                        <div style="font-size: 12px; margin-top: 8px; opacity: 0.7;">${this.t('tryOtherKeywords')}</div>
+                      </div>
+                    `;
+                  }
+                  
+                  return filteredList.map(process => `
+                    <div class="setting-item edr-process-item" data-pid="${process.pid}" style="cursor: pointer;${process.risk_level === 'high' ? ' background: rgba(211, 52, 56, 0.08);' : process.risk_level === 'medium' ? ' background: rgba(255, 193, 7, 0.06);' : ''}">
+                      <div class="setting-info">
+                        <div class="setting-title" style="display: flex; align-items: center; gap: 8px;">
+                          ${process.name}
+                          <span style="padding: 2px 6px; border-radius: 3px; font-size: 10px; ${process.risk_level === 'high' ? 'background: var(--danger); color: white;' : process.risk_level === 'medium' ? 'background: var(--warning); color: white;' : 'background: var(--success); color: white;'}">${process.risk_level === 'high' ? (process.threat_family || '高风险') : process.risk_level === 'medium' ? (process.threat_family || '中风险') : '低风险'}</span>
+                        </div>
+                        <div class="setting-desc">PID: ${process.pid} | 事件: ${process.event_count} 个 | 网络: ${process.network_events} | 文件: ${process.file_events}</div>
+                      </div>
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-tertiary);">
+                        <path d="M9 18l6-6-6-6"/>
+                      </svg>
+                    </div>
+                  `).join('');
+                })()}
+              </div>
+            </div>
+          </div>
+        `}
+      </section>
+    `;
+  }
+
+  private getIconSvg(type: NotificationCategory, size: number = 18): string {
+    const s = size;
+    switch (type) {
+      case 'threat': return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="#d13438" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>`;
+      case 'scan': return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="#0067C0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>`;
+      case 'intercept': return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="#d13438" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M4.9 4.9l14.2 14.2"/></svg>`;
+      case 'update': return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>`;
+      case 'quarantine': return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12h6"/></svg>`;
+      case 'system': return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="#6b7280" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><circle cx="12" cy="8" r="0.5" fill="currentColor" stroke="none"/></svg>`;
+      case 'process': return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="7" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>`;
+    }
+  }
+
+  private formatNotifTime(iso: string): string {
+    try {
+      const d = new Date(iso);
+      const pad = (n: number) => n.toString().padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    } catch { return iso; }
+  }
+
+  /** 根据通知类型和来源生成用户友好的详细说明 */
+  private getNotificationDescription(n: AppNotification): string {
+    const src = (n.source || '').toLowerCase();
+    if (n.type === 'threat') {
+      if (src.includes('实时') || src.includes('realtime') || src === '实时防护') {
+        return this.t('notifDescThreatRealtime');
+      }
+      return this.t('notifDescThreatScan');
+    }
+    if (n.type === 'intercept') {
+      if (src.includes('edr') || src.includes('edr拦截') || src.includes('行为防护')) {
+        return this.t('notifDescInterceptEdr');
+      }
+      if (src.includes('驱动') || src.includes('driver') || src === '驱动防护') {
+        return this.t('notifDescInterceptDriver');
+      }
+      return this.t('notifDescInterceptBasic');
+    }
+    if (n.type === 'quarantine') return this.t('notifDescQuarantine');
+    if (n.type === 'update') return this.t('notifDescUpdate');
+    if (n.type === 'system') return this.t('notifDescSystem');
+    if (n.type === 'process') return this.t('notifDescProcess');
+    if (n.type === 'scan') return this.t('notifDescThreatScan');
+    return this.t('notifDescSystem');
+  }
+
+  /** 渲染通知详情面板 */
+  private renderNotificationDetail(notif: AppNotification | null | undefined): string {
+    if (!notif) {
+      return `
+        <div class="notif-detail-panel empty">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary, #999)" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 12px;">
+            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+            <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+          </svg>
+          <div style="font-size: 14px; font-weight: 500; color: var(--text-tertiary, #999);">${this.t('notificationDetailEmpty')}</div>
+        </div>
+      `;
+    }
+
+    const typeColors: Record<NotificationCategory, string> = {
+      threat: '#d13438', scan: '#0067C0', intercept: '#d13438',
+      update: '#10b981', quarantine: '#f59e0b', system: '#6b7280', process: '#8b5cf6'
+    };
+    const bgColor = typeColors[notif.type] || '#6b7280';
+    const description = this.getNotificationDescription(notif);
+    const fields: string[] = [];
+
+    if (notif.threatName) {
+      fields.push(`<div class="notif-detail-field">
+        <div class="notif-detail-field-label">${this.t('notificationDetailThreat')}</div>
+        <div class="notif-detail-field-value">${this.escapeHtml(notif.threatName)}</div>
+      </div>`);
+    }
+    if (notif.source) {
+      fields.push(`<div class="notif-detail-field">
+        <div class="notif-detail-field-label">${this.t('notificationDetailSource')}</div>
+        <div class="notif-detail-field-value">${this.escapeHtml(notif.source)}</div>
+      </div>`);
+    }
+    if (notif.action) {
+      fields.push(`<div class="notif-detail-field">
+        <div class="notif-detail-field-label">${this.t('notificationDetailAction')}</div>
+        <div class="notif-detail-field-value">${this.escapeHtml(notif.action)}</div>
+      </div>`);
+    }
+    if (notif.result) {
+      fields.push(`<div class="notif-detail-field">
+        <div class="notif-detail-field-label">${this.t('notificationDetailResult')}</div>
+        <div class="notif-detail-field-value">${this.escapeHtml(notif.result)}</div>
+      </div>`);
+    }
+    if (notif.filePath) {
+      fields.push(`<div class="notif-detail-field">
+        <div class="notif-detail-field-label">${this.t('notificationDetailFilePath')}</div>
+        <div class="notif-detail-field-value path">${this.escapeHtml(notif.filePath)}</div>
+      </div>`);
+    }
+    fields.push(`<div class="notif-detail-field">
+      <div class="notif-detail-field-label">${this.t('notificationDetailTime')}</div>
+      <div class="notif-detail-field-value">${this.formatNotifTime(notif.timestamp)}</div>
+    </div>`);
+
+    return `
+      <div class="notif-detail-panel">
+        <div class="notif-detail-header">
+          <div class="notif-detail-header-icon" style="background: ${bgColor}18;">
+            ${this.getIconSvg(notif.type, 22)}
+          </div>
+          <div class="notif-detail-header-text">
+            <div class="notif-detail-header-title">${this.escapeHtml(notif.title)}</div>
+            <div class="notif-detail-header-time">${this.formatNotifTime(notif.timestamp)}</div>
+          </div>
+        </div>
+        <div class="notif-detail-body">
+          ${fields.join('')}
+          <div class="notif-detail-field" style="margin-top: 16px;">
+            <div class="notif-detail-field-label">${this.t('notificationDetailDescription')}</div>
+            <div class="notif-detail-description-box">${description}</div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  private renderNotificationsSection(): string {
+    const notifications = this.notificationManager.getAll();
+    const unreadCount = this.notificationManager.getUnreadCount();
+    const selectedNotif = this.selectedNotificationId
+      ? this.notificationManager.getById(this.selectedNotificationId)
+      : null;
+
+    const typeColors: Record<NotificationCategory, string> = {
+      threat: '#d13438', scan: '#0067C0', intercept: '#d13438',
+      update: '#10b981', quarantine: '#f59e0b', system: '#6b7280', process: '#8b5cf6'
+    };
+
+    return `
+      <section class="page-section" id="section-notifications">
+        <div class="page-header" style="margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between;">
+          <div>
+            <div class="page-title">${this.t('notificationCenter')}</div>
+            <div class="page-subtitle">${unreadCount > 0 ? this.t('unreadCount', { count: unreadCount }) : this.t('noNotifications')}</div>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <button id="notif-mark-read-btn" class="btn-fluent-secondary" style="padding: 6px 14px; font-size: 12px;${unreadCount === 0 ? ' opacity: 0.4; pointer-events: none;' : ''}" ${unreadCount === 0 ? 'disabled' : ''}>${this.t('markAllRead')}</button>
+            <button id="notif-clear-btn" class="btn-fluent-secondary" style="padding: 6px 14px; font-size: 12px;${notifications.length === 0 ? ' opacity: 0.4; pointer-events: none;' : ''}" ${notifications.length === 0 ? 'disabled' : ''}>${this.t('clearAll')}</button>
+          </div>
+        </div>
+        ${notifications.length === 0 ? `
+          <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 80px 20px; text-align: center;">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 16px;">
+              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+              <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+            </svg>
+            <div style="font-size: 15px; font-weight: 500; color: var(--text-tertiary);">${this.t('noNotifications')}</div>
+          </div>
+        ` : `
+          <div class="notif-layout">
+            <div class="notif-list-container">
+              ${notifications.map((n) => {
+                const bgColor = typeColors[n.type] || '#6b7280';
+                const isSelected = n.id === this.selectedNotificationId;
+                const pendingThreat = n.pendingThreatId ? this.pendingThreats.find(t => t.id === n.pendingThreatId && t.status === 'pending') : null;
+                const actionButtons = pendingThreat ? `
+                  <div style="display: flex; flex-direction: row; gap: 6px; flex-shrink: 0; align-items: center;">
+                    ${pendingThreat.source === 'scan' ? `
+                      <button class="btn-threat-allow" data-id="${pendingThreat.id}" style="padding: 4px 10px; font-size: 11px; border-radius: 4px; border: 1px solid var(--border-color, #e5e5e5); background: transparent; color: var(--text-primary, #1c1c1c); cursor: pointer;">允许</button>
+                      <button class="btn-threat-quarantine" data-id="${pendingThreat.id}" style="padding: 4px 10px; font-size: 11px; border-radius: 4px; border: 1px solid transparent; background: #0067C0; color: #fff; cursor: pointer;">隔离</button>
+                    ` : `
+                      <button class="btn-threat-done" data-id="${pendingThreat.id}" style="padding: 4px 10px; font-size: 11px; border-radius: 4px; border: 1px solid transparent; background: #0067C0; color: #fff; cursor: pointer;">完成</button>
+                    `}
+                  </div>
+                ` : '';
+                return `
+                  <div class="notif-card${n.read ? ' notif-read' : ''}${isSelected ? ' selected' : ''}" data-id="${n.id}" style="
+                    display: flex; gap: 12px; padding: 14px 16px; 
+                    background: var(--bg-card, #fff);
+                    border: 1px solid var(--border-color, #e5e5e5);
+                    border-radius: 8px; cursor: pointer; transition: all 0.2s ease;
+                    margin-bottom: 6px;
+                  " onmouseenter="const btn=this.querySelector('.notif-dismiss-btn'); if(btn) btn.style.opacity='1'" onmouseleave="const btn=this.querySelector('.notif-dismiss-btn'); if(btn) btn.style.opacity='0'">
+                    <div style="flex-shrink: 0; width: 36px; height: 36px; border-radius: 50%; background: ${bgColor}18; display: flex; align-items: center; justify-content: center;">
+                      ${this.getIconSvg(n.type)}
+                    </div>
+                    <div style="flex: 1; min-width: 0;">
+                      <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 2px;">
+                        <div style="font-size: 13px; font-weight: 600; color: var(--text-primary, #1c1c1c);">${this.escapeHtml(n.title)}</div>
+                        ${!n.read ? '<div style="width: 6px; height: 6px; border-radius: 50%; background: #0067C0; flex-shrink: 0;"></div>' : ''}
+                      </div>
+                      ${n.message ? `<div style="font-size: 12px; color: var(--text-secondary, #5f5f5f); line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">${this.escapeHtml(n.message)}</div>` : ''}
+                      <div style="font-size: 11px; color: var(--text-tertiary, #999); margin-top: 4px;">${this.formatNotifTime(n.timestamp)}${n.source ? ' · ' + this.escapeHtml(n.source) : ''}</div>
+                    </div>
+                    <div style="flex-shrink: 0; display: flex; align-items: center; gap: 8px;">
+                      ${actionButtons}
+                      <button class="notif-dismiss-btn" data-id="${n.id}" title="删除" style="
+                        width: 24px; height: 24px; border: none; background: transparent; 
+                        border-radius: 4px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+                        opacity: 0; transition: opacity 0.15s; color: var(--text-tertiary, #999); font-size: 16px; line-height: 1;
+                      ">×</button>
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+            ${this.renderNotificationDetail(selectedNotif)}
+          </div>
+        `}
+      </section>
+    `;
+  }
+
+  private get pendingThreatCount(): number {
+    return this.pendingThreats.filter(t => t.status === 'pending').length;
+  }
+
+  /**
+   * BDM 病毒家族分类系统（仅用于行为监控：驱动防护 + 基础防护）
+   * 基于可观测的进程行为特征 + 文件路径特征分析
+   * 前缀 BDM = Behavior Driven Monitoring（内核实时行为主防）
+   */
+  private classifyVirusFamily(
+    filePath: string,
+    _threatName?: string,
+    context?: { behaviors?: string[]; probability?: number }
+  ): { threatName: string; category: string } {
+    const lowerPath = filePath.toLowerCase();
+    const fileName = lowerPath.split('\\').pop() || '';
+    const ext = fileName.split('.').pop() || '';
+    const dirs = lowerPath.split('\\');
+    
+    // --- 综合评分体系（得分越高越优先） ---
+    let family = 'SuspiciousBehavior';
+    let category = '可疑行为';
+    let score = 0;
+    
+    // ── 1. 扩展名分析 ──
+    const extMap: Record<string, { family: string; category: string; score: number }> = {
+      vbs:    { family: 'VBS.Obfuscated',       category: '混淆脚本',     score: 3 },
+      ps1:    { family: 'PowerShell.Obfuscated',  category: '混淆脚本',     score: 3 },
+      js:     { family: 'JS.Obfuscated',          category: '混淆脚本',     score: 3 },
+      scr:    { family: 'Screensaver.Malicious',  category: '屏幕保护木马', score: 3 },
+      sys:    { family: 'Rootkit.System32',       category: 'Rootkit',      score: 5 },
+      dll:    { family: 'DLL.Injector',           category: 'DLL注入',      score: 4 },
+      hta:    { family: 'HTA.Dropper',            category: 'HTA释放器',   score: 4 },
+      docm:   { family: 'Macro.Downloader',       category: '宏病毒',       score: 3 },
+      xlsm:   { family: 'Macro.Downloader',       category: '宏病毒',       score: 3 },
+      pptm:   { family: 'Macro.Downloader',       category: '宏病毒',       score: 3 },
+      jar:    { family: 'Java.Dropper',           category: 'Java木马',     score: 3 },
+      cmd:    { family: 'Batch.Script',           category: '恶意批处理',   score: 2 },
+      bat:    { family: 'Batch.Script',           category: '恶意批处理',   score: 2 },
+      pif:    { family: 'PIF.Infector',           category: 'PIF感染',      score: 3 },
+      com:    { family: 'DOS.Malicious',          category: 'DOS病毒',      score: 2 },
+      msi:    { family: 'MSI.Installer',          category: '恶意安装包',   score: 2 },
+    };
+    
+    if (extMap[ext]) {
+      family = extMap[ext].family;
+      category = extMap[ext].category;
+      score = extMap[ext].score;
+    }
+    
+    // ── 2. 双扩展名欺诈（document.pdf.exe） ──
+    const parts = fileName.split('.');
+    if (parts.length >= 3) {
+      const secondLast = parts[parts.length - 2].toLowerCase();
+      const docExts = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'jpg', 'png', 'txt', 'rtf'];
+      if (docExts.includes(secondLast) && ext === 'exe') {
+        family = 'Trojan.FakeExt';
+        category = '双扩展名欺诈';
+        score = Math.max(score, 4);
+      }
+    }
+    
+    // ── 3. 目录上下文分析 ──
+    // 临时目录释放
+    const inTemp = dirs.some(d => /temp|tmp|cache|downloads/i.test(d));
+    if (inTemp && (ext === 'exe' || ext === 'dll' || ext === 'scr')) {
+      const hashedName = /^[a-f0-9]{8,}/i.test(fileName.replace(/\.\w+$/, ''));
+      const tempPrefix = fileName.startsWith('~') || fileName.startsWith('tmp');
+      if ((hashedName || tempPrefix) && score < 4) {
+        family = 'Trojan.Dropper.TempLauncher';
+        category = '临时目录释放器';
+        score = 4;
+      }
+    }
+    
+    // 启动目录持久化
+    const inStartup = dirs.some(d => /startup|启动|appdata.*roaming.*microsoft.*windows.*start menu|programdata.*microsoft.*windows.*start menu/i.test(d));
+    if (inStartup && ext === 'exe' && score < 4) {
+      family = 'Trojan.Startup.Persistence';
+      category = '启动持久化';
+      score = 4;
+    }
+    
+    // AppData 伪装安装程序
+    const inAppData = dirs.some(d => /appdata/i.test(d));
+    if (inAppData && ext === 'exe' && (fileName.includes('update') || fileName.includes('setup') || fileName.includes('install')) && score < 3) {
+      family = 'Trojan.FakeInstaller';
+      category = '伪装安装程序';
+      score = 3;
+    }
+    
+    // 系统目录异常
+    const inSys = dirs.some(d => /system32|syswow64/i.test(d));
+    if (inSys && (ext === 'exe' || ext === 'dll') && score < 2) {
+      family = 'Rootkit.SystemInfection';
+      category = '系统目录感染';
+      score = 3;
+    }
+    
+    // ── 4. 文件名伪装检测（仅在无行为数据时启用，避免 EDR 行为威胁被文件名误判） ──
+    if (!context?.behaviors || context.behaviors.length === 0) {
+      const nameSpoofPatterns = [
+        { pattern: /^(svchost|lsass|winlogon|csrss|explorer|services|smss|wininit)\./i, family: 'Trojan.SystemSpoof', category: '系统进程伪装', score: 4 },
+        { pattern: /^(notepad|calc|mspaint|regedit|taskmgr|cmd|powershell|msedge|chrome|firefox)\./i, family: 'Trojan.ToolSpoof', category: '工具进程伪装', score: 4 },
+        { pattern: /^[a-f0-9]{16,}\./i, family: 'Trojan.AutoGenName', category: '自动生成随机名', score: 3 },
+      ];
+      for (const rule of nameSpoofPatterns) {
+        if (rule.pattern.test(fileName) && rule.score > score) {
+          family = rule.family; category = rule.category; score = rule.score; break;
+        }
+      }
+    }
+    
+    // ── 5. 行为模式分析（核心！基于实际进程行为） ──
+    if (context?.behaviors && context.behaviors.length > 0) {
+      const bText = context.behaviors.join(' ').toLowerCase();
+      
+      // 计算各类行为计数
+      const behaviors = {
+        fileDelete:    (bText.match(/删除|delete|移除|remove|unlink/gi) || []).length,
+        fileModify:    (bText.match(/修改|modify|写入|write|覆盖|overwrite/gi) || []).length,
+        fileEncrypt:   (bText.match(/加密|encrypt|crypt/gi) || []).length,
+        fileCopy:      (bText.match(/复制|copy|self|replicat/gi) || []).length,
+        threadInject:  (bText.match(/注入|inject|远程线程|remotethread|createremotethread|alloc|virtualallocex/gi) || []).length,
+        processCreate: (bText.match(/创建进程|createprocess|win32resume|createremotethread/i) || []).length,
+        processKill:   (bText.match(/终止|terminate|结束进程|kill/i) || []).length,
+        regModify:     (bText.match(/注册表|registry|setvalue|regset|run|runonce/i) || []).length,
+        network:       (bText.match(/网络|network|socket|connect|http|dns|url|download/gi) || []).length,
+        driver:        (bText.match(/驱动|driver|\bsys\b|kernel|loaddriver/gi) || []).length,
+        hide:          (bText.match(/隐藏|hide|hidden|stealth/gi) || []).length,
+        hook:          (bText.match(/hook|挂钩|inlinehook|ssdt/gi) || []).length,
+        debug:         (bText.match(/调试|debug|antidebug|反调试|ntdll|veh/gi) || []).length,
+        vmDetect:      (bText.match(/虚拟机|vmtool|vbox|vmware|sandboxie|检测环境/gi) || []).length,
+        privilege:     (bText.match(/提权|权限|privilege|sebackup|sedebug|token/gi) || []).length,
+      };
+      
+      // 反杀软自保护 / 对抗检测
+      const antiAV = bText.includes('杀软') || bText.includes('avp') || bText.includes('avast') || 
+                     bText.includes('defender') || bText.includes('卡巴') || bText.includes('360') ||
+                     bText.includes('火绒') || bText.includes('关闭保护') || bText.includes('disable') ||
+                     bText.includes('自我保护') || bText.includes('自保护') || bText.includes('反制') ||
+                     bText.includes('反杀软') || bText.includes('对抗') || bText.includes('avkill') ||
+                     bText.includes('antiav') || bText.includes('反病毒') || bText.includes('taskkill') ||
+                     bText.includes('xiguasecurity') || bText.includes('kill.*av') ||
+                     /关闭.*防护/.test(bText) || /终止.*保护/.test(bText) ||
+                     /terminate.*protect/i.test(bText) || /bypass.*av/i.test(bText) ||
+                     /结束.*杀/.test(bText) || /终止.*进程/.test(bText) ||
+                     /kill.*process/i.test(bText) || /结束.*进程/.test(bText);
+      
+      // 判断病毒家族
+      interface BehaviorRule {
+        condition: () => boolean;
+        family: string;
+        category: string;
+        score: number;
+      }
+      
+      const behaviorRules: BehaviorRule[] = [
+        // 反杀软/自保护（最高优先级）
+        { condition: () => antiAV || (behaviors.debug > 0 && behaviors.processKill > 0), 
+          family: 'AntiAV.SelfProtection', category: '反杀软自保护', score: 6 },
+        { condition: () => behaviors.vmDetect > 0 && behaviors.hide > 0, 
+          family: 'AntiAV.VMDetect', category: '反虚拟机检测', score: 6 },
+        { condition: () => behaviors.debug > 0 && behaviors.hide > 0, 
+          family: 'AntiAV.AntiDebug', category: '反调试', score: 5 },
+        
+        // 勒索病毒：依赖加密行为，普通修改不计入
+        { condition: () => behaviors.fileEncrypt > 0 && (behaviors.fileDelete + behaviors.fileModify) >= 5,
+          family: 'Ransom.FileCrypt', category: '勒索病毒（加密+破坏）', score: 5 },
+        { condition: () => behaviors.fileEncrypt > 0,
+          family: 'Ransom.FileEncrypt', category: '勒索病毒（文件加密）', score: 5 },
+        { condition: () => behaviors.fileDelete >= 20 || (behaviors.fileDelete + behaviors.fileModify) >= 50,
+          family: 'Ransom.BulkDestroy', category: '勒索病毒（大规模破坏）', score: 5 },
+        
+        // 注入类
+        { condition: () => behaviors.threadInject > 0 && behaviors.processCreate > 0,
+          family: 'Injector.ProcessHollow', category: '进程空洞注入', score: 5 },
+        { condition: () => behaviors.threadInject > 0,
+          family: 'Injector.RemoteThread', category: '远程线程注入', score: 5 },
+        { condition: () => behaviors.hook > 0,
+          family: 'Rootkit.APHHook', category: 'API挂钩', score: 5 },
+        
+        // Rootkit
+        { condition: () => behaviors.driver > 0 && behaviors.hide > 0,
+          family: 'Rootkit.HiddenDriver', category: '隐藏驱动Rootkit', score: 5 },
+        { condition: () => behaviors.driver > 0,
+          family: 'Rootkit.DriverLoad', category: '驱动加载', score: 4 },
+        
+        // 后门/远控
+        { condition: () => behaviors.network > 0 && (behaviors.processCreate > 0 || behaviors.threadInject > 0),
+          family: 'Backdoor.RemoteShell', category: '远控后门', score: 5 },
+        { condition: () => behaviors.network > 0 && behaviors.privilege > 0,
+          family: 'Backdoor.PrivilegedBot', category: '提权后门', score: 5 },
+        { condition: () => behaviors.network > 0,
+          family: 'Trojan.NetworkBot', category: '网络通信木马', score: 4 },
+        
+        // 蠕虫：自我复制
+        { condition: () => behaviors.fileCopy > 0 && behaviors.network > 0,
+          family: 'Worm.NetworkSpread', category: '蠕虫网络传播', score: 4 },
+        { condition: () => behaviors.fileCopy > 0,
+          family: 'Worm.SelfReplic', category: '蠕虫自复制', score: 4 },
+        
+        // 注册表篡改
+        { condition: () => behaviors.regModify > 0 && behaviors.hide > 0,
+          family: 'Trojan.RegistryRootkit', category: '注册表Rootkit', score: 4 },
+        { condition: () => behaviors.regModify > 0,
+          family: 'Trojan.RegistryMod', category: '注册表篡改', score: 3 },
+        
+        // 提权
+        { condition: () => behaviors.privilege > 0,
+          family: 'HackTool.PrivilegeEsc', category: '提权行为', score: 4 },
+        
+        // 进程终止（可能为 AVKill）
+        { condition: () => behaviors.processKill > 0 && behaviors.processCreate === 0,
+          family: 'HackTool.ProcessKill', category: '进程终止', score: 3 },
+      ];
+      
+      for (const rule of behaviorRules) {
+        if (rule.condition()) {
+          if (rule.score > score) {
+            family = rule.family;
+            category = rule.category;
+            score = rule.score;
+            break; // 只取最高优先级的一个
+          }
+        }
+      }
+    }
+    
+    return {
+      threatName: `BDM:${family}`,
+      category: category
+    };
+  }
+
+  private addPendingThreat(threat: Omit<PendingThreat, 'id' | 'status'>) {
+    const id = `threat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    this.pendingThreats.push({ ...threat, id, status: 'pending' });
+    this.addNotification('threat', `威胁: ${threat.threatName}`, '', {
+      threatName: threat.threatName,
+      filePath: threat.path,
+      source: threat.source === 'scan' ? '扫描检测' : '实时防护',
+      pendingThreatId: id,
+    });
+    this.updateNotificationBadge();
+    this.updateNotificationsSection();
+    // 处理完威胁后主页状态可能变化（如从有风险恢复安全），需要同步刷新主页
+    this.updateHomeStatus().catch(e => console.error('Failed to update home status after resolving threat:', e));
+  }
+
+  // 局部刷新通知中心区域：找到 DOM 中的 section-notifications 并替换内容，避免整页渲染
+  private updateNotificationsSection(): void {
+    const section = document.getElementById('section-notifications');
+    if (!section) return;
+    const newSection = document.createElement('template');
+    newSection.innerHTML = this.renderNotificationsSection().trim();
+    const newEl = newSection.content.firstElementChild;
+    if (newEl) {
+      section.replaceWith(newEl);
+      // 重新绑定通知区域事件委托（因为列表按钮被重建）
+      this.attachNotificationEventListeners();
+    }
+  }
+
+  // 绑定通知中心事件（已读、删除、标记全部已读、清空全部、威胁操作）
+  private attachNotificationEventListeners(): void {
+    const section = document.getElementById('section-notifications');
+    if (!section) return;
+
+    // 点击通知卡片标记已读
+    section.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement;
+
+      // 威胁操作按钮
+      const threatBtn = target.closest('.btn-threat-allow, .btn-threat-quarantine, .btn-threat-done') as HTMLElement | null;
+      if (threatBtn) {
+        const id = threatBtn.dataset.id;
+        if (!id) return;
+        e.stopPropagation();
+        if (threatBtn.classList.contains('btn-threat-allow')) this.resolveThreat(id, 'allow');
+        else if (threatBtn.classList.contains('btn-threat-quarantine')) this.resolveThreat(id, 'quarantine');
+        else if (threatBtn.classList.contains('btn-threat-done')) this.resolveThreat(id, 'done');
+        return;
+      }
+
+      // 删除按钮
+      const dismissBtn = target.closest('.notif-dismiss-btn') as HTMLElement | null;
+      if (dismissBtn) {
+        const id = dismissBtn.dataset.id;
+        if (!id) return;
+        e.stopPropagation();
+        this.notificationManager.removeById(id);
+        // 如果删除的是当前选中的通知，清除选中状态
+        if (this.selectedNotificationId === id) {
+          this.selectedNotificationId = null;
+        }
+        this.updateNotificationsSection();
+        this.updateNotificationBadge();
+        return;
+      }
+
+      // 点击卡片本身标记已读并选中
+      const card = target.closest('.notif-card') as HTMLElement | null;
+      if (card) {
+        const id = card.dataset.id;
+        if (!id) return;
+        e.stopPropagation();
+        // 切换选中状态：点击同一张卡片取消选中，点击其他卡片选中
+        if (this.selectedNotificationId === id) {
+          this.selectedNotificationId = null;
+        } else {
+          this.selectedNotificationId = id;
+        }
+        this.notificationManager.markAsRead(id);
+        this.updateNotificationsSection();
+        this.updateNotificationBadge();
+      }
+    });
+
+    // 标记全部已读
+    document.getElementById('notif-mark-read-btn')?.addEventListener('click', () => {
+      this.notificationManager.markAllAsRead();
+      this.updateNotificationsSection();
+      this.updateNotificationBadge();
+    });
+
+    // 清空全部
+    document.getElementById('notif-clear-btn')?.addEventListener('click', () => {
+      this.notificationManager.clearAll();
+      this.selectedNotificationId = null;
+      this.updateNotificationsSection();
+      this.updateNotificationBadge();
+    });
+  }
+
+  /**
+   * 解析 EDR 驱动拦截日志，提取进程名和行为数据，读取报告文件进行 BDM 分类
+   */
+  private async addEdrThreatFromLog(log: string, timestamp: string) {
+    console.log('[EDR-DEBUG] Processing log:', log);
+    let processName = 'unknown.exe';
+    let pid = 0;
+    let code = '';
+    let report: any = null;
+    
+    // ── 第一步：解析日志，提取进程名、PID、Code ──
+    
+    // 格式1: EDR_AUTO_KILL | process=X.exe path=... score=... writes=0 deletes=1 ...
+    const autoKillMatch = log.match(/EDR_AUTO_KILL\s*\|\s*process=([^\s]+)/i);
+    if (autoKillMatch) {
+      processName = autoKillMatch[1].trim();
+      code = log.match(/code=(\S+)/i)?.[1]?.trim() || '';
+      pid = parseInt(log.match(/pid=(\d+)/)?.[1] || '0', 10);
+      console.log('[EDR-DEBUG] Format1 AUTO_KILL: process=%s pid=%d code=%s', processName, pid, code);
+      // 注意：pipe 中的行为计数（writes/deletes/reg 等）不可靠，不用于分类
+    }
+    
+    // 格式2: EDR_ALERT type=AutoKill code=X pid=X process=X.exe ...
+    const edrAlertMatch = log.match(/EDR_ALERT\s+type=\S+.*?code=([^\s]+).*?pid=(\d+).*?process=([^\s]+)/i);
+    if (edrAlertMatch && !autoKillMatch) {
+      processName = edrAlertMatch[3].trim();
+      code = edrAlertMatch[1].trim();
+      pid = parseInt(edrAlertMatch[2], 10);
+      console.log('[EDR-DEBUG] Format2 ALERT: process=%s pid=%d code=%s', processName, pid, code);
+    }
+    
+    // 格式3: EDR | Auto-killed process: X.exe (PID: X, Score: X) Report: ...
+    const edrKillMatch = log.match(/EDR\s*\|\s*Auto-killed process:\s*([^\s(]+).*?PID:\s*(\d+).*?Report:\s*(\S+)/i);
+    if (edrKillMatch && !autoKillMatch && !edrAlertMatch) {
+      processName = edrKillMatch[1].trim();
+      pid = parseInt(edrKillMatch[2], 10);
+      // 从报告路径提取完整 code
+      const reportPath = edrKillMatch[3];
+      const fullCodeMatch = reportPath.match(/EDR_([^_]+)_([^_]+)_(\d+)/);
+      if (fullCodeMatch) {
+        code = `EDR-${fullCodeMatch[1]}-${fullCodeMatch[2]}-${fullCodeMatch[3]}`;
+      }
+      console.log('[EDR-DEBUG] Format3 AUTO-KILLED: process=%s pid=%d code=%s reportPath=%s', processName, pid, code, reportPath);
+    }
+    
+    // 兜底：从日志中提取 .exe 文件名
+    if (!autoKillMatch && !edrAlertMatch && !edrKillMatch) {
+      const pathMatch = log.match(/([a-zA-Z]:\\[^\s]+\.(exe|dll|sys))/i);
+      if (pathMatch) {
+        processName = pathMatch[1].split('\\').pop() || 'unknown.exe';
+      } else {
+        const exeMatch = log.match(/([a-zA-Z0-9_\-]+\.exe)/i);
+        if (exeMatch) processName = exeMatch[1];
+      }
+    }
+    
+    // 如果 pid 仍为 0，尝试从 code 末尾提取（code 格式: EDR-YYYYMMDD-HHMMSS-PID）
+    if (pid === 0 && code) {
+      const pidFromCode = code.match(/EDR-\d+-\d+-(\d+)/);
+      if (pidFromCode) {
+        pid = parseInt(pidFromCode[1], 10);
+        console.log('[EDR-DEBUG] PID extracted from code: %d', pid);
+      }
+    }
+    
+    // ── 第二步：读取 EDR 报告（统一数据源，避免三种格式重复） ──
+    if (code && pid > 0) {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const reportJson = await invoke('get_edr_report_data', { process: processName, pid, code }) as string;
+        const parsed = JSON.parse(reportJson);
+        if (parsed && parsed.timeline && parsed.timeline.length > 0) {
+          report = parsed;
+          console.log('[EDR-DEBUG] Report loaded: timeline=%d items, type_cn samples:', report.timeline.length, report.timeline.map((e: any) => e.type_cn).filter(Boolean));
+        } else {
+          console.log('[EDR-DEBUG] Report loaded but has no timeline');
+        }
+      } catch (e) {
+        console.warn('[EDR] Report read failed (will use log data):', e);
+      }
+    } else {
+      console.log('[EDR-DEBUG] Skipping report read: code="%s" pid=%d', code, pid);
+    }
+    
+    // ── 第三步：去重（规范化 code，所有格式用统一 key） ──
+    // 从 code 中提取纯数字部分作为规范化 key
+    const codeDigits = (code || '').replace(/[^0-9]/g, '');
+    const normalizedKey = codeDigits.length >= 8 ? codeDigits.slice(0, 14) : (code || timestamp);
+    const dedupKey = `${processName}_${normalizedKey}`;
+    console.log('[EDR-DEBUG] Dedup: key=%s exists=%s', dedupKey, this.processedEdrThreats.has(dedupKey));
+    if (this.processedEdrThreats.has(dedupKey)) {
+      console.log('[EDR-DEBUG] SKIPPED (duplicate): %s', dedupKey);
+      return;
+    }
+    this.processedEdrThreats.add(dedupKey);
+    setTimeout(() => this.processedEdrThreats.delete(dedupKey), 60000);
+    
+    // 上传到日志收集服务
+    this.logUploadManager.collectEdrEvent(log, processName, pid, code, report);
+    
+    // ── 第四步：构建行为数据（优先用报告，其次用日志） ──
+    let behaviors: string[] = [];
+    
+    if (report) {
+      // 报告中的行为计数
+      if (report.file_writes > 0) behaviors.push(`文件写入(${report.file_writes}次)`);
+      if (report.file_deletes > 0) behaviors.push(`文件删除(${report.file_deletes}次)`);
+      if (report.registry_mods > 0) behaviors.push(`注册表修改(${report.registry_mods}次)`);
+      if (report.inject_attempts > 0) behaviors.push(`进程注入(${report.inject_attempts}次)`);
+      if (report.suspicious_cmds > 0) behaviors.push(`可疑命令(${report.suspicious_cmds}次)`);
+      if (report.memory_rwx > 0) behaviors.push(`内存恶意分配(${report.memory_rwx}次)`);
+      if (report.remote_threads > 0) behaviors.push(`远程线程(${report.remote_threads}次)`);
+      
+      // 时间线行为链（包含详细描述）
+      const timelineItems = report.timeline.map((e: any) => {
+        const parts = [];
+        if (e.type_cn) parts.push(e.type_cn);
+        if (e.detail) parts.push(e.detail);
+        return parts.join(' | ');
+      });
+      if (timelineItems.length > 0) {
+        behaviors.push(...timelineItems);
+      }
+    } else {
+      // 没有报告，pipe 数据不可靠，仅标记 EDR 自动终止
+      behaviors.push('EDR自动终止');
+    }
+    
+    console.log('[EDR-DEBUG] Behaviors to classify:', JSON.stringify(behaviors));
+    
+    // ── 第五步：IOA/BDM 分类 ──
+    let classification = this.classifyVirusFamily(processName, undefined, {
+      behaviors: behaviors.length > 0 ? behaviors : undefined
+    });
+
+    // 如果后端报告已推断出具体病毒家族，优先使用 IOA 结果
+    if (report && report.virus_family) {
+      classification = {
+        threatName: report.virus_family as string,
+        category: 'IOA/EDR'
+      };
+      console.log('[EDR-DEBUG] Using IOA family from report: %s', classification.threatName);
+    }
+    console.log('[EDR-DEBUG] Classification: threatName=%s category=%s (from process=%s)', classification.threatName, classification.category, processName);
+    
+    this.addPendingThreat({
+      path: processName,
+      threatName: classification.threatName,
+      threatLevel: 'High',
+      category: `EDR拦截 - ${classification.category}`,
+      detectedAt: timestamp,
+      source: 'EDR 行为防护'
+    });
+  }
+
+  private async resolveThreat(id: string, action: 'quarantine' | 'allow' | 'done') {
+    const threat = this.pendingThreats.find(t => t.id === id);
+    if (!threat) return;
+
+    threat.status = 'processing';
+
+    let removeRelatedNotif = false;
+    try {
+      if (action === 'quarantine') {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const result = await invoke('quarantine_threat_file', {
+          filePath: threat.path,
+          threatName: threat.threatName,
+          threatLevel: threat.threatLevel
+        }) as any;
+        if (result.success) {
+          this.addLog('INFO', `已隔离威胁: ${threat.path}`);
+          removeRelatedNotif = true;
+        } else {
+          alert(`隔离失败${result.error ? ':\n' + result.error : ''}`);
+          threat.status = 'pending';
+          return;
+        }
+      } else if (action === 'allow') {
+        // 添加到白名单
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          await invoke('add_to_whitelist', { path: threat.path });
+          this.addLog('INFO', `已添加到白名单: ${threat.path}`);
+          removeRelatedNotif = true;
+        } catch (e) {
+          console.warn('添加白名单失败（可能已存在）:', e);
+          alert('允许失败：' + (e as Error).message);
+          threat.status = 'pending';
+          return;
+        }
+      } else if (action === 'done') {
+        // 已完成（EDR 已杀进程 / 文件防护已隔离），仅记录日志
+        this.addLog('INFO', `已确认威胁处理: ${threat.path}`);
+        removeRelatedNotif = true;
+      }
+      threat.status = 'resolved';
+
+      // 处理成功后删除对应通知
+      if (removeRelatedNotif) {
+        const relatedNotif = this.notificationManager.getAll().find(n => n.pendingThreatId === threat.id);
+        if (relatedNotif) {
+          this.notificationManager.removeById(relatedNotif.id);
+          if (this.selectedNotificationId === relatedNotif.id) {
+            this.selectedNotificationId = null;
+          }
+        }
+      }
+    } catch (error) {
+      console.error('处理威胁失败:', error);
+      alert('处理失败：' + (error as Error).message);
+      threat.status = 'pending';
+    }
+
+    this.updateNotificationBadge();
+    this.updateNotificationsSection();
+    // 处理完威胁后主页状态可能变化（如从有风险恢复安全），同步刷新主页
+    this.updateHomeStatus().catch(e => console.error('Failed to update home status after resolving threat:', e));
+  }
+
+  private updateNotificationBadge() {
+    const unreadCount = this.notificationManager.getUnreadCount();
+    const badge = document.getElementById('notification-badge');
+    if (badge) {
+      badge.style.display = unreadCount > 0 ? 'block' : 'none';
+    }
+  }
+
+  // 添加通知并更新小红点
+  private addNotification(type: NotificationCategory, title: string, message: string, extra?: { threatName?: string; filePath?: string; source?: string; pendingThreatId?: string }) {
+    this.notificationManager.add({ type, title, message, ...extra });
+    this.updateNotificationBadge();
+    // 如果当前在通知页面，局部刷新
+    if (this.currentPage === 'notifications') {
+      this.updateNotificationsSection();
+    }
+  }
+
+  private renderChatPage(): string {
+    return `
+      <section class="page-section" id="section-chat" style="padding: 0; overflow: hidden; height: 100vh;">
+        <iframe 
+          src="https://scan.xiguastudio.top" 
+          style="width: 100%; height: 100%; border: none;"
+        ></iframe>
+      </section>
+    `;
+  }
+
+  private renderEdrProcessTimeline(process: any): string {
+    // 获取事件类型标签
+    const getEventTypeLabel = (type: string) => {
+      switch (type) {
+        case 'network': return '网络';
+        case 'file': return '文件';
+        case 'registry': return '注册表';
+        case 'process': return '进程';
+        default: return '系统';
+      }
+    };
+    
+    // 构建时间线数据：程序启动作为第一个事件
+    const timelineEvents = [
+      {
+        time: process.start_time.split(' ')[1] || '00:00:00',
+        event_type: 'process',
+        action: '进程启动',
+        details: `路径: ${process.path}${process.parent_name ? ` | 父进程: ${process.parent_name}` : ''}`,
+        isFirst: true
+      },
+      ...(process.events || [])
+    ];
+    
+    return `
+      <div class="timeline-container" style="max-width: 100%;">
+        ${timelineEvents.map((event: any, index: number) => `
+          <div class="timeline-item" style="display: flex; margin-bottom: 20px; position: relative;">
+            <div class="timeline-left" style="display: flex; flex-direction: column; align-items: center; width: 60px; flex-shrink: 0;">
+              <div class="timeline-dot ${event.event_type}" style="width: 12px; height: 12px; border-radius: 50%; background: ${event.event_type === 'network' ? '#2196F3' : event.event_type === 'file' ? '#ffc107' : event.event_type === 'registry' ? '#28a745' : '#17a2b8'}; border: 2px solid #fff; box-shadow: 0 0 0 2px ${event.event_type === 'network' ? '#2196F3' : event.event_type === 'file' ? '#ffc107' : event.event_type === 'registry' ? '#28a745' : '#17a2b8'}; z-index: 2;"></div>
+              ${index < timelineEvents.length - 1 ? '<div class="timeline-line" style="width: 2px; flex: 1; background: #e0e0e0; margin-top: 8px;"></div>' : ''}
+              <div class="timeline-time" style="font-size: 12px; color: #666; margin-top: 4px; text-align: center;">${event.time}</div>
+            </div>
+            <div class="timeline-content" style="flex: 1; margin-left: 16px;">
+              <div class="timeline-card" style="background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1); border: 1px solid #e0e0e0;">
+                <div class="timeline-card-header" style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                  <div class="timeline-icon" style="width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                    ${event.event_type === 'network' ? '<svg viewBox="0 0 24 24" fill="none" stroke="#2196F3" stroke-width="2"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>' :
+                      event.event_type === 'file' ? '<svg viewBox="0 0 24 24" fill="none" stroke="#ffc107" stroke-width="2"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>' :
+                      event.event_type === 'registry' ? '<svg viewBox="0 0 24 24" fill="none" stroke="#28a745" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>' :
+                      '<svg viewBox="0 0 24 24" fill="none" stroke="#17a2b8" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>'}
+                  </div>
+                  <span class="timeline-title" style="font-size: 14px; font-weight: 600; color: #1a1a1a; flex: 1;">${event.action}</span>
+                  <span class="timeline-relative-time" style="font-size: 12px; color: #666;">${event.isFirst ? '启动' : getEventTypeLabel(event.event_type)}</span>
+                </div>
+                <div class="timeline-description" style="font-size: 13px; color: #666; line-height: 1.5; word-wrap: break-word; word-break: break-all;">${event.details}</div>
+              </div>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
+
+  // ==================== 安全日志页面 ====================
+
+  private async loadSecurityLogs() {
+    try {
+      const result = await invoke<{
+        logs: SecurityLogEntry[];
+        total: number;
+        page: number;
+        page_size: number;
+      }>('get_security_logs', {
+        startDate: this.securityLogStartDate || null,
+        endDate: this.securityLogEndDate || null,
+        category: this.securityLogCategory === 'all' ? null : this.securityLogCategory,
+        keyword: this.securityLogKeyword || null,
+        page: this.securityLogPage,
+        pageSize: this.securityLogPageSize
+      });
+      
+      this.securityLogs = result.logs;
+      this.securityLogTotal = result.total;
+      // 只有在安全日志页面时才重新渲染
+      if (this.currentPage === 'security_log') {
+        this.render();
+      }
+    } catch (error) {
+      console.error('Failed to load security logs:', error);
+    }
+  }
+
+  // 添加时间线事件
+  private async addTimelineEvent(event: { id: string; timestamp: string; event_type: string; title: string; description: string; process_name?: string; result?: string }) {
+    this.logUploadManager.collectTimelineEvent(event);
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('add_timeline_event_command', { event });
+      console.log('[Timeline] Event added:', event.title);
+    } catch (e) {
+      console.error('[Timeline] Failed to add event:', e);
+    }
+  }
+
+  // 添加安全日志条目
+  private async addSecurityLogEntry(entry: { timestamp: string; category: string; action: string; target: string; details: string; result: string; source?: string }) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('add_security_log', { entry });
+      console.log('[SecurityLog] Entry added:', entry.action);
+    } catch (e) {
+      console.error('[SecurityLog] Failed to add entry:', e);
+    }
+  }
+
+  // private async loadSecurityLogStats() {
+  //   try {
+  //     const stats = await invoke<SecurityLogStats>('get_security_log_stats', { days: 7 });
+  //     this.securityLogStats = stats;
+  //   } catch (error) {
+  //     console.error('Failed to load security log stats:', error);
+  //   }
+  // }
+
+  private renderSecurityLogSection(): string {
+    // 如果数据为空、未在加载中、且未加载过，触发异步加载
+    if (this.securityLogs.length === 0 && this.securityLogTotal === 0 && !this.securityLogLoading && !this.securityLogLoaded) {
+      this.securityLogLoading = true;
+      setTimeout(() => {
+        this.loadSecurityLogs().finally(() => {
+          this.securityLogLoading = false;
+          this.securityLogLoaded = true;
+        });
+      }, 100);
+    }
+
+    const getCategoryLabel = (cat: string) => {
+      const map: Record<string, string> = {
+        scan: this.t('logCategoryScan'),
+        realtime: this.t('logCategoryRealtime'),
+        behavior: this.t('logCategoryBehavior'),
+        driver: this.t('logCategoryDriver'),
+        update: this.t('logCategoryUpdate'),
+        quarantine: this.t('logCategoryQuarantine'),
+        system: this.t('logCategorySystem'),
+        other: this.t('logCategoryOther')
+      };
+      return map[cat] || cat;
+    };
+
+    const getActionLabel = (action: string) => {
+      const map: Record<string, string> = {
+        detected: this.t('logActionDetected'),
+        blocked: this.t('logActionBlocked'),
+        cleaned: this.t('logActionCleaned'),
+        quarantined: this.t('logActionQuarantined'),
+        deleted: this.t('logActionDeleted'),
+        allowed: this.t('logActionAllowed'),
+        scanned: this.t('logActionScanned'),
+        updated: this.t('logActionUpdated'),
+        started: this.t('logActionStarted'),
+        stopped: this.t('logActionStopped'),
+        info: this.t('logActionInfo')
+      };
+      return map[action] || action;
+    };
+
+    const getResultClass = (result: string) => {
+      switch (result) {
+        case 'success': return 'color: var(--success);';
+        case 'failed': return 'color: var(--danger);';
+        case 'partial': return 'color: var(--warning);';
+        default: return 'color: var(--text-secondary);';
+      }
+    };
+
+    return `
+      <section class="page-section page" id="section-security-log" style="overflow-y: auto; max-height: calc(100vh - 80px);">
+        <div class="page-header">
+          <div class="page-title">${this.t('securityLog')}</div>
+          <div class="page-subtitle">${this.t('securityLogSubtitle')}</div>
+        </div>
+
+        <!-- 日志列表 -->
+        <div class="card">
+          <div style="padding: 15px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--primary);">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="16" y1="13" x2="8" y2="13"/>
+              <line x1="16" y1="17" x2="8" y2="17"/>
+              <polyline points="10 9 9 9 8 9"/>
+            </svg>
+            <span style="font-weight: 500;">${this.t('logList')}</span>
+          </div>
+          
+          ${this.securityLogs.length === 0 ? `
+            <div style="text-align: center; padding: 60px 20px;">
+              <div style="width: 48px; height: 48px; margin: 0 auto 15px; color: var(--text-secondary);">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                  <polyline points="14 2 14 8 20 8"/>
+                  <line x1="16" y1="13" x2="8" y2="13"/>
+                  <line x1="16" y1="17" x2="8" y2="17"/>
+                  <polyline points="10 9 9 9 8 9"/>
+                </svg>
+              </div>
+              <div style="font-size: 14px; color: var(--text-secondary);">${this.t('noLogs')}</div>
+            </div>
+          ` : `
+            <div style="max-height: 500px; overflow-y: auto;">
+              <table style="width: 100%; border-collapse: collapse;">
+                <thead>
+                  <tr style="background: var(--bg-secondary);">
+                    <th style="padding: 12px 15px; text-align: left; font-size: 12px; font-weight: 600; color: var(--text-secondary); border-bottom: 1px solid var(--border); white-space: nowrap;">${this.t('time')}</th>
+                    <th style="padding: 12px 15px; text-align: left; font-size: 12px; font-weight: 600; color: var(--text-secondary); border-bottom: 1px solid var(--border); white-space: nowrap;">${this.t('category')}</th>
+                    <th style="padding: 12px 15px; text-align: left; font-size: 12px; font-weight: 600; color: var(--text-secondary); border-bottom: 1px solid var(--border); white-space: nowrap;">${this.t('function')}</th>
+                    <th style="padding: 12px 15px; text-align: left; font-size: 12px; font-weight: 600; color: var(--text-secondary); border-bottom: 1px solid var(--border);">${this.t('summary')}</th>
+                    <th style="padding: 12px 15px; text-align: center; font-size: 12px; font-weight: 600; color: var(--text-secondary); border-bottom: 1px solid var(--border); white-space: nowrap;">${this.t('result')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${this.securityLogs.map(log => `
+                    <tr style="border-bottom: 1px solid var(--border);" class="security-log-row" data-id="${log.id}">
+                      <td style="padding: 12px 15px; font-size: 13px; color: var(--text-secondary); white-space: nowrap;">${log.timestamp}</td>
+                      <td style="padding: 12px 15px; font-size: 13px; white-space: nowrap;">
+                        <span style="padding: 2px 8px; border-radius: 4px; font-size: 12px; background: var(--bg-secondary); color: var(--text-secondary);">
+                          ${getCategoryLabel(log.category)}
+                        </span>
+                      </td>
+                      <td style="padding: 12px 15px; font-size: 13px; color: var(--text-primary); white-space: nowrap;">${log.function}</td>
+                      <td style="padding: 12px 15px; font-size: 13px; color: var(--text-primary);">
+                        <div>${log.summary}</div>
+                        ${log.file_path ? `<div style="font-size: 11px; color: var(--text-secondary); margin-top: 3px;">${log.file_path}</div>` : ''}
+                        ${log.threat_name ? `<div style="font-size: 11px; color: var(--danger); margin-top: 3px;">${this.t('threat')}: ${log.threat_name}</div>` : ''}
+                      </td>
+                      <td style="padding: 12px 15px; font-size: 13px; text-align: center; white-space: nowrap;">
+                        <span style="${getResultClass(log.result)}">${getActionLabel(log.action)}</span>
+                      </td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          `}
+        </div>
+      </section>
+    `;
+  }
+
+  private attachSecurityLogEventListeners() {
+    // 安全日志页面暂无交互事件
+  }
+
+  private attachEventListeners() {
+    // 菜单按钮 - 切换下拉菜单
+    const menuBtn = document.getElementById('menu-btn');
+    const menuDropdown = document.getElementById('menu-dropdown');
+    if (menuBtn && menuDropdown) {
+      menuBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        menuDropdown.classList.toggle('open');
+      });
+      // 点击下拉菜单项
+      document.getElementById('menu-chat')?.addEventListener('click', async () => {
+        menuDropdown.classList.remove('open');
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          await invoke('open_chat_window');
+        } catch (e) {
+          console.error('Failed to open cloud platform:', e);
+        }
+      });
+      // 引擎概览
+      document.getElementById('menu-engine-overview')?.addEventListener('click', async () => {
+        menuDropdown.classList.remove('open');
+        this.showEngineOverview();
+      });
+      // 演示模式
+      document.getElementById('menu-demo-mode')?.addEventListener('click', () => {
+        menuDropdown.classList.remove('open');
+        this.startDemoMode();
+      });
+      // 点击外部关闭下拉菜单
+      document.addEventListener('click', () => {
+        menuDropdown.classList.remove('open');
+      });
+    }
+
+    document.getElementById('minimize-btn')?.addEventListener('click', () => {
+      invoke('minimize_window');
+    });
+
+    document.getElementById('close-btn')?.addEventListener('click', () => {
+      invoke('close_window');
+    });
+
+    // 通知铃铛按钮 - 滚动到通知中心
+    const notificationBtn = document.getElementById('notification-btn');
+    if (notificationBtn) {
+      notificationBtn.addEventListener('click', () => {
+        this.currentPage = 'notifications';
+        this.render();
+        setTimeout(() => this.scrollToSection('notifications'), 100);
+      });
+    }
+
+    document.querySelectorAll('.sidebar-item').forEach(item => {
+      item.addEventListener('click', (e) => {
+        const page = (e.currentTarget as HTMLElement).dataset.page as Page;
+        if (page) {
+          if (this.scanProgress >= 100 && !this.isScanning) {
+            this.scanProgress = 0;
+            this.currentScanFileIndex = 0;
+            this.scannedFilesCount = 0;
+          }
+          
+          // 如果是隔离区或安全日志，需要特殊处理
+          if (page === 'quarantine' || page === 'security_log') {
+            this.currentPage = page;
+            this.render();
+          } else if (this.currentPage === 'quarantine' || this.currentPage === 'security_log' || this.currentPage === 'chat') {
+            // 从隔离区/安全日志/聊天返回其他页面
+            this.currentPage = page;
+            this.render();
+            if (page !== 'home') {
+              setTimeout(() => this.scrollToSection(page), 100);
+            }
+          } else {
+            this.currentPage = page;
+            // 设置手动滚动标志，防止 IntersectionObserver 覆盖
+            this.isManualScrolling = true;
+            this.scrollToSection(page);
+            // 更新侧边栏高亮状态
+            document.querySelectorAll('.sidebar-item').forEach(item => {
+              const itemPage = item.getAttribute('data-page');
+              if (itemPage === page) {
+                item.classList.add('active');
+              } else {
+                item.classList.remove('active');
+              }
+            });
+            // 1秒后清除手动滚动标志
+            setTimeout(() => {
+              this.isManualScrolling = false;
+            }, 1000);
+          }
+          // 页面切换后更新滚动模式
+          setTimeout(() => this.applyContinuousScrollSetting(), 200);
+        } else {
+          // 占位项（系统优化、隐私保护等尚未实现的功能）
+          const placeholder = (e.currentTarget as HTMLElement).dataset.placeholder;
+          if (placeholder) {
+            this.addLog('INFO', `「${placeholder === 'optimize' ? this.t('navSystemOptimize') : this.t('navPrivacy')}」功能即将上线`);
+          }
+        }
+      });
+    });
+
+    // 弹窗拦截器页面事件
+    this.attachPopupBlockerListeners();
+
+    document.getElementById('custom-scan-btn')?.addEventListener('click', async () => {
+      try {
+        const selected = await import('@tauri-apps/plugin-dialog').then(m => m.open({
+          directory: true,
+          multiple: false,
+          title: '选择要扫描的目录'
+        }));
+        
+        if (selected && typeof selected === 'string') {
+          this.addLog('INFO', `Custom scan directory selected: ${selected}`);
+          await this.startCustomScan(selected);
+        }
+      } catch (error) {
+        console.error('Failed to select directory:', error);
+        this.addLog('ERROR', `Failed to select directory: ${error}`);
+      }
+    });
+
+    document.getElementById('open-quarantine-btn')?.addEventListener('click', () => {
+      this.currentPage = 'quarantine';
+      this.render();
+    });
+
+    document.getElementById('open-security-log-btn')?.addEventListener('click', async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('open_timeline_window');
+        this.addLog('INFO', 'Opened timeline window');
+      } catch (error) {
+        console.error('Failed to open timeline window:', error);
+        this.addLog('ERROR', `Failed to open timeline: ${error}`);
+      }
+    });
+
+    document.getElementById('start-quick-scan')?.addEventListener('click', () => {
+      this.startScan();
+    });
+
+    document.getElementById('start-full-scan')?.addEventListener('click', () => {
+      this.startFullScan();
+    });
+
+    // 首页 Hero 扫描下拉菜单
+    const heroScanTrigger = document.getElementById('hero-scan-trigger');
+    const heroScanMenu = document.getElementById('hero-scan-menu');
+
+    const closeHeroScanMenu = () => {
+      heroScanMenu?.classList.remove('open');
+      heroScanTrigger?.classList.remove('open');
+    };
+
+    const openHeroScanMenu = () => {
+      heroScanMenu?.classList.add('open');
+      heroScanTrigger?.classList.add('open');
+    };
+
+    heroScanTrigger?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (heroScanMenu?.classList.contains('open')) {
+        closeHeroScanMenu();
+      } else {
+        openHeroScanMenu();
+      }
+    });
+
+    document.querySelectorAll('.hero-scan-option').forEach((option) => {
+      option.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const scanType = (option as HTMLElement).dataset.scan;
+        closeHeroScanMenu();
+
+        if (scanType === 'custom') {
+          try {
+            const selected = await import('@tauri-apps/plugin-dialog').then(m => m.open({
+              directory: true,
+              multiple: false,
+              title: '选择要扫描的目录'
+            }));
+            if (!selected || typeof selected !== 'string') return;
+            this.currentPage = 'scan';
+            this.isManualScrolling = true;
+            this.scrollToSection('scan');
+            setTimeout(() => {
+              this.isManualScrolling = false;
+            }, 1000);
+            setTimeout(() => this.startCustomScan(selected), 300);
+          } catch (error) {
+            console.error('Failed to select directory:', error);
+            this.addLog('ERROR', `Failed to select directory: ${error}`);
+          }
+          return;
+        }
+
+        this.currentPage = 'scan';
+        this.isManualScrolling = true;
+        this.scrollToSection('scan');
+        setTimeout(() => {
+          this.isManualScrolling = false;
+        }, 1000);
+        setTimeout(() => {
+          if (scanType === 'quick') {
+            this.startScan();
+          } else if (scanType === 'full') {
+            this.startFullScan();
+          }
+        }, 300);
+      });
+    });
+
+    document.addEventListener('click', () => closeHeroScanMenu());
+
+    // 首页扫描记录链接
+    document.getElementById('open-scan-history-link')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      this.currentPage = 'security_log';
+      this.securityLogLoaded = false;
+      this.render();
+    });
+
+    document.getElementById('start-custom-scan')?.addEventListener('click', async () => {
+      try {
+        const selected = await import('@tauri-apps/plugin-dialog').then(m => m.open({
+          directory: true,
+          multiple: false,
+          title: '选择要扫描的目录'
+        }));
+
+        if (selected && typeof selected === 'string') {
+          this.addLog('INFO', `Custom scan directory selected: ${selected}`);
+          await this.startCustomScan(selected);
+        }
+      } catch (error) {
+        console.error('Failed to select directory:', error);
+        this.addLog('ERROR', `Failed to select directory: ${error}`);
+      }
+    });
+
+    document.getElementById('stop-scan-btn')?.addEventListener('click', () => {
+      this.stopScan();
+    });
+
+    document.getElementById('scan-complete-btn')?.addEventListener('click', () => {
+      this.resetScanAndGoHome();
+    });
+
+    document.getElementById('scan-handle-threats-btn')?.addEventListener('click', async () => {
+      await this.handleDetectedThreats();
+    });
+
+    // 侧边栏折叠按钮 - 只切换类名避免全量刷新
+    document.getElementById('sidebar-collapse-btn')?.addEventListener('click', () => {
+      this.sidebarCollapsed = !this.sidebarCollapsed;
+      localStorage.setItem('sidebar_collapsed', String(this.sidebarCollapsed));
+      const sidebar = document.querySelector('.sidebar');
+      if (sidebar) {
+        sidebar.classList.toggle('collapsed', this.sidebarCollapsed);
+      }
+      const btn = document.getElementById('sidebar-collapse-btn');
+      if (btn) {
+        const arrow = btn.querySelector('svg');
+        if (arrow) {
+          arrow.style.transform = this.sidebarCollapsed ? 'rotate(180deg)' : '';
+        }
+        btn.title = this.sidebarCollapsed ? this.t('expandSidebar') : this.t('collapseSidebar');
+        const label = btn.querySelector('.sidebar-label');
+        if (label) {
+          label.textContent = this.sidebarCollapsed ? '' : this.t('collapseSidebar');
+        }
+      }
+    });
+
+    // 通知中心 - 允许/隔离/完成按钮（使用事件委托）
+    document.addEventListener('click', async (e) => {
+      const target = e.target as HTMLElement;
+      const allowBtn = target.closest('.btn-threat-allow');
+      const quarantineBtn = target.closest('.btn-threat-quarantine');
+      const doneBtn = target.closest('.btn-threat-done');
+      if (allowBtn) {
+        const id = allowBtn.getAttribute('data-id');
+        if (id) await this.resolveThreat(id, 'allow');
+      } else if (quarantineBtn) {
+        const id = quarantineBtn.getAttribute('data-id');
+        if (id) await this.resolveThreat(id, 'quarantine');
+      } else if (doneBtn) {
+        const id = doneBtn.getAttribute('data-id');
+        if (id) await this.resolveThreat(id, 'done');
+      }
+    });
+
+    // 统计卡片上的防护开关（注意：这个要在全局toggle事件之前处理，避免重复切换）
+    document.getElementById('stat-protection-toggle')?.addEventListener('click', async (e) => {
+      e.stopPropagation(); // 阻止冒泡，避免触发全局toggle事件
+      const toggle = document.getElementById('stat-protection-toggle');
+      const isCurrentlyEnabled = toggle?.classList.contains('active') || false;
+      
+      // 切换状态：如果当前是启用的，就关闭；如果当前是关闭的，就启用
+      const newEnabledState = !isCurrentlyEnabled;
+
+      // 关闭操作必须经过安全桌面确认
+      if (!newEnabledState) {
+        const confirmed = await this.requestSecureConfirm(
+          '关闭驱动防护',
+          '您确定要关闭驱动防护吗？关闭后实时拦截能力将停止，您的计算机将失去驱动级保护。',
+          'disable_driver_protection'
+        );
+        if (!confirmed) {
+          return; // 保持原状态，不切换
+        }
+      }
+
+      // 如果是启动防护，先显示提示窗口
+      if (newEnabledState) {
+        this.showDriverLaunchHint();
+      }
+      
+      // 如果是关闭操作，标记为用户手动停止
+      const isManualStop = !newEnabledState;
+      await this.driverProtectionManager.setEnabled(newEnabledState, isManualStop);
+      
+      // 局部更新UI，不刷新整个页面
+      this.updateDriverProtectionToggle();
+      this.updateProtectionStatus();
+      this.updateStatsProtectionToggle();
+      
+      if (newEnabledState) {
+        this.addLog('INFO', 'Driver protection enabled (MiniFilter)');
+      } else {
+        this.addLog('WARNING', 'Driver protection disabled - System vulnerable');
+      }
+    });
+
+    // 首页功能卡片点击事件
+    document.querySelectorAll('.feature-card').forEach(card => {
+      card.addEventListener('click', (e) => {
+        const feature = (e.currentTarget as HTMLElement).dataset.feature;
+        if (feature === 'scan') {
+          this.currentPage = 'scan';
+          this.isManualScrolling = true;
+          this.scrollToSection('scan');
+          setTimeout(() => {
+            this.isManualScrolling = false;
+          }, 1000);
+        } else if (feature === 'quarantine') {
+          this.currentPage = 'quarantine';
+          this.render();
+        } else if (feature === 'optimize' || feature === 'privacy') {
+          this.addLog('INFO', `「${feature === 'optimize' ? this.t('featureSystemOptimize') : this.t('featurePrivacy')}」功能即将上线`);
+        }
+      });
+    });
+
+    // 设置页面的驱动防护开关
+    document.getElementById('driver-protection-checkbox')?.addEventListener('change', async (e) => {
+      const checkbox = e.target as HTMLInputElement;
+
+      // 关闭操作必须经过安全桌面确认（防止恶意程序静默关闭防护）
+      if (!checkbox.checked) {
+        const confirmed = await this.requestSecureConfirm(
+          '关闭驱动防护',
+          '您确定要关闭驱动防护吗？关闭后实时拦截能力将停止，您的计算机将失去驱动级保护。',
+          'disable_driver_protection'
+        );
+        if (!confirmed) {
+          checkbox.checked = true; // 回滚开关状态
+          return;
+        }
+      }
+
+      // 如果是关闭操作，标记为用户手动停止
+      const isManualStop = !checkbox.checked;
+
+      // 如果是启动防护，先显示提示窗口
+      if (checkbox.checked) {
+        this.showDriverLaunchHint();
+      }
+
+      await this.driverProtectionManager.setEnabled(checkbox.checked, isManualStop);
+
+      if (checkbox.checked) {
+        this.addLog('INFO', 'Driver protection enabled (MiniFilter)');
+      } else {
+        this.addLog('WARNING', 'Driver protection disabled - System vulnerable');
+      }
+
+      // 局部更新UI，不刷新整个页面
+      this.updateDriverProtectionToggle();
+      this.updateProtectionStatus();
+      this.updateStatsProtectionToggle();
+
+      // 更新防护类型复选框的禁用状态
+      const protectionCheckboxes = [
+        'boot-protection-checkbox',
+        'registry-protection-checkbox',
+        'ransomware-protection-checkbox',
+        'process-protection-checkbox',
+        'memory-protection-checkbox'
+      ];
+      protectionCheckboxes.forEach(id => {
+        const cb = document.getElementById(id) as HTMLInputElement;
+        if (cb) {
+          cb.disabled = !checkbox.checked;
+        }
+      });
+    });
+
+    // 基础防护开关事件
+    document.getElementById('basic-protection-checkbox')?.addEventListener('change', async (e) => {
+      const checkbox = e.target as HTMLInputElement;
+
+      // 关闭操作必须经过安全桌面确认
+      if (!checkbox.checked) {
+        const confirmed = await this.requestSecureConfirm(
+          '关闭基础防护',
+          '您确定要关闭基础防护吗？关闭后进程行为监控将停止，恶意程序可能趁机运行。',
+          'disable_basic_protection'
+        );
+        if (!confirmed) {
+          checkbox.checked = true; // 回滚开关状态
+          return;
+        }
+      }
+
+      this.basicProtectionManager.setEnabled(checkbox.checked);
+      
+      if (checkbox.checked) {
+        this.addLog('INFO', 'Basic protection enabled (R3 mode)');
+      } else {
+        this.addLog('WARNING', 'Basic protection disabled');
+      }
+      
+      // 更新主页状态
+      this.updateProtectionStatus();
+    });
+
+    // 异步更新基础防护复选框状态（等待状态加载完成）
+    const basicProtectionCheckbox = document.getElementById('basic-protection-checkbox') as HTMLInputElement;
+    if (basicProtectionCheckbox) {
+      // 先根据当前状态设置（可能还没加载完）
+      basicProtectionCheckbox.checked = this.basicProtectionManager.isEnabled();
+      // 等待状态加载完成后更新
+      this.basicProtectionManager.waitForStateLoaded().then(() => {
+        const checkbox = document.getElementById('basic-protection-checkbox') as HTMLInputElement;
+        if (checkbox) {
+          checkbox.checked = this.basicProtectionManager.isEnabled();
+          console.log('[Settings] Basic protection checkbox updated:', checkbox.checked);
+        }
+      });
+    }
+
+    // 文件防护开关事件
+    document.getElementById('file-protection-checkbox')?.addEventListener('change', async (e) => {
+      const checkbox = e.target as HTMLInputElement;
+      try {
+        // 关闭操作必须经过安全桌面确认
+        if (!checkbox.checked) {
+          const confirmed = await this.requestSecureConfirm(
+            '关闭文件防护',
+            '您确定要关闭文件防护吗？关闭后文件实时扫描将停止，下载或复制恶意文件时将不再被拦截。',
+            'disable_file_protection'
+          );
+          if (!confirmed) {
+            checkbox.checked = true; // 回滚开关状态
+            return;
+          }
+        }
+        await this.fileProtectionManager.setEnabled(checkbox.checked);
+        this.addLog(checkbox.checked ? 'INFO' : 'WARNING', checkbox.checked ? '文件防护已启用' : '文件防护已关闭');
+      } catch (err) {
+        console.error('[Settings] Failed to toggle file protection:', err);
+        checkbox.checked = !checkbox.checked;
+      }
+    });
+
+    // 首页实时防护面板开关事件
+    const rtToggleHandler = async (toggleId: string, type: 'driver' | 'basic' | 'file' | 'silent') => {
+      const toggle = document.getElementById(toggleId);
+      if (!toggle) return;
+      const newState = !toggle.classList.contains('active');
+
+      try {
+        // 关闭操作必须经过安全桌面确认
+        if (!newState) {
+          let title = '关闭防护';
+          let description = '您确定要关闭此项防护吗？';
+          if (type === 'driver') {
+            title = '关闭驱动防护';
+            description = '您确定要关闭驱动防护吗？关闭后实时拦截能力将停止，您的计算机将失去驱动级保护。';
+          } else if (type === 'basic') {
+            title = '关闭基础防护';
+            description = '您确定要关闭基础防护吗？关闭后进程行为监控将停止，恶意程序可能趁机运行。';
+          } else if (type === 'file') {
+            title = '关闭文件防护';
+            description = '您确定要关闭文件防护吗？关闭后文件实时扫描将停止，下载或复制恶意文件时将不再被拦截。';
+          }
+          const confirmed = await this.requestSecureConfirm(title, description, `disable_${type}_protection`);
+          if (!confirmed) {
+            return; // 保持原状态，不切换
+          }
+        }
+
+        if (type === 'driver') {
+          await this.driverProtectionManager.setEnabled(newState, !newState);
+          this.addLog(newState ? 'INFO' : 'WARNING', newState ? '驱动防护已启用' : '驱动防护已关闭');
+        } else if (type === 'basic') {
+          this.basicProtectionManager.setEnabled(newState);
+          this.addLog(newState ? 'INFO' : 'WARNING', newState ? '基础防护已启用' : '基础防护已关闭');
+        } else if (type === 'file') {
+          await this.fileProtectionManager.setEnabled(newState);
+          this.addLog(newState ? 'INFO' : 'WARNING', newState ? '文件防护已启用' : '文件防护已关闭');
+        } else if (type === 'silent') {
+          await this.silentModeManager.setEnabled(newState);
+          this.addLog(newState ? 'INFO' : 'WARNING', newState ? '静默模式已开启' : '静默模式已关闭');
+        }
+        // 局部更新UI
+        this.updateRealtimeProtectionToggles();
+        this.updateStatsProtectionToggle();
+        this.updateProtectionStatus();
+        // 注意：此处不再强制 layout 重算，之前的方式反而可能干扰渲染
+      } catch (err) {
+        console.error(`[Home] Failed to toggle ${type} protection:`, err);
+      }
+    };
+
+    document.getElementById('rt-driver-toggle')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      rtToggleHandler('rt-driver-toggle', 'driver');
+    });
+    document.getElementById('rt-basic-toggle')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      rtToggleHandler('rt-basic-toggle', 'basic');
+    });
+    document.getElementById('rt-file-toggle')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      rtToggleHandler('rt-file-toggle', 'file');
+    });
+    document.getElementById('rt-silent-toggle')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      rtToggleHandler('rt-silent-toggle', 'silent');
+    });
+
+    // PUA 拦截开关事件
+    document.getElementById('pua-protection-checkbox')?.addEventListener('change', async (e) => {
+      const checkbox = e.target as HTMLInputElement;
+      this.puaProtectionEnabled = checkbox.checked;
+      localStorage.setItem('pua_protection_enabled', String(checkbox.checked));
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('set_pua_protection_enabled', { enabled: checkbox.checked });
+      } catch (err) {
+        console.error('[Settings] Failed to save PUA setting:', err);
+      }
+      this.addLog(checkbox.checked ? 'INFO' : 'WARNING', checkbox.checked ? 'PUA protection enabled' : 'PUA protection disabled');
+    });
+
+    // 可疑文件拦截开关事件
+    document.getElementById('suspicious-intercept-checkbox')?.addEventListener('change', async (e) => {
+      const checkbox = e.target as HTMLInputElement;
+      this.suspiciousInterceptEnabled = checkbox.checked;
+      localStorage.setItem('suspicious_intercept_enabled', String(checkbox.checked));
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('set_suspicious_intercept_enabled', { enabled: checkbox.checked });
+      } catch (err) {
+        console.error('[Settings] Failed to save suspicious intercept setting:', err);
+      }
+      this.addLog(checkbox.checked ? 'INFO' : 'WARNING', checkbox.checked ? '可疑文件拦截已启用' : '可疑文件拦截已禁用');
+    });
+
+    // 开机自启动开关事件
+    document.getElementById('auto-start-checkbox')?.addEventListener('change', async (e) => {
+      const checkbox = e.target as HTMLInputElement;
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        if (checkbox.checked) {
+          this.autoStartEnabled = await invoke('add_to_startup_folder') as boolean;
+        } else {
+          this.autoStartEnabled = !(await invoke('remove_from_startup_folder') as boolean);
+        }
+        checkbox.checked = this.autoStartEnabled;
+      } catch (err) {
+        console.error('[Settings] Failed to toggle auto-start:', err);
+        checkbox.checked = !checkbox.checked;
+      }
+    });
+
+    // 桌面宠物开关事件
+    document.getElementById('desktop-pet-checkbox')?.addEventListener('change', async (e) => {
+      const checkbox = e.target as HTMLInputElement;
+      this.desktopPetEnabled = checkbox.checked;
+      localStorage.setItem('desktop_pet_enabled', String(checkbox.checked));
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('toggle_desktop_pet', { enabled: checkbox.checked });
+      } catch (err) {
+        console.error('[Settings] Failed to toggle desktop pet:', err);
+      }
+      this.addLog(checkbox.checked ? 'INFO' : 'WARNING', checkbox.checked ? '桌面宠物已显示' : '桌面宠物已隐藏');
+    });
+
+    // 液态玻璃开关事件
+    document.getElementById('liquid-glass-toggle')?.addEventListener('click', () => {
+      const toggle = document.getElementById('liquid-glass-toggle');
+      if (!toggle) return;
+      const newState = this.liquidGlassManager.toggle();
+      if (newState) {
+        toggle.classList.add('active');
+        this.addLog('INFO', '液态玻璃效果已开启');
+      } else {
+        toggle.classList.remove('active');
+        this.addLog('INFO', '液态玻璃效果已关闭');
+      }
+      this.render();
+    });
+
+    // 隐藏分隔线开关事件
+    document.getElementById('hide-separator-toggle')?.addEventListener('click', () => {
+      const toggle = document.getElementById('hide-separator-toggle');
+      if (!toggle) return;
+      const newState = this.separatorLineManager.toggle();
+      if (newState) {
+        toggle.classList.add('active');
+        this.addLog('INFO', '隐藏分隔线已开启');
+      } else {
+        toggle.classList.remove('active');
+        this.addLog('INFO', '隐藏分隔线已关闭');
+      }
+    });
+
+    document.getElementById('theme-mode-select')?.addEventListener('change', (e) => {
+      const mode = (e.target as HTMLSelectElement).value;
+      this.themeManager.setThemeMode(mode);
+      // 如果正在使用云母效果，切换主题后需要让 DWM 重新取色
+      const currentBackdrop = this.animeStyleManager.getBackdrop();
+      if (currentBackdrop === 'mica' || currentBackdrop === 'micaAlt') {
+        this.animeStyleManager.setBackdrop(currentBackdrop);
+      }
+      this.render();
+    });
+
+    document.getElementById('theme-select')?.addEventListener('change', (e) => {
+      const theme = (e.target as HTMLSelectElement).value;
+      this.themeManager.setTheme(theme);
+    });
+
+    // 打开时间线窗口
+    document.getElementById('open-timeline-btn')?.addEventListener('click', async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('open_timeline_window');
+        this.addLog('INFO', 'Opened timeline window');
+      } catch (error) {
+        console.error('Failed to open timeline window:', error);
+        this.addLog('ERROR', `Failed to open timeline: ${error}`);
+      }
+    });
+
+    document.getElementById('language-select')?.addEventListener('change', async (e) => {
+      const lang = (e.target as HTMLSelectElement).value as Language;
+      this.localizationManager.setLanguage(lang);
+      try {
+        await invoke('set_language', { lang });
+      } catch (err) {
+        console.error('[App] Failed to sync language to backend:', err);
+      }
+      this.render();
+    });
+
+    document.getElementById('backdrop-select')?.addEventListener('change', (e) => {
+      const backdrop = (e.target as HTMLSelectElement).value as 'none' | 'acrylic' | 'mica' | 'micaAlt';
+      this.animeStyleManager.setBackdrop(backdrop);
+    });
+
+    // 禁用一滑到底开关
+    document.getElementById('disable-continuous-scroll-toggle')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const toggle = document.getElementById('disable-continuous-scroll-toggle');
+      const currentlyActive = toggle?.classList.contains('active') || false;
+      const newState = !currentlyActive;
+      this.setContinuousScrollDisabled(newState);
+      if (newState) {
+        toggle?.classList.add('active');
+      } else {
+        toggle?.classList.remove('active');
+      }
+    });
+
+    const opacitySlider = document.getElementById('opacity-slider') as HTMLInputElement;
+    const opacityValue = document.getElementById('opacity-value');
+    opacitySlider?.addEventListener('input', (e) => {
+      const value = parseInt((e.target as HTMLInputElement).value);
+      if (opacityValue) opacityValue.textContent = value + '%';
+      this.animeStyleManager.setOpacity(value / 100);
+    });
+
+    document.getElementById('select-bg-btn')?.addEventListener('click', async () => {
+      try {
+        const selected = await import('@tauri-apps/plugin-dialog').then(m => m.open({
+          directory: false,
+          multiple: false,
+          filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp'] }],
+          title: '选择背景图片'
+        }));
+        if (selected && typeof selected === 'string') {
+          // 复制到程序数据目录，原图删除后背景依然有效
+          const { invoke } = await import('@tauri-apps/api/core');
+          const savedPath = await invoke('save_background_image', { filePath: selected }) as string;
+          this.animeStyleManager.setBackgroundImage(savedPath);
+          this.render();
+        }
+      } catch (error) {
+        console.error('Failed to select background:', error);
+      }
+    });
+
+    document.getElementById('clear-bg-btn')?.addEventListener('click', async () => {
+      // 同时删除程序数据目录中的背景图片
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('delete_background_image');
+      } catch (e) {
+        console.error('Failed to delete background image:', e);
+      }
+      this.animeStyleManager.setBackgroundImage(null);
+      this.render();
+    });
+
+    // 背景显示模式切换
+    const bgModeSelect = document.getElementById('bg-mode-select') as HTMLSelectElement;
+    bgModeSelect?.addEventListener('change', (e) => {
+      const mode = (e.target as HTMLSelectElement).value as BackgroundMode;
+      this.animeStyleManager.setBackgroundMode(mode);
+      this.render();
+    });
+
+    const iconModal = document.getElementById('icon-settings-modal') as HTMLElement;
+
+    document.getElementById('open-icon-settings-btn')?.addEventListener('click', async () => {
+      if (iconModal) {
+        iconModal.style.display = 'flex';
+        // 异步加载图标预览
+        await this.loadIconPreviewsAsync();
+      }
+    });
+
+    document.getElementById('close-icon-modal')?.addEventListener('click', () => {
+      if (iconModal) {
+        iconModal.style.display = 'none';
+      }
+    });
+
+    document.getElementById('save-icon-settings')?.addEventListener('click', () => {
+      if (iconModal) {
+        iconModal.style.display = 'none';
+      }
+    });
+
+    iconModal?.addEventListener('click', (e) => {
+      if (e.target === iconModal) {
+        iconModal.style.display = 'none';
+      }
+    });
+
+    const setupIconButton = (btnId: string, riskLevel: 'secure' | 'lowRisk' | 'mediumRisk' | 'highRisk', clearBtnId?: string) => {
+      document.getElementById(btnId)?.addEventListener('click', async () => {
+        try {
+          const selected = await import('@tauri-apps/plugin-dialog').then(m => m.open({
+            directory: false,
+            multiple: false,
+            filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'ico'] }],
+            title: '选择状态图标'
+          }));
+          if (selected && typeof selected === 'string') {
+            this.animeStyleManager.setCustomIcon(riskLevel, selected);
+            this.render();
+            setTimeout(() => {
+              const modal = document.getElementById('icon-settings-modal');
+              if (modal) modal.style.display = 'flex';
+            }, 100);
+          }
+        } catch (error) {
+          console.error('Failed to select icon:', error);
+        }
+      });
+
+      if (clearBtnId) {
+        document.getElementById(clearBtnId)?.addEventListener('click', () => {
+          this.animeStyleManager.setCustomIcon(riskLevel, null);
+          this.render();
+          setTimeout(() => {
+            const modal = document.getElementById('icon-settings-modal');
+            if (modal) modal.style.display = 'flex';
+          }, 100);
+        });
+      }
+    };
+
+    setupIconButton('modal-icon-secure-btn', 'secure', 'modal-clear-icon-secure');
+    setupIconButton('modal-icon-lowrisk-btn', 'lowRisk', 'modal-clear-icon-lowrisk');
+    setupIconButton('modal-icon-mediumrisk-btn', 'mediumRisk', 'modal-clear-icon-mediumrisk');
+    setupIconButton('modal-icon-highrisk-btn', 'highRisk', 'modal-clear-icon-highrisk');
+
+    document.getElementById('reset-settings-btn')?.addEventListener('click', () => {
+      this.themeManager.setTheme('blue');
+      this.localizationManager.setLanguage('zh-CN');
+      this.animeStyleManager.reset();
+      (document.getElementById('theme-select') as HTMLSelectElement).value = 'blue';
+      (document.getElementById('language-select') as HTMLSelectElement).value = 'zh-CN';
+      document.querySelectorAll('.toggle').forEach(t => t.classList.remove('active'));
+      this.render();
+    });
+
+    document.getElementById('reset-oobe-btn')?.addEventListener('click', () => {
+      if (confirm('确定要重置开箱体验向导吗？这将重新显示初始设置流程。')) {
+        this.resetOOBE();
+      }
+    });
+
+    // 赞助开发者按钮
+    document.getElementById('sponsor-btn')?.addEventListener('click', () => {
+      this.showSponsorDialog();
+    });
+
+    // 问题反馈按钮：跳转问卷
+    document.getElementById('feedback-btn')?.addEventListener('click', async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('open_survey_url');
+        this.addLog('INFO', '已打开问题反馈问卷');
+      } catch (e) {
+        console.error('[Feedback] Failed to open survey:', e);
+      }
+    });
+
+    // 扫描敏感度切换
+    document.getElementById('scan-sensitivity-select')?.addEventListener('change', async (e) => {
+      const select = e.target as HTMLSelectElement;
+      const value = select.value;
+      // 保存到 localStorage
+      this.scanSensitivity = value;
+      localStorage.setItem('scan_sensitivity', value);
+      console.log('[Scanner] Sensitivity changed to:', value);
+      // 尝试切换后端模型（失败不影响设置保存）
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const modelPath = await invoke<string>('set_scan_sensitivity', { sensitivity: value });
+        console.log('[Scanner] Backend model switched successfully:', modelPath);
+        this.addLog('INFO', `扫描引擎已切换到: ${modelPath}`);
+      } catch (error) {
+        console.error('[Scanner] Backend model switch failed:', error);
+        this.addLog('WARNING', `扫描引擎切换失败: ${error}`);
+      }
+    });
+
+    document.getElementById('silent-mode-checkbox')?.addEventListener('change', async (e) => {
+      const checkbox = e.target as HTMLInputElement;
+      await this.silentModeManager.setEnabled(checkbox.checked);
+    });
+
+    document.getElementById('infector-detection-checkbox')?.addEventListener('change', async (e) => {
+      const checkbox = e.target as HTMLInputElement;
+      await this.infectorDetectionManager.setEnabled(checkbox.checked);
+    });
+
+    // 脚本防护开关
+    document.getElementById('script-protection-checkbox')?.addEventListener('change', async (e) => {
+      const checkbox = e.target as HTMLInputElement;
+
+      // 关闭操作必须经过安全桌面确认
+      if (!checkbox.checked) {
+        const confirmed = await this.requestSecureConfirm(
+          '关闭脚本防护',
+          '您确定要关闭脚本防护吗？关闭后恶意脚本（如 PowerShell、WScript 攻击）将不再被拦截。',
+          'disable_script_protection'
+        );
+        if (!confirmed) {
+          checkbox.checked = true; // 回滚开关状态
+          return;
+        }
+      }
+
+      await this.scriptProtectionManager.setEnabled(checkbox.checked);
+    });
+
+    // 禁用本地规则库开关
+    document.getElementById('skip-local-rules-checkbox')?.addEventListener('change', async (e) => {
+      const checkbox = e.target as HTMLInputElement;
+      await this.skipLocalRulesManager.setEnabled(checkbox.checked);
+    });
+
+    document.getElementById('virus-family-checkbox')?.addEventListener('change', async (e) => {
+      const checkbox = e.target as HTMLInputElement;
+      await this.virusFamilyAnalysisManager.setEnabled(checkbox.checked);
+    });
+
+    // 脚本扫描引擎开关
+    document.getElementById('script-scan-checkbox')?.addEventListener('change', (e) => {
+      const checkbox = e.target as HTMLInputElement;
+      this.scriptScanManager.setEnabled(checkbox.checked);
+    });
+
+    // 浏览器防护
+    document.getElementById('open-browser-protection')?.addEventListener('click', async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const extPath = await invoke<string>('open_browser_protection');
+        // 显示使用说明
+        const mask = document.createElement('div');
+        mask.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.25);display:flex;align-items:center;justify-content:center;z-index:10001;backdrop-filter:blur(4px);';
+        mask.innerHTML = `
+          <div style="background:#FFF;border-radius:8px;max-width:480px;width:90%;box-shadow:0 32px 64px rgba(0,0,0,0.15);font-family:'Segoe UI Variable','Segoe UI',system-ui,sans-serif;overflow:hidden;padding:24px;">
+            <div style="font-size:18px;font-weight:600;color:#1C1C1C;margin-bottom:4px;">浏览器防护</div>
+            <div style="font-size:14px;color:#5F5F5F;margin-bottom:16px;">Edge 已打开到扩展管理页面，请按以下步骤操作：</div>
+            <ol style="font-size:14px;color:#1A1A1A;line-height:1.8;padding-left:20px;margin:0 0 16px 0;">
+              <li>在 Edge 扩展管理页面，开启左上角的 <strong>「开发人员模式」</strong></li>
+              <li>点击 <strong>「加载解压缩的扩展」</strong></li>
+              <li>在文件选择框中粘贴以下路径，或点击下方按钮复制：<br>
+                <code id="ext-path-code" style="display:block;padding:8px 12px;background:#F3F3F3;border-radius:4px;font-size:12px;word-break:break-all;margin-top:4px;cursor:pointer;border:1px solid transparent;" title="点击复制">${extPath}</code>
+                <button id="copy-ext-path" style="margin-top:6px;padding:4px 12px;border:1px solid #D0D0D0;background:#FFF;border-radius:4px;font-size:12px;color:#333;cursor:pointer;font-family:inherit;">复制路径</button>
+              </li>
+            </ol>
+            <div style="font-size:13px;color:#888;margin-bottom:16px;">首次加载后，插件会在 Edge 重启后自动生效。</div>
+            <div style="display:flex;justify-content:flex-end;">
+              <button id="browser-ext-close" style="padding:6px 16px;border:none;background:#005FB8;border-radius:4px;font-size:14px;color:white;cursor:pointer;font-family:inherit;min-width:80px;">完成</button>
+            </div>
+          </div>
+        `;
+        document.body.appendChild(mask);
+        // 复制路径
+        const copyBtn = mask.querySelector('#copy-ext-path');
+        const codeEl = mask.querySelector('#ext-path-code');
+        if (copyBtn && codeEl) {
+          const doCopy = () => {
+            navigator.clipboard.writeText(extPath).then(() => {
+              copyBtn.textContent = '已复制';
+              setTimeout(() => { copyBtn.textContent = '复制路径'; }, 2000);
+            }).catch(() => {
+              // 回退：选中文本
+              const range = document.createRange();
+              range.selectNodeContents(codeEl);
+              const sel = window.getSelection();
+              sel?.removeAllRanges();
+              sel?.addRange(range);
+            });
+          };
+          copyBtn.addEventListener('click', doCopy);
+          codeEl.addEventListener('click', doCopy);
+        }
+        mask.querySelector('#browser-ext-close')?.addEventListener('click', () => mask.remove());
+        mask.addEventListener('click', (e) => { if (e.target === mask) mask.remove(); });
+      } catch (e) {
+        console.error('[BrowserProtection] 启动失败:', e);
+        alert(`启动浏览器防护失败: ${e}`);
+      }
+    });
+
+    // 压缩包扫描开关
+    document.getElementById('archive-scan-checkbox')?.addEventListener('change', (e) => {
+      const checkbox = e.target as HTMLInputElement;
+      this.archiveScanManager.setEnabled(checkbox.checked);
+    });
+
+    // 云端哈希库开关
+    document.getElementById('cloud-hash-checkbox')?.addEventListener('change', async (e) => {
+      const checkbox = e.target as HTMLInputElement;
+      if (!checkbox.checked) {
+        // 关闭时询问确认
+        const confirmed = await this.showCloudHashDisableDialog();
+        if (confirmed) {
+          this.cloudHashManager.setEnabled(false);
+          this.addScanLog('INFO', '云端哈希库已禁用');
+        } else {
+          checkbox.checked = true;
+        }
+      } else {
+        // 如果辅助云查询已启用，先自动关闭它（两者互斥）
+        if (this.auxiliaryCloudScanManager.isEnabled()) {
+          await this.auxiliaryCloudScanManager.setEnabled(false);
+          const auxiliaryCheckbox = document.getElementById('auxiliary-cloud-scan-checkbox') as HTMLInputElement;
+          if (auxiliaryCheckbox) auxiliaryCheckbox.checked = false;
+          this.addScanLog('INFO', '辅助云查询已自动关闭');
+        }
+        this.cloudHashManager.setEnabled(true);
+        this.addScanLog('INFO', '云端哈希库已启用');
+      }
+    });
+
+    document.getElementById('auxiliary-cloud-scan-checkbox')?.addEventListener('change', async (e) => {
+      const checkbox = e.target as HTMLInputElement;
+      if (checkbox.checked) {
+        // 如果云端哈希库已启用，先自动关闭它（两者互斥）
+        if (this.cloudHashManager?.isEnabled()) {
+          this.cloudHashManager.setEnabled(false);
+          const hashCheckbox = document.getElementById('cloud-hash-checkbox') as HTMLInputElement;
+          if (hashCheckbox) hashCheckbox.checked = false;
+          this.addLog('INFO', '云端哈希库已自动关闭');
+        }
+      }
+      await this.auxiliaryCloudScanManager.setEnabled(checkbox.checked);
+      this.addLog(checkbox.checked ? 'INFO' : 'WARNING', checkbox.checked ? '辅助云查询已启用' : '辅助云查询已禁用');
+    });
+
+    // 云端自动深度分析开关
+    document.getElementById('cloud-deep-analysis-checkbox')?.addEventListener('change', async (e) => {
+      const checkbox = e.target as HTMLInputElement;
+      await this.cloudDeepAnalysisManager.setEnabled(checkbox.checked);
+      this.addScanLog('INFO', checkbox.checked ? '云端自动深度分析已启用' : '云端自动深度分析已禁用，扫描将跳过沙箱分析');
+    });
+
+    // 右键菜单扫描开关
+    document.getElementById('context-menu-checkbox')?.addEventListener('change', async (e) => {
+      const checkbox = e.target as HTMLInputElement;
+      const success = await this.contextMenuManager.setEnabled(checkbox.checked);
+      if (!success) {
+        // 如果设置失败，恢复checkbox状态
+        checkbox.checked = !checkbox.checked;
+        alert('设置右键菜单失败，请确保程序以管理员权限运行');
+      }
+    });
+
+    // 防护类型开关
+    document.getElementById('boot-protection-checkbox')?.addEventListener('change', async (e) => {
+      const checkbox = e.target as HTMLInputElement;
+      await this.protectionTypeManager.setBootEnabled(checkbox.checked);
+    });
+
+    document.getElementById('registry-protection-checkbox')?.addEventListener('change', async (e) => {
+      const checkbox = e.target as HTMLInputElement;
+      await this.protectionTypeManager.setRegistryEnabled(checkbox.checked);
+    });
+
+    document.getElementById('ransomware-protection-checkbox')?.addEventListener('change', async (e) => {
+      const checkbox = e.target as HTMLInputElement;
+
+      // 关闭操作必须经过安全桌面确认
+      if (!checkbox.checked) {
+        const confirmed = await this.requestSecureConfirm(
+          '关闭勒索软件防护',
+          '您确定要关闭勒索软件防护吗？关闭后您的文件将不再受到勒索软件加密行为的实时保护。',
+          'disable_ransomware_protection'
+        );
+        if (!confirmed) {
+          checkbox.checked = true; // 回滚开关状态
+          return;
+        }
+      }
+
+      // 如果是勾选操作，先估算备份大小，再显示确认对话框
+      if (checkbox.checked) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          const estimate = await invoke<RansomwareBackupProgress>('estimate_ransomware_backup_size');
+          const totalSize = this.formatBytes(estimate.total_size_bytes);
+          const confirmed = await this.showRansomwareProtectionConfirm(estimate.total, totalSize);
+          if (!confirmed) {
+            checkbox.checked = false;
+            return;
+          }
+        } catch (err) {
+          console.error('[RansomwareProtection] Failed to estimate backup size:', err);
+          alert('估算备份大小失败，请重试');
+          checkbox.checked = false;
+          return;
+        }
+      }
+
+      await this.protectionTypeManager.setRansomwareEnabled(checkbox.checked);
+    });
+
+    document.getElementById('process-protection-checkbox')?.addEventListener('change', async (e) => {
+      const checkbox = e.target as HTMLInputElement;
+      await this.protectionTypeManager.setProcessEnabled(checkbox.checked);
+    });
+
+    document.getElementById('memory-protection-checkbox')?.addEventListener('change', async (e) => {
+      const checkbox = e.target as HTMLInputElement;
+      await this.protectionTypeManager.setMemoryEnabled(checkbox.checked);
+    });
+
+    // 新拦截窗口开关
+    document.getElementById('new-intercept-window-checkbox')?.addEventListener('change', async (e) => {
+      const checkbox = e.target as HTMLInputElement;
+      await this.driverProtectionManager.setNewInterceptWindow(checkbox.checked);
+    });
+
+    // 通知模式开关
+    document.getElementById('notification-mode-checkbox')?.addEventListener('change', async (e) => {
+      const checkbox = e.target as HTMLInputElement;
+      await this.notificationModeManager.setEnabled(checkbox.checked);
+      this.addLog(checkbox.checked ? 'INFO' : 'INFO', checkbox.checked ? '通知模式已开启' : '通知模式已关闭');
+    });
+
+    // 自动沙盒分析开关
+    document.getElementById('sandbox-analysis-checkbox')?.addEventListener('change', async (e) => {
+      const checkbox = e.target as HTMLInputElement;
+      this.sandboxAnalysisEnabled = checkbox.checked;
+      const envRow = document.getElementById('sandbox-analysis-env-row');
+      const whitelistRow = document.getElementById('sandbox-whitelist-row');
+      const statusEl = document.getElementById('sandbox-env-status');
+      try {
+        await invoke('set_sandbox_analysis_enabled', { enabled: checkbox.checked });
+        this.addLog('INFO', checkbox.checked ? '自动沙盒分析已启用' : '自动沙盒分析已禁用');
+        if (envRow) envRow.style.display = checkbox.checked ? '' : 'none';
+        if (whitelistRow) whitelistRow.style.display = checkbox.checked ? '' : 'none';
+
+        if (checkbox.checked) {
+          if (statusEl) statusEl.textContent = '正在配置沙盒环境...';
+          this.addLog('INFO', '正在自动配置沙盒环境...');
+          try {
+            const result = await invoke('prepare_sandbox_environment');
+            console.log('[Sandbox] prepare_sandbox_environment result:', result);
+            this.sandboxEnvStatus = result ? '沙盒环境已就绪' : '沙盒环境配置未完成';
+            this.addLog(result ? 'INFO' : 'WARNING', result ? '沙盒环境已就绪' : '沙盒环境配置未完成');
+          } catch (envErr) {
+            console.error('[Sandbox] prepare_sandbox_environment error:', envErr);
+            this.sandboxEnvStatus = `配置失败: ${envErr}`;
+            this.addLog('ERROR', `沙盒环境配置失败: ${envErr}`);
+          }
+          if (statusEl) statusEl.textContent = this.sandboxEnvStatus;
+        } else {
+          this.sandboxEnvStatus = '';
+          if (statusEl) statusEl.textContent = '未配置';
+        }
+      } catch (err) {
+        console.error('[Sandbox] set_sandbox_analysis_enabled error:', err);
+        this.addLog('ERROR', `沙盒分析设置失败: ${err}`);
+        checkbox.checked = !checkbox.checked;
+        this.sandboxAnalysisEnabled = checkbox.checked;
+      }
+    });
+
+    // 沙盒白名单清除按钮
+    document.getElementById('clear-sandbox-whitelist-btn')?.addEventListener('click', async () => {
+      try {
+        const msg = await invoke('clear_sandbox_whitelist');
+        this.addLog('INFO', msg as string);
+        const descEl = document.getElementById('sandbox-whitelist-desc');
+        if (descEl) descEl.textContent = '已信任 0 个文件';
+      } catch (err) {
+        console.error('[Sandbox] clear whitelist error:', err);
+        this.addLog('ERROR', `清除白名单失败: ${err}`);
+      }
+    });
+
+    // 刷新沙盒白名单数量
+    if (this.sandboxAnalysisEnabled) {
+      invoke('get_sandbox_whitelist_count').then((count) => {
+        const descEl = document.getElementById('sandbox-whitelist-desc');
+        if (descEl) descEl.textContent = `已信任 ${count} 个文件`;
+      }).catch(() => {});
+    }
+
+    // 白名单管理按钮
+    document.getElementById('whitelist-mgmt-btn')?.addEventListener('click', () => {
+      this.showWhitelistDialog();
+    });
+
+    // 规则库查看按钮
+    document.getElementById('rules-library-btn')?.addEventListener('click', () => {
+      this.showRulesLibraryDialog();
+    });
+
+    // 日志上传开关
+    document.getElementById('log-upload-checkbox')?.addEventListener('change', async (e) => {
+      const checkbox = e.target as HTMLInputElement;
+      await this.logUploadManager.setEnabled(checkbox.checked);
+    });
+
+    // 侧边栏阴影开关
+    document.getElementById('sidebar-shadow-checkbox')?.addEventListener('change', (e) => {
+      const checkbox = e.target as HTMLInputElement;
+      this.sidebarShadowManager.setEnabled(checkbox.checked);
+    });
+
+    const batchSizeSlider = document.getElementById('scan-batch-size-slider') as HTMLInputElement;
+    const batchSizeValue = document.getElementById('scan-batch-size-value');
+    batchSizeSlider?.addEventListener('input', (e) => {
+      const value = parseInt((e.target as HTMLInputElement).value, 10);
+      this.scanBatchSizeManager.setBatchSize(value);
+      if (batchSizeValue) {
+        batchSizeValue.textContent = String(value);
+      }
+    });
+
+    // 更新检查按钮
+    document.getElementById('check-update-btn')?.addEventListener('click', async () => {
+      const btn = document.getElementById('check-update-btn') as HTMLButtonElement;
+      btn.textContent = this.t('checking');
+      btn.disabled = true;
+      
+      try {
+        const updateInfo = await updateManager.checkUpdate();
+        if (updateInfo) {
+          if (updateInfo.has_update) {
+            const confirmed = confirm(this.t('newVersionFound').replace('{version}', updateInfo.latest_version) + '\n\n' + this.t('updateContent') + ':\n' + updateInfo.release_notes + '\n\n' + this.t('downloadNow'));
+            if (confirmed && updateInfo.download_url) {
+              btn.textContent = this.t('downloading');
+              
+              // 监听下载进度事件
+              const { listen } = await import('@tauri-apps/api/event');
+              const unlisten = await listen<{progress: number, status: string}>('download-progress', (event) => {
+                const { status } = event.payload;
+                btn.textContent = status;
+              });
+              
+              const success = await updateManager.downloadUpdate(updateInfo.download_url);
+              
+              // 取消监听
+              unlisten();
+              
+              if (!success) {
+                alert(this.t('downloadFailed'));
+              }
+              // 如果成功，应用会自动退出，不会执行到这里
+            }
+          } else {
+            alert(this.t('alreadyLatest'));
+          }
+        } else {
+          alert(this.t('checkUpdateFailed'));
+        }
+      } catch (error) {
+        console.error('Update check error:', error);
+        alert(this.t('checkUpdateFailed'));
+      }
+      // 注意：下载成功时应用会自动退出，不会执行到这里
+      btn.textContent = this.t('checkUpdate');
+      btn.disabled = false;
+    });
+
+    // 首页底部状态栏检查更新链接（病毒库/规则库更新）
+    document.getElementById('check-update-link')?.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const link = document.getElementById('check-update-link') as HTMLAnchorElement;
+      const originalText = link?.textContent || this.t('checkUpdate');
+      if (link) {
+        link.textContent = this.t('checking');
+        link.style.pointerEvents = 'none';
+      }
+
+      try {
+        const hasUpdate = await this.rulesManager.checkUpdate();
+        if (hasUpdate || this.rulesManager.hasUpdateAvailable()) {
+          const confirmed = confirm(this.t('newVersionFound').replace('{version}', this.rulesManager.getLatestVersion()) + '\n\n' + this.t('downloadNow'));
+          if (confirmed) {
+            const { listen } = await import('@tauri-apps/api/event');
+            const unlisten = await listen<{progress: number, status: string}>('rules-download-progress', (event) => {
+              if (link) link.textContent = event.payload.status;
+            });
+
+            await this.rulesManager.updateRules();
+            unlisten();
+            this.addNotification('update', '病毒库更新完成', `已更新到最新版本`, { source: '自动更新' });
+            alert(this.t('rulesUpdateSuccess'));
+          }
+        } else {
+          alert(this.t('alreadyLatest'));
+        }
+      } catch (error) {
+        console.error('Rules update check error:', error);
+        alert(this.t('checkUpdateFailed'));
+      }
+      if (link) {
+        link.textContent = originalText;
+        link.style.pointerEvents = '';
+      }
+    });
+
+    // 加载并显示当前版本
+    this.loadVersionDisplay();
+
+    // 打开规则库文件夹按钮
+    document.getElementById('open-rules-folder-btn')?.addEventListener('click', async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('open_rules_folder');
+      } catch (error) {
+        console.error('Failed to open rules folder:', error);
+      }
+    });
+
+    // 隔离区事件监听
+    document.getElementById('refresh-quarantine-btn')?.addEventListener('click', async () => {
+      await this.loadQuarantineData();
+      this.render();
+    });
+
+    document.querySelectorAll('.quarantine-restore-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        const id = (e.currentTarget as HTMLElement).getAttribute('data-id');
+        if (!id) return;
+
+        const confirmed = confirm('确定要恢复此文件到原始位置吗？\n\n恢复后的文件将可以正常运行。');
+        if (!confirmed) return;
+
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          const result = await invoke('restore_quarantined_file', { id }) as any;
+          if (result.success) {
+            alert(`文件已恢复到: ${result.restored_path}`);
+            this.addLog('INFO', `文件已恢复: ${result.restored_path}`);
+            await this.loadQuarantineData();
+            this.render();
+          }
+        } catch (error) {
+          alert('恢复文件失败: ' + error);
+        }
+      });
+    });
+
+    document.querySelectorAll('.quarantine-delete-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        const id = (e.currentTarget as HTMLElement).getAttribute('data-id');
+        if (!id) return;
+
+        const confirmed = confirm('确定要永久删除此文件吗？\n\n此操作不可恢复！');
+        if (!confirmed) return;
+
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          await invoke('delete_quarantined_file', { id });
+          alert('文件已永久删除');
+          this.addLog('INFO', `文件已永久删除: ${id}`);
+          await this.loadQuarantineData();
+          this.render();
+        } catch (error) {
+          alert('删除文件失败: ' + error);
+        }
+      });
+    });
+
+    // EDR 页面事件
+    this.bindEdrEvents();
+
+    // 沙箱功能已弃用
+
+    // 扫描本地规则按钮
+    document.getElementById('scan-rules-btn')?.addEventListener('click', async () => {
+      const btn = document.getElementById('scan-rules-btn') as HTMLButtonElement;
+      btn.textContent = '扫描中...';
+      btn.disabled = true;
+      
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const result = await invoke('scan_and_load_rules_command') as any;
+        
+        if (result.success) {
+          alert(`扫描完成！\n加载了 ${result.hash_count} 条哈希规则\n版本: ${result.version}`);
+          // 刷新规则库信息显示
+          await this.rulesManager.refreshState();
+          this.render();
+        } else {
+          alert('没有找到新的规则文件');
+        }
+      } catch (error) {
+        console.error('Failed to scan rules:', error);
+        alert('扫描规则文件失败');
+      }
+      
+      btn.textContent = '扫描规则';
+      btn.disabled = false;
+    });
+
+    // 规则库更新按钮
+    document.getElementById('check-rules-update-btn')?.addEventListener('click', async () => {
+      const btn = document.getElementById('check-rules-update-btn') as HTMLButtonElement;
+      const statusSpan = document.getElementById('rules-version-display') as HTMLSpanElement;
+      btn.textContent = '检查中...';
+      btn.disabled = true;
+      
+      try {
+        const hasUpdate = await this.rulesManager.checkUpdate();
+        if (hasUpdate) {
+          const confirmed = confirm(`发现规则库新版本 ${this.rulesManager.getLatestVersion()}\n\n是否立即更新？`);
+          if (confirmed) {
+            btn.textContent = '更新中...';
+            
+            // 创建右上角进度通知
+            const notification = document.createElement('div');
+            notification.className = 'rules-update-notification';
+            notification.innerHTML = `
+              <div class="rules-update-notification-content">
+                <div class="rules-update-notification-title">正在更新规则库</div>
+                <div class="rules-update-notification-desc">下载中...</div>
+                <div class="rules-update-progress-container">
+                  <div class="rules-update-progress-bar">
+                    <div class="rules-update-progress-inner" style="width: 0%"></div>
+                  </div>
+                </div>
+                <div class="rules-update-progress-text">准备下载...</div>
+              </div>
+              <button class="rules-update-notification-close">×</button>
+            `;
+            
+            // 添加样式
+            notification.style.cssText = `
+              position: fixed;
+              top: 60px;
+              right: 20px;
+              background: #ffffff;
+              border: 1px solid #e0e0e0;
+              border-radius: 12px;
+              padding: 16px 20px;
+              display: flex;
+              align-items: flex-start;
+              gap: 12px;
+              box-shadow: 0 8px 32px rgba(0,0,0,0.15);
+              z-index: 99999;
+              width: 320px;
+              animation: slideIn 0.3s ease;
+            `;
+            
+            // 添加动画样式
+            const style = document.createElement('style');
+            style.textContent = `
+              @keyframes slideIn {
+                from { transform: translateX(100%); opacity: 0; }
+                to { transform: translateX(0); opacity: 1; }
+              }
+              @keyframes slideOut {
+                from { transform: translateX(0); opacity: 1; }
+                to { transform: translateX(100%); opacity: 0; }
+              }
+              .rules-update-notification-content { flex: 1; }
+              .rules-update-notification-title { font-weight: 600; color: #333; font-size: 14px; margin-bottom: 4px; }
+              .rules-update-notification-desc { font-size: 12px; color: #666; margin-bottom: 8px; }
+              .rules-update-progress-container { margin-top: 8px; }
+              .rules-update-progress-bar {
+                width: 100%;
+                height: 4px;
+                background: #e5e7eb;
+                border-radius: 2px;
+                overflow: hidden;
+              }
+              .rules-update-progress-inner {
+                height: 100%;
+                background: #10b981;
+                border-radius: 2px;
+                transition: width 0.3s ease;
+              }
+              .rules-update-progress-text {
+                font-size: 11px;
+                color: #666;
+                margin-top: 6px;
+              }
+              .rules-update-notification-close {
+                background: none;
+                border: none;
+                color: #999;
+                font-size: 18px;
+                cursor: pointer;
+                padding: 2px 6px;
+                line-height: 1;
+                border-radius: 4px;
+                transition: all 0.2s;
+              }
+              .rules-update-notification-close:hover {
+                color: #666;
+                background: #f0f0f0;
+              }
+            `;
+            document.head.appendChild(style);
+            document.body.appendChild(notification);
+            
+            const progressInner = notification.querySelector('.rules-update-progress-inner') as HTMLElement;
+            const progressText = notification.querySelector('.rules-update-progress-text') as HTMLElement;
+            const closeBtn = notification.querySelector('.rules-update-notification-close') as HTMLButtonElement;
+            
+            // 关闭按钮事件
+            closeBtn?.addEventListener('click', () => {
+              notification.style.animation = 'slideOut 0.3s ease forwards';
+              setTimeout(() => notification.remove(), 300);
+            });
+            
+            // 监听下载进度事件
+            const { listen } = await import('@tauri-apps/api/event');
+            const unlisten = await listen<{progress: number, status: string}>('rules-download-progress', (event) => {
+              const { progress, status } = event.payload;
+              progressInner.style.width = `${progress}%`;
+              progressText.textContent = status;
+            });
+            
+            const result = await this.rulesManager.updateRules();
+            
+            // 取消监听
+            unlisten();
+            
+            // 更新完成，显示成功状态
+            if (result.success) {
+              const title = notification.querySelector('.rules-update-notification-title') as HTMLElement;
+              const desc = notification.querySelector('.rules-update-notification-desc') as HTMLElement;
+              if (title) title.textContent = this.t('rulesUpdateComplete');
+              if (desc) desc.textContent = this.t('rulesUpdatedToLatest');
+              progressText.textContent = this.t('complete');
+              progressInner.style.background = '#10b981';
+              
+              // 3秒后自动关闭
+              setTimeout(() => {
+                notification.style.animation = 'slideOut 0.3s ease forwards';
+                setTimeout(() => notification.remove(), 300);
+              }, 3000);
+              
+              this.render();
+            } else {
+              const title = notification.querySelector('.rules-update-notification-title') as HTMLElement;
+              const desc = notification.querySelector('.rules-update-notification-desc') as HTMLElement;
+              if (title) title.textContent = this.t('rulesUpdateFailed');
+              if (desc) desc.textContent = result.error || this.t('tryAgainLater');
+              progressInner.style.background = '#ef4444';
+              
+              // 5秒后自动关闭
+              setTimeout(() => {
+                notification.style.animation = 'slideOut 0.3s ease forwards';
+                setTimeout(() => notification.remove(), 300);
+              }, 5000);
+            }
+          }
+        } else {
+          alert(this.t('rulesUpToDate'));
+        }
+        statusSpan.textContent = this.rulesManager.hasUpdateAvailable() ? this.t('newVersion') : this.t('upToDate');
+      } catch (error) {
+        console.error('Rules update check error:', error);
+        alert(this.t('checkUpdateFailed'));
+      }
+      
+      btn.textContent = this.t('checkUpdate');
+      btn.disabled = false;
+    });
+
+    // 主页规则库更新按钮
+    document.getElementById('update-rules-btn')?.addEventListener('click', async () => {
+      const btn = document.getElementById('update-rules-btn') as HTMLButtonElement;
+      btn.textContent = this.t('updating');
+      btn.disabled = true;
+      
+      try {
+        const result = await this.rulesManager.updateRules();
+        if (result.success) {
+          this.addNotification('update', '病毒库更新完成', '已更新到最新版本', { source: '手动更新' });
+          alert(this.t('rulesUpdateSuccess'));
+          this.render();
+        } else {
+          alert(this.t('rulesUpdateFailed') + (result.error ? `\n\n${result.error}` : ''));
+        }
+      } catch (error) {
+        console.error('Rules update error:', error);
+        alert(this.t('rulesUpdateFailed'));
+      }
+    });
+
+    // 工具箱卡片点击事件
+    document.querySelectorAll('.setting-item[data-tool]').forEach(card => {
+      card.addEventListener('click', (e) => {
+        const tool = (e.currentTarget as HTMLElement).dataset.tool;
+        if (tool === 'popup') {
+          this.currentPage = 'toolbox_popup';
+          this.loadPopupInterceptorState();
+        } else if (tool === 'cleaner') {
+          this.currentPage = 'toolbox_cleaner';
+          this.render();
+        } else if (tool === 'edr_reports') {
+          this.currentPage = 'toolbox_edr_reports';
+          this.render();
+        } else if (tool === 'process_manager') {
+          this.currentPage = 'toolbox_process_manager';
+          this.render();
+        } else if (tool === 'system_repair') {
+          this.currentPage = 'toolbox_system_repair';
+          this.render();
+        }
+      });
+    });
+
+    // 返回按钮事件
+    document.getElementById('back-btn')?.addEventListener('click', () => {
+      this.currentPage = 'process';
+      this.render();
+    });
+
+    // 垃圾清理功能
+    this.bindJunkCleanerEvents();
+
+    // EDR 历史报告功能
+    if (this.currentPage === 'toolbox_edr_reports') {
+      this.bindEdrReportsEvents();
+    }
+
+    // 进程管理功能
+    if (this.currentPage === 'toolbox_process_manager') {
+      this.bindProcessManagerEvents();
+    }
+
+    // 系统修复功能
+    if (this.currentPage === 'toolbox_system_repair') {
+      this.bindSystemRepairEvents();
+    }
+
+    // 安全日志事件监听
+    this.attachSecurityLogEventListeners();
+
+    // 通知中心事件监听
+    this.attachNotificationEventListeners();
+  }
+
+  private async loadVersionDisplay() {
+    try {
+      const version = await updateManager.getCurrentVersion();
+      const versionDisplay = document.getElementById('version-display');
+      if (versionDisplay) {
+        versionDisplay.textContent = this.t('version') + ': ' + version;
+      }
+    } catch (error) {
+      console.error('Failed to load version:', error);
+    }
+  }
+
+  private scrollToSection(page: Page) {
+    const section = document.getElementById(`section-${page}`);
+    const scrollContainer = document.querySelector('.scroll-container');
+    if (section && scrollContainer) {
+      const containerRect = scrollContainer.getBoundingClientRect();
+      const sectionRect = section.getBoundingClientRect();
+      const relativeTop = sectionRect.top - containerRect.top + scrollContainer.scrollTop;
+      scrollContainer.scrollTo({ top: relativeTop, behavior: 'smooth' });
+    }
+  }
+
+  private observeSections() {
+    const sidebarItems = document.querySelectorAll('.sidebar-item');
+    const scrollContainer = document.querySelector('.scroll-container') as HTMLElement;
+    
+    if (!scrollContainer) return;
+
+    const updateSidebar = (sectionId: string) => {
+      if (this.sidebarUpdateTimer) {
+        clearTimeout(this.sidebarUpdateTimer);
+      }
+      
+      this.sidebarUpdateTimer = window.setTimeout(() => {
+        this.currentPage = sectionId as Page;
+        
+        // 页面切换后更新滚动模式
+        this.applyContinuousScrollSetting();
+        
+        sidebarItems.forEach(item => {
+          const itemPage = item.getAttribute('data-page');
+          if (itemPage === sectionId) {
+            item.classList.add('active');
+          } else {
+            item.classList.remove('active');
+          }
+        });
+        
+        if (sectionId === 'process') {
+          this.startProcessUpdate();
+        } else {
+          this.stopProcessUpdate();
+        }
+      }, 150) as unknown as number;
+    };
+
+    // 使用滚动事件监听
+    const handleScroll = () => {
+      // 如果是手动滚动，不处理自动更新
+      if (this.isManualScrolling) {
+        return;
+      }
+      
+      // 如果 EDR 详情页面打开，禁用自动滚动切换
+      if (this.selectedEdrProcess) {
+        return;
+      }
+      
+      const sections = ['home', 'scan', 'notifications', 'process', 'edr', 'settings'];
+      const containerRect = scrollContainer.getBoundingClientRect();
+      const containerCenter = containerRect.top + containerRect.height / 2;
+      
+      let closestSection: string | null = null;
+      let minDistance = Infinity;
+      
+      sections.forEach(sectionId => {
+        const section = document.getElementById(`section-${sectionId}`);
+        if (section) {
+          const sectionRect = section.getBoundingClientRect();
+          const sectionCenter = sectionRect.top + sectionRect.height / 2;
+          const distance = Math.abs(sectionCenter - containerCenter);
+          
+          // 只考虑在视口内的 section
+          if (sectionRect.top < containerRect.bottom && sectionRect.bottom > containerRect.top) {
+            if (distance < minDistance) {
+              minDistance = distance;
+              closestSection = sectionId;
+            }
+          }
+        }
+      });
+      
+      if (closestSection && closestSection !== this.currentPage) {
+        // 迟滞：当前 section 是否仍有超过30%在视口内
+        const currentSection = document.getElementById(`section-${this.currentPage}`);
+        if (currentSection) {
+          const cr = currentSection.getBoundingClientRect();
+          const viewTop = containerRect.top;
+          const viewBot = containerRect.bottom;
+          const visibleTop = Math.max(cr.top, viewTop);
+          const visibleBot = Math.min(cr.bottom, viewBot);
+          const visibleH = Math.max(0, visibleBot - visibleTop);
+          const visibleRatio = cr.height > 0 ? visibleH / cr.height : 0;
+          // 当前 section 仍在视野中且候选优势不明显，不切换
+          if (visibleRatio > 0.3 && minDistance > 60) {
+            return;
+          }
+        }
+        console.log('[Scroll] Closest section:', closestSection);
+        updateSidebar(closestSection);
+      }
+    };
+
+    // 防抖处理
+    let scrollTimeout: number | null = null;
+    const debouncedScroll = () => {
+      if (scrollTimeout) {
+        clearTimeout(scrollTimeout);
+      }
+      scrollTimeout = window.setTimeout(handleScroll, 100) as unknown as number;
+    };
+
+    scrollContainer.addEventListener('scroll', debouncedScroll, { passive: true });
+    
+    // 初始检测一次
+    handleScroll();
+  }
+
+  // 绑定 EDR 页面事件（用于局部刷新）
+  private bindEdrEvents() {
+    // 刷新按钮
+    document.getElementById('refresh-edr-btn')?.addEventListener('click', async () => {
+      await this.loadEdrProcessList();
+      this.safeRefreshEdrSection();
+    });
+
+    // 搜索框输入 - 使用防抖，避免频繁渲染
+    const searchInput = document.getElementById('edr-search-input') as HTMLInputElement;
+    let searchTimeout: number | null = null;
+    if (searchInput) {
+      searchInput.addEventListener('input', (e) => {
+        this.edrSearchKeyword = (e.target as HTMLInputElement).value.trim();
+        
+        // 清除之前的定时器
+        if (searchTimeout) {
+          clearTimeout(searchTimeout);
+        }
+        
+        // 延迟更新，避免输入过程中频繁渲染
+        searchTimeout = window.setTimeout(() => {
+          this.updateEdrProcessListDOM();
+        }, 300) as unknown as number;
+      });
+      
+      // 聚焦时添加边框颜色
+      searchInput.addEventListener('focus', () => {
+        searchInput.style.borderColor = 'var(--theme-color)';
+      });
+      
+      searchInput.addEventListener('blur', () => {
+        searchInput.style.borderColor = 'var(--border-color)';
+      });
+    }
+
+    // 清除搜索按钮
+    document.getElementById('edr-search-clear')?.addEventListener('click', () => {
+      this.edrSearchKeyword = '';
+      // 清空输入框
+      const input = document.getElementById('edr-search-input') as HTMLInputElement;
+      if (input) input.value = '';
+      // 更新列表
+      this.updateEdrProcessListDOM();
+      // 重新聚焦搜索框
+      const input2 = document.getElementById('edr-search-input') as HTMLInputElement;
+      if (input2) input2.focus();
+    });
+
+    // 进程列表点击
+    document.querySelectorAll('.edr-process-item').forEach(item => {
+      item.addEventListener('click', async (e) => {
+        const pid = (e.currentTarget as HTMLElement).getAttribute('data-pid');
+        if (!pid) return;
+        
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          const process = await invoke<any>('get_edr_process_detail', { pid: parseInt(pid) });
+          this.selectedEdrProcess = process;
+          this.safeRefreshEdrSection();
+          this.scrollToSection('edr');
+          this.disableOuterScroll();
+        } catch (error) {
+          console.error('[EDR] Failed to load process detail:', error);
+        }
+      });
+    });
+
+    // 返回按钮
+    document.getElementById('edr-back-btn')?.addEventListener('click', () => {
+      this.selectedEdrProcess = null;
+      this.safeRefreshEdrSection();
+      this.scrollToSection('edr');
+      this.enableOuterScroll();
+    });
+  }
+
+  // 只更新 EDR 进程列表的 DOM，不重新渲染整个 section
+  private updateEdrProcessListDOM() {
+    const processListContainer = document.querySelector('#section-edr .setting-group');
+    if (!processListContainer) return;
+
+    const filteredList = this.edrSearchKeyword
+      ? this.edrProcessList.filter(p =>
+          p.name.toLowerCase().includes(this.edrSearchKeyword.toLowerCase()) ||
+          p.pid.toString().includes(this.edrSearchKeyword)
+        )
+      : this.edrProcessList;
+
+    // 更新标题中的数量
+    const titleEl = processListContainer.querySelector('.setting-group-title span');
+    if (titleEl) {
+      titleEl.textContent = `监控程序 (${this.edrProcessList.length})`;
+    }
+
+    // 更新清除按钮的显示状态
+    const clearBtn = document.getElementById('edr-search-clear');
+    if (clearBtn) {
+      clearBtn.style.display = this.edrSearchKeyword ? 'flex' : 'none';
+    }
+
+    // 找到或创建进程列表容器
+    let listContainer = processListContainer.querySelector('.edr-process-list') as HTMLElement | null;
+    if (!listContainer) {
+      // 移除旧的列表内容（如果有）
+      const oldContent = processListContainer.querySelectorAll('.setting-item, .edr-empty-state');
+      oldContent.forEach(el => el.remove());
+      
+      // 创建新的列表容器
+      listContainer = document.createElement('div');
+      listContainer.className = 'edr-process-list';
+      listContainer.style.display = 'flex';
+      listContainer.style.flexDirection = 'column';
+      listContainer.style.gap = '6px';
+      processListContainer.appendChild(listContainer);
+    }
+
+    // 清空当前列表
+    listContainer.innerHTML = '';
+
+    // 渲染列表内容
+    if (this.edrProcessList.length === 0) {
+      listContainer.innerHTML = `
+        <div class="edr-empty-state" style="text-align: center; padding: 40px; color: var(--text-secondary);">
+          <div style="width: 48px; height: 48px; margin: 0 auto 16px;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+              <line x1="8" y1="21" x2="16" y2="21"/>
+              <line x1="12" y1="17" x2="12" y2="21"/>
+            </svg>
+          </div>
+          <div style="font-size: 14px;">正在收集进程数据...</div>
+        </div>
+      `;
+    } else if (filteredList.length === 0) {
+      listContainer.innerHTML = `
+        <div class="edr-empty-state" style="text-align: center; padding: 40px; color: var(--text-secondary);">
+          <div style="width: 48px; height: 48px; margin: 0 auto 16px;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"/>
+              <path d="m21 21-4.35-4.35"/>
+            </svg>
+          </div>
+          <div style="font-size: 14px;">未找到匹配的进程</div>
+          <div style="font-size: 12px; margin-top: 8px; opacity: 0.7;">尝试其他关键词</div>
+        </div>
+      `;
+    } else {
+      filteredList.forEach(process => {
+        const item = document.createElement('div');
+        item.className = 'setting-item edr-process-item';
+        item.setAttribute('data-pid', process.pid);
+        item.style.cursor = 'pointer';
+        if (process.risk_level === 'high') {
+          item.style.background = 'rgba(211, 52, 56, 0.08)';
+        } else if (process.risk_level === 'medium') {
+          item.style.background = 'rgba(255, 193, 7, 0.06)';
+        }
+        item.innerHTML = `
+          <div class="setting-info">
+            <div class="setting-title" style="display: flex; align-items: center; gap: 8px;">
+              ${process.name}
+              <span style="padding: 2px 6px; border-radius: 3px; font-size: 10px; ${process.risk_level === 'high' ? 'background: var(--danger); color: white;' : process.risk_level === 'medium' ? 'background: var(--warning); color: white;' : 'background: var(--success); color: white;'}">${process.risk_level === 'high' ? (process.threat_family || '高风险') : process.risk_level === 'medium' ? (process.threat_family || '中风险') : '低风险'}</span>
+            </div>
+            <div class="setting-desc">PID: ${process.pid} | 事件: ${process.event_count} 个 | 网络: ${process.network_events} | 文件: ${process.file_events}</div>
+          </div>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-tertiary);">
+            <path d="M9 18l6-6-6-6"/>
+          </svg>
+        `;
+        listContainer.appendChild(item);
+      });
+
+      // 重新绑定点击事件
+      this.bindEdrProcessItemEvents();
+    }
+  }
+
+  // 绑定进程列表项的点击事件
+  private bindEdrProcessItemEvents() {
+    document.querySelectorAll('.edr-process-item').forEach(item => {
+      item.addEventListener('click', async (e) => {
+        const pid = (e.currentTarget as HTMLElement).getAttribute('data-pid');
+        if (!pid) return;
+
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          const process = await invoke<any>('get_edr_process_detail', { pid: parseInt(pid) });
+          this.selectedEdrProcess = process;
+          this.safeRefreshEdrSection();
+          this.scrollToSection('edr');
+          this.disableOuterScroll();
+        } catch (error) {
+          console.error('[EDR] Failed to load process detail:', error);
+        }
+      });
+    });
+  }
+
+  // 禁用外层滚动容器滚动
+  private disableOuterScroll() {
+    const scrollContainer = document.querySelector('.scroll-container') as HTMLElement;
+    if (scrollContainer) {
+      scrollContainer.style.overflow = 'hidden';
+    }
+  }
+
+  // 恢复外层滚动容器滚动
+  private enableOuterScroll() {
+    const scrollContainer = document.querySelector('.scroll-container') as HTMLElement;
+    if (scrollContainer) {
+      scrollContainer.style.overflow = 'auto';
+    }
+  }
+
+  // 安全刷新 EDR section，避免触发滚动跳转
+  private safeRefreshEdrSection() {
+    const edrSection = document.getElementById('section-edr');
+    if (!edrSection) return;
+    
+    this.isManualScrolling = true;
+    
+    // 保存滚动位置
+    const scrollContainer = document.querySelector('.scroll-container') as HTMLElement;
+    const savedScrollTop = scrollContainer?.scrollTop;
+    
+    // 使用 innerHTML 而非 outerHTML，保持 DOM 元素不变避免布局抖动
+    const temp = document.createElement('div');
+    temp.innerHTML = this.renderEdrSection();
+    const newSection = temp.querySelector('#section-edr');
+    if (newSection) {
+      // 同步属性（如 style）
+      for (let i = edrSection.attributes.length - 1; i >= 0; i--) {
+        edrSection.removeAttribute(edrSection.attributes[i].name);
+      }
+      for (const attr of newSection.attributes) {
+        edrSection.setAttribute(attr.name, attr.value);
+      }
+      edrSection.innerHTML = newSection.innerHTML;
+    }
+    
+    // 恢复滚动位置
+    if (scrollContainer && savedScrollTop !== undefined) {
+      requestAnimationFrame(() => {
+        scrollContainer.scrollTop = savedScrollTop;
+      });
+    }
+    
+    this.bindEdrEvents();
+    setTimeout(() => { this.isManualScrolling = false; }, 600);
+  }
+
+  private async startScan() {
+    // 快速扫描
+    await this.startScanWithPaths([], false);
+  }
+
+  private async startFullScan() {
+    // 全盘扫描
+    await this.startScanWithPaths([], true);
+  }
+
+  private async startCustomScan(customPath: string) {
+    await this.startScanWithPaths([customPath], false);
+  }
+
+  // 更新任务栏进度条
+  private async updateTaskbarProgress(progress: number | null) {
+    try {
+      await invoke('set_taskbar_progress', { progress });
+    } catch (e) {
+      console.error('Failed to update taskbar progress:', e);
+    }
+  }
+
+  // 检测扫描引擎可用性
+  private async checkScanEnginesAvailability(): Promise<boolean> {
+    // 检测本地ONNX模型是否已加载
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const isModelLoaded = await invoke<boolean>('check_onnx_model_loaded');
+      if (!isModelLoaded) {
+        console.error('[EngineCheck] - Local ONNX model is not loaded');
+        this.showEngineInitFailedDialog('onnx');
+        return false; // 本地模型加载失败，暂停扫描
+      } else {
+        console.log('[EngineCheck] - Local ONNX model is loaded');
+      }
+    } catch (error) {
+      console.error('[EngineCheck] - Failed to check ONNX model status:', error);
+      this.showEngineInitFailedDialog('onnx');
+      return false; // 检查失败，暂停扫描
+    }
+
+    // 检测云端哈希库引擎
+    if (this.cloudHashManager.isEnabled()) {
+      try {
+        // 使用 CloudHashManager 的 checkHash（内部已含兜底重试逻辑）
+        const testResult = await this.cloudHashManager.checkHash('d41d8cd98f00b204e9800998ecf8427e');
+        if (testResult) {
+          console.log('[EngineCheck] - Cloud hash engine is available:', testResult);
+        } else {
+          throw new Error('All cloud hash servers failed');
+        }
+      } catch (error) {
+        console.error('[EngineCheck] - Cloud hash engine initialization failed:', error);
+        this.showEngineInitFailedDialog('cloud_hash');
+        // 自动禁用云端哈希库
+        this.cloudHashManager.setEnabled(false);
+        const checkbox = document.getElementById('cloud-hash-checkbox') as HTMLInputElement;
+        if (checkbox) checkbox.checked = false;
+      }
+    }
+
+    return true; // 所有检查通过
+  }
+
+  private async startScanWithPaths(customPaths: string[], fullScan: boolean = false) {
+    this.isScanning = true;
+    this.scanProgress = 0;
+    this.currentScanFileIndex = 0;
+    this.scannedFilesCount = 0;
+    this.scanStartTime = Date.now();
+    this.scanThreats = 0;
+    this.totalFilesCount = 0;
+    this.lastScanCount = 0;
+    this.currentScanSpeed = 0;
+    this.detectedThreats = [];
+    this.render();
+    
+    // 设置为遍历目录阶段（显示不确定进度条动画）
+    this.isTraversing = true;
+    this.updateScanUI('正在遍历文件目录...');
+    
+    // 初始化任务栏进度条
+    await this.updateTaskbarProgress(0);
+    
+    // 检测启用的扫描引擎是否可用
+    const enginesAvailable = await this.checkScanEnginesAvailability();
+    if (!enginesAvailable) {
+      // 引擎初始化失败，停止扫描
+      this.isScanning = false;
+      this.render();
+      return;
+    }
+    
+    // 记录扫描开始事件到时间线
+    try {
+      const scanType = fullScan ? '全盘扫描' : (customPaths.length > 0 ? '自定义扫描' : '快速扫描');
+      await invoke('add_scan_timeline_event', {
+        eventType: 'start',
+        title: `${scanType}开始`,
+        description: `开始执行${scanType}`,
+        scannedFiles: 0,
+        threatsFound: 0
+      });
+    } catch (e) {
+      console.error('Failed to add scan start timeline event:', e);
+    }
+    
+    this.addScanLog('INFO', 'Collecting files to scan...');
+    this.addScanLog('INFO', `Custom paths: ${JSON.stringify(customPaths)}`);
+    try {
+      if (customPaths.length > 0) {
+        this.addScanLog('INFO', `Calling get_scan_files_direct with paths: ${JSON.stringify(customPaths)}`);
+        SCAN_FILES = await invoke('get_scan_files_direct', { paths: customPaths }) as string[];
+        this.addScanLog('INFO', `Got ${SCAN_FILES.length} files from get_scan_files_direct`);
+      } else if (fullScan) {
+        // 全盘扫描
+        SCAN_FILES = await invoke('get_full_scan_files') as string[];
+      } else {
+        // 快速扫描
+        SCAN_FILES = await invoke('get_scan_files') as string[];
+      }
+      this.totalFilesCount = SCAN_FILES.length;
+      this.addScanLog('INFO', `Found ${SCAN_FILES.length} files to scan`);
+    } catch (error) {
+      this.addScanLog('ERROR', `Failed to collect files: ${error}`);
+      SCAN_FILES = [];
+      this.totalFilesCount = 0;
+    }
+    
+    if (SCAN_FILES.length === 0) {
+      this.addScanLog('ERROR', 'No files to scan');
+      this.stopScan();
+      return;
+    }
+    
+    this.startSpeedTimer();
+    this.scanBatch();
+  }
+
+  private startSpeedTimer() {
+    if (this.scanSpeedTimer) {
+      window.clearInterval(this.scanSpeedTimer);
+    }
+    
+    let lastTime = Date.now();
+    
+    this.scanSpeedTimer = window.setInterval(() => {
+      const now = Date.now();
+      const timeDelta = (now - lastTime) / 1000; // 间隔时间（秒）
+      
+      if (timeDelta > 0) {
+        const countDelta = this.scannedFilesCount - this.lastScanCount;
+        const instantSpeed = countDelta / timeDelta; // 每秒文件数
+        
+        if (countDelta > 0) {
+          // 使用移动平均平滑速度显示
+          this.currentScanSpeed = this.currentScanSpeed * 0.6 + instantSpeed * 0.4;
+        } else {
+          this.currentScanSpeed = this.currentScanSpeed * 0.8;
+        }
+        
+        this.lastScanCount = this.scannedFilesCount;
+        lastTime = now;
+        this.updateScanSpeedUI();
+      }
+    }, 500) as unknown as number;
+  }
+
+  private updateScanSpeedUI() {
+    const speedElement = document.querySelector('.scan-speed') as HTMLElement;
+    if (speedElement) {
+      const speedText = this.currentScanSpeed > 0.1 
+        ? this.currentScanSpeed.toFixed(1)
+        : this.currentScanSpeed > 0.01 
+          ? (this.currentScanSpeed * 60).toFixed(1)
+          : '0';
+      speedElement.textContent = speedText;
+    }
+  }
+
+  private async scanBatch() {
+    if (!this.isScanning) return;
+    if (this.scanBatchRunning) {
+      console.log('[ScanBatch] Already running, skip');
+      return;
+    }
+    this.scanBatchRunning = true;
+    console.log('[ScanBatch] Start');
+
+    // 遍历完成，切换到百分比模式
+    this.isTraversing = false;
+
+    const cloudHashEnabled = this.cloudHashManager?.isEnabled() || false;
+    const batchSize = this.scanBatchSizeManager.getBatchSize();
+
+    if (this.currentScanFileIndex >= SCAN_FILES.length) {
+      // 等待所有后台扫描完成（YARA扫描等）
+      console.log('[ScanComplete] Waiting for background scans to finish...');
+      await this.waitForBackgroundScans();
+      
+      this.scanProgress = 100;
+      // 更新任务栏进度为 100%
+      await this.updateTaskbarProgress(100);
+      this.stopSpeedTimer();
+      
+      // 扫描已完成（云端检查已同步执行完毕）
+      this.stopScan();
+      const elapsedTime = Math.floor((Date.now() - this.scanStartTime) / 1000);
+      this.addLog('SUCCESS', `Scan completed | Scanned ${this.scannedFilesCount} files, found ${this.scanThreats} threats, time ${elapsedTime}s`);
+      this.addNotification('scan', '扫描完成', `扫描 ${this.scannedFilesCount} 个文件，发现 ${this.scanThreats} 个威胁，用时 ${elapsedTime}s`, { source: '扫描' });
+      
+      // 记录安全日志
+      try {
+        await invoke('add_security_log', {
+          category: 'scan',
+          function: '全盘扫描',
+          summary: `扫描完成，发现 ${this.scanThreats} 个威胁`,
+          filePath: null,
+          threatName: null,
+          action: 'scanned',
+          result: 'success',
+          details: {
+            scanned_files: this.scannedFilesCount,
+            threats_found: this.scanThreats,
+            threats_cleaned: 0,
+            additional_info: `扫描耗时 ${elapsedTime} 秒`
+          }
+        });
+      } catch (e) {
+        console.error('Failed to add security log:', e);
+      }
+      
+      // 记录扫描完成事件到时间线
+      try {
+        await invoke('add_scan_timeline_event', {
+          eventType: 'completed',
+          title: this.t('scanComplete'),
+          description: this.t('scanCompleteDetail').replace('{scanned}', String(this.scannedFilesCount)).replace('{threats}', String(this.scanThreats)).replace('{time}', String(elapsedTime)),
+          scannedFiles: this.scannedFilesCount,
+          threatsFound: this.scanThreats
+        });
+      } catch (e) {
+        console.error('Failed to add scan completed timeline event:', e);
+      }
+
+      // 记录本次扫描信息
+      const now = new Date();
+      const pad = (n: number) => n.toString().padStart(2, '0');
+      this.lastScanInfo = {
+        time: `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`,
+        files: this.scannedFilesCount,
+        threats: this.scanThreats,
+        duration: elapsedTime
+      };
+
+      // 扫描完成后，若存在 .sys 驱动木马立即弹出提示
+      const driverThreats = this.detectedThreats.filter(t => t.path.toLowerCase().endsWith('.sys'));
+      if (driverThreats.length > 0) {
+        await this.showDriverThreatWarning(driverThreats);
+        this.detectedThreats = this.detectedThreats.filter(t => !t.path.toLowerCase().endsWith('.sys'));
+        this.scanThreats = this.detectedThreats.length;
+      }
+      
+      // 将扫描发现的威胁加入通知中心（未处理威胁列表）
+      const scanTs = (() => { const d = new Date(); const p = (n: number) => n.toString().padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; })();
+      for (const threat of this.detectedThreats) {
+        this.addPendingThreat({
+          path: threat.path,
+          threatName: threat.virus_family || 'Trojan.Generic',
+          threatLevel: threat.probability > 0.7 ? 'High' : (threat.probability > 0.4 ? 'Medium' : 'Low'),
+          category: threat.family_category || '未知威胁',
+          detectedAt: scanTs,
+          source: 'scan'
+        });
+      }
+      
+      // 上传威胁到日志服务器（含 SHA256），便于云端入库
+      if (this.detectedThreats.length > 0 && this.logUploadManager.isEnabled()) {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const threatsToUpload = [];
+        for (const t of this.detectedThreats) {
+          // 先计算 SHA256
+          let sha256 = '';
+          try {
+            sha256 = await invoke<string>('calculate_file_hash_command', { filePath: t.path }).catch(() => '');
+          } catch (_) {}
+          threatsToUpload.push({
+            path: t.path,
+            threat_name: t.virus_family || 'Trojan.Generic',
+            probability: t.probability,
+            virus_family: t.virus_family || '',
+            family_category: t.family_category || '',
+            sha256: sha256,
+          });
+        }
+        try {
+          await invoke('upload_threats_command', { threats: threatsToUpload });
+          console.log(`[ThreatUpload] Uploaded ${threatsToUpload.length} threats`);
+        } catch (e) {
+          console.error('[ThreatUpload] Failed to upload threats:', e);
+        }
+      }
+      
+      return;
+    }
+
+    const batch: string[] = [];
+    while (batch.length < batchSize && this.currentScanFileIndex < SCAN_FILES.length) {
+      batch.push(SCAN_FILES[this.currentScanFileIndex]);
+      this.currentScanFileIndex++;
+    }
+
+    try {
+      // 云端哈希库：超高速批量流水线（计算和查询完全并行）
+      if (cloudHashEnabled) {
+        const BATCH_CALC_SIZE = 50; // 批量计算哈希的大小
+        const BATCH_QUERY_SIZE = 100; // 批量查询云端的大小
+        const MAX_INFLIGHT_QUERIES = 3; // 最大并行查询批次
+        
+        // 收集所有文件
+        const allFiles: string[] = [...batch];
+        while (this.currentScanFileIndex < SCAN_FILES.length) {
+          allFiles.push(SCAN_FILES[this.currentScanFileIndex]);
+          this.currentScanFileIndex++;
+        }
+        
+        let fileIndex = 0;
+        // 按 hash 聚合文件列表：避免相同 hash 的文件互相覆盖，导致只处理最后一个
+        const pendingQueries: Map<string, {filePath: string, fileHash: string}[]> = new Map();
+        const inFlightQueryBatches = new Set<Promise<any>>();
+        let calcInProgress = false;
+        // 云端未命中（unknown / 无结果 / 查询失败）的文件，需要回退到本地引擎+沙箱
+        const localScanFallback: string[] = [];
+        const localScanHashMap = new Map<string, string>();
+        const addLocalFallback = (filePath: string, fileHash: string) => {
+          if (this.isArchiveFile(filePath) && !this.archiveScanManager?.isEnabled()) {
+            this.addScanLog('INFO', `跳过压缩包（未启用压缩包扫描）: ${filePath}`);
+          } else {
+            localScanFallback.push(filePath);
+            localScanHashMap.set(filePath, fileHash);
+          }
+        };
+        
+        // 批量查询函数：groups 是 [hash, fileEntries[]] 的数组
+        const executeBatchQuery = async (groups: [string, {filePath: string, fileHash: string}[]][]) => {
+          try {
+            const hashes = groups.map(([hash]) => hash);
+            const batchRes = await this.cloudHashManager.batchCheckHashes(hashes);
+            console.log('[CloudHash] Batch raw response:', batchRes);
+            
+            if (batchRes && batchRes.results) {
+              this.cloudHashConnectionStatus = 'connected';
+              
+              // 建立hash到结果的映射
+              const resultMap = new Map<string, {result: string, family?: string}>();
+              for (const r of batchRes.results) {
+                resultMap.set(r.hash.toLowerCase(), { result: r.result, family: r.family });
+              }
+              
+              // 处理每个文件的结果（相同 hash 的所有文件都应用同一结果）
+              for (const [hash, entries] of groups) {
+                if (!this.isScanning) break;
+                const cloudResult = resultMap.get(hash.toLowerCase());
+                for (const entry of entries) {
+                  if (!this.isScanning) break;
+                  if (cloudResult) {
+                    if (cloudResult.result === 'black') {
+                      const familyName = cloudResult.family || 'Malware';
+                      this.scanThreats++;
+                      this.totalThreatsFound++;
+                      this.detectedThreats.push({
+                        path: entry.filePath,
+                        probability: 0.95,
+                        virus_family: familyName,
+                        family_category: undefined,
+                        is_infector: false,
+                        fromCloud: true
+                      });
+                      this.addScanLog('WARNING', `检测到威胁: ${entry.filePath} [${familyName}]`);
+                      this.addScanThreat(familyName, entry.filePath, 0.95);
+                      this.updateThreatCountUI();
+                    } else if (cloudResult.result === 'white') {
+                      // 哈希库白名单，不做特殊记录
+                    } else {
+                      // unknown 或其他结果：回退本地引擎+沙箱
+                      addLocalFallback(entry.filePath, entry.fileHash);
+                    }
+                  } else {
+                    // 云端无该hash结果：回退本地引擎+沙箱
+                    addLocalFallback(entry.filePath, entry.fileHash);
+                  }
+                  
+                  // 更新进度
+                  this.scannedFilesCount++;
+                  this.driverProcessCheckCount++;
+                }
+                this.scanProgress = (this.scannedFilesCount / this.totalFilesCount) * 100;
+              }
+              
+              // 批量更新UI
+              requestAnimationFrame(() => {
+                for (const [_, entries] of groups) {
+                  for (const entry of entries) {
+                    this.updateScanUIImmediate(entry.filePath);
+                  }
+                }
+              });
+            } else {
+              // 批量查询无有效响应，全部回退
+              for (const [_, entries] of groups) {
+                for (const entry of entries) {
+                  addLocalFallback(entry.filePath, entry.fileHash);
+                  this.scannedFilesCount++;
+                  this.driverProcessCheckCount++;
+                }
+              }
+              this.scanProgress = (this.scannedFilesCount / this.totalFilesCount) * 100;
+            }
+          } catch (e) {
+            console.error('[CloudHash] Batch query error:', e);
+            this.cloudHashConnectionStatus = 'disconnected';
+            // 出错时全部回退到本地引擎
+            for (const [_, entries] of groups) {
+              for (const entry of entries) {
+                addLocalFallback(entry.filePath, entry.fileHash);
+                this.scannedFilesCount++;
+                this.driverProcessCheckCount++;
+              }
+            }
+            this.scanProgress = (this.scannedFilesCount / this.totalFilesCount) * 100;
+          }
+        };
+        
+        // 批量计算哈希函数
+        const calcBatchHashes = async () => {
+          calcInProgress = true;
+          while (this.isScanning && fileIndex < allFiles.length) {
+            const batchEnd = Math.min(fileIndex + BATCH_CALC_SIZE, allFiles.length);
+            const fileBatch = allFiles.slice(fileIndex, batchEnd);
+            fileIndex = batchEnd;
+            
+            try {
+              const hashResults = await invoke<(string | null)[]>('calculate_file_hashes_command', { filePaths: fileBatch });
+              
+              for (let i = 0; i < fileBatch.length; i++) {
+                const h = hashResults[i];
+                if (h) {
+                  // 相同 hash 的文件聚合到同一组，避免被覆盖
+                  const existing = pendingQueries.get(h);
+                  if (existing) {
+                    existing.push({ filePath: fileBatch[i], fileHash: h });
+                  } else {
+                    pendingQueries.set(h, [{ filePath: fileBatch[i], fileHash: h }]);
+                  }
+                } else {
+                  // 无哈希，直接计数
+                  this.scannedFilesCount++;
+                  this.driverProcessCheckCount++;
+                }
+              }
+              
+              // 触发查询调度
+              scheduleQueries();
+              
+            } catch (e) {
+              console.error('[CloudHash] Batch calc error:', e);
+              for (const _ of fileBatch) {
+                this.scannedFilesCount++;
+                this.driverProcessCheckCount++;
+              }
+            }
+          }
+          calcInProgress = false;
+        };
+        
+        // 查询调度器：groups 按 hash 聚合，BATCH_QUERY_SIZE 限制的是 hash 数量
+        const scheduleQueries = () => {
+          if (!this.isScanning) return; // 已停止，不再调度新查询
+          while (pendingQueries.size >= BATCH_QUERY_SIZE && inFlightQueryBatches.size < MAX_INFLIGHT_QUERIES) {
+            const groups = Array.from(pendingQueries.entries()).slice(0, BATCH_QUERY_SIZE);
+            for (const [hash] of groups) pendingQueries.delete(hash);
+            
+            const task = executeBatchQuery(groups).finally(() => {
+              inFlightQueryBatches.delete(task);
+              if (this.isScanning) scheduleQueries(); // 还在扫描中才继续调度
+            });
+            inFlightQueryBatches.add(task);
+          }
+          
+          // 如果计算完成且还有剩余，立即查询
+          if (!this.isScanning) return;
+          if (!calcInProgress && pendingQueries.size > 0 && inFlightQueryBatches.size < MAX_INFLIGHT_QUERIES) {
+            const groups = Array.from(pendingQueries.entries());
+            pendingQueries.clear();
+            
+            const task = executeBatchQuery(groups).finally(() => {
+              inFlightQueryBatches.delete(task);
+            });
+            inFlightQueryBatches.add(task);
+          }
+        };
+        
+        // 启动计算流水线
+        calcBatchHashes();
+        
+        // 等待所有完成
+        while (this.isScanning && (calcInProgress || pendingQueries.size > 0 || inFlightQueryBatches.size > 0)) {
+          scheduleQueries();
+          if (inFlightQueryBatches.size > 0) {
+            await Promise.race(inFlightQueryBatches);
+          } else {
+            await new Promise(r => setTimeout(r, 10));
+          }
+        }
+        
+        // 对云端未命中（unknown/无结果/查询失败）的文件回退到本地引擎+沙箱
+        console.log('[CloudHash] Pipeline done. Fallback files:', localScanFallback.length, localScanFallback);
+        if (localScanFallback.length > 0 && this.isScanning) {
+          console.log('[CloudHash] Fallback to local engine for', localScanFallback.length, 'files');
+
+          // 分离脚本文件和常规文件：脚本走脚本引擎，常规文件批量走并行扫描
+          const scriptFiles: string[] = [];
+          const localFiles: string[] = [];
+          for (const fp of localScanFallback) {
+            if (!this.isScanning) break;
+            if (this.isScriptFile(fp)) {
+              scriptFiles.push(fp);
+            } else if (this.isArchiveFile(fp)) {
+              if (this.archiveScanManager?.isEnabled()) {
+                await this.processArchiveFile(fp);
+              } else {
+                this.addScanLog('INFO', `跳过压缩包（未启用压缩包扫描）: ${fp}`);
+                this.updateScanUIImmediate(fp);
+              }
+            } else {
+              localFiles.push(fp);
+            }
+          }
+
+          // 先处理脚本文件（串行，脚本引擎本身很快）
+          for (const filePath of scriptFiles) {
+            if (!this.isScanning) break;
+            if (this.scriptScanManager?.isEnabled()) {
+              try {
+                console.log('[ScriptScan] Fallback scanning script:', filePath);
+                const scriptResult = await invoke<any>('scan_script_file_command', { filePath });
+                if (scriptResult && scriptResult.is_malicious) {
+                  this.scanThreats++;
+                  this.totalThreatsFound++;
+                  this.detectedThreats.push({
+                    path: filePath,
+                    probability: scriptResult.threat_level,
+                    virus_family: scriptResult.virus_family || 'Trojan.Win32.BAT.Generic',
+                    family_category: undefined,
+                    is_infector: false
+                  });
+                  const familyInfo = scriptResult.virus_family ? ` [${scriptResult.virus_family}]` : '';
+                  this.addScanLog('WARNING', `${this.t('scriptThreat')}: ${filePath}${familyInfo} - ${scriptResult.description}`);
+                  this.addScanThreat(scriptResult.virus_family || 'Trojan.Win32.BAT.Generic', filePath, scriptResult.threat_level);
+                  this.updateThreatCountUI();
+                } else {
+                  this.addScanLog('INFO', `${this.t('scriptScanSafe')}: ${filePath}`);
+                }
+              } catch (e) {
+                console.error('Script scan error:', filePath, e);
+              }
+            } else {
+              this.addScanLog('INFO', `跳过脚本（未启用脚本扫描）: ${filePath}`);
+            }
+            this.updateScanUIImmediate(filePath);
+          }
+
+          // 常规文件批量并行扫描（使用 Rayon 并行引擎）
+          // 使用用户设置的扫描批次大小（默认从设置中读取）
+          const fallbackBatchSize = this.scanBatchSizeManager.getBatchSize() || 50;
+          for (let i = 0; i < localFiles.length && this.isScanning; i += fallbackBatchSize) {
+            if (!this.isScanning) break;
+            const batch = localFiles.slice(i, i + fallbackBatchSize);
+            try {
+              console.log(`[CloudHash] Fallback batch scanning ${batch.length} files (batch ${Math.floor(i / fallbackBatchSize) + 1})`);
+              const batchResult = await engineManager.scanBatchWithHashes(batch, localScanHashMap) as any[];
+              if (Array.isArray(batchResult)) {
+                for (const result of batchResult) {
+                  if (!this.isScanning) break;
+                  if (result) {
+                    this.processLocalScanResult(result);
+                  }
+                  this.updateScanUIImmediate(result?.file_path || '');
+                }
+              }
+            } catch (e) {
+              console.error('Fallback batch scan error:', e);
+              // 批量失败时逐文件重试
+              for (const fp of batch) {
+                if (!this.isScanning) break;
+                try {
+                  const retryResult = await engineManager.scanFile(fp) as any;
+                  if (retryResult) {
+                    this.processLocalScanResult(retryResult);
+                  }
+                } catch (e2) {
+                  console.error('Fallback retry error:', fp, e2);
+                }
+                this.updateScanUIImmediate(fp);
+              }
+            }
+          }
+        }
+        
+        // 释放锁，以便 scanBatch 重入检查文件数
+        this.scanBatchRunning = false;
+        
+        // 继续下一批或完成扫描
+        requestAnimationFrame(() => {
+          if (this.isScanning) {
+            this.scanBatch();
+          }
+        });
+        return;
+      }
+
+      // 并行扫描所有文件（本地引擎，无云端功能时）
+      const scanPromises = batch.map(async (filePath) => {
+          // 每次开始处理前检查是否已停止
+          if (!this.isScanning) return { filePath, success: false, stopped: true };
+
+          // 检查是否为脚本文件
+        const isScriptFile = this.isScriptFile(filePath);
+        
+        // 脚本文件跳过主引擎，直接由脚本扫描引擎处理
+        if (isScriptFile) {
+          this.scannedFilesCount++;
+          this.driverProcessCheckCount++;
+          this.scanProgress = (this.scannedFilesCount / this.totalFilesCount) * 100;
+          
+          // 脚本扫描引擎 - 扫描 BAT/CMD 文件
+          if (this.scriptScanManager?.isEnabled()) {
+            try {
+              console.log('[ScriptScan] Calling scan_script_file_command for:', filePath);
+              const scriptResult = await invoke<any>('scan_script_file_command', { filePath });
+              console.log('[ScriptScan] Result:', scriptResult);
+              if (scriptResult && scriptResult.is_malicious) {
+                this.scanThreats++;
+                this.totalThreatsFound++;
+                this.detectedThreats.push({
+                  path: filePath,
+                  probability: scriptResult.threat_level,
+                  virus_family: scriptResult.virus_family || 'Trojan.Win32.BAT.Generic',
+                  family_category: undefined,
+                  is_infector: false
+                });
+                const familyInfo = scriptResult.virus_family ? ` [${scriptResult.virus_family}]` : '';
+                this.addScanLog('WARNING', `${this.t('scriptThreat')}: ${filePath}${familyInfo} - ${scriptResult.description}`);
+                this.addScanThreat(scriptResult.virus_family || 'Trojan.Win32.BAT.Generic', filePath, scriptResult.threat_level);
+                this.updateThreatCountUI();
+              } else {
+                this.addScanLog('INFO', `${this.t('scriptScanSafe')}: ${filePath}`);
+              }
+            } catch (e) {
+              console.error('Script scan error:', e);
+            }
+          } else {
+            this.addScanLog('INFO', `${this.t('scriptScanSkipped')}: ${filePath}`);
+          }
+          
+          requestAnimationFrame(() => {
+            this.updateScanUIImmediate(filePath);
+          });
+          
+          return { filePath, success: true };
+        }
+        
+        // 检查是否为压缩包文件
+        const isArchiveFile = this.isArchiveFile(filePath);
+        if (isArchiveFile && this.archiveScanManager?.isEnabled()) {
+          this.scannedFilesCount++;
+          this.driverProcessCheckCount++;
+          this.scanProgress = (this.scannedFilesCount / this.totalFilesCount) * 100;
+          
+          try {
+            this.addScanLog('INFO', `扫描压缩包: ${filePath}`);
+            const archiveResult = await invoke<string>('scan_archive_command', { archivePath: filePath });
+            const result = JSON.parse(archiveResult);
+            
+            if (result.files && result.files.length > 0) {
+              let threatCount = 0;
+              for (const innerFile of result.files) {
+                if (innerFile.scan_result && innerFile.scan_result.result === 'MALICIOUS') {
+                  threatCount++;
+                  this.scanThreats++;
+                  this.totalThreatsFound++;
+                  
+                  // 显示格式: archive.zip -> virus.exe
+                  const displayPath = `${filePath} -> ${innerFile.inner_path}`;
+                  this.detectedThreats.push({
+                    path: displayPath,
+                    probability: innerFile.scan_result.probability,
+                    virus_family: innerFile.scan_result.virus_family,
+                    family_category: innerFile.scan_result.family_category,
+                    is_infector: false
+                  });
+                  
+                  const familyInfo = innerFile.scan_result.virus_family ? ` [${innerFile.scan_result.virus_family}]` : '';
+                  this.addScanLog('WARNING', `${this.t('archiveThreat')}: ${displayPath}${familyInfo} - ${(innerFile.scan_result.probability * 100).toFixed(1)}%`);
+                  this.addScanThreat(innerFile.scan_result.virus_family || 'Trojan.Generic', displayPath, innerFile.scan_result.probability, innerFile.scan_result.family_category);
+                }
+              }
+              
+              if (threatCount > 0) {
+                this.updateThreatCountUI();
+                this.addScanLog('WARNING', `${this.t('threatsFoundInArchive').replace('{count}', String(threatCount))}: ${filePath}`);
+              } else {
+                this.addScanLog('INFO', `${this.t('archiveSafe')}: ${filePath}`);
+              }
+            } else if (result.has_password) {
+              this.addScanLog('INFO', `${this.t('archiveEncrypted')}: ${filePath}`);
+            } else if (result.error) {
+              this.addScanLog('WARNING', `${this.t('archiveScanFailed')}: ${filePath} - ${result.error}`);
+            }
+          } catch (e) {
+            console.error('Archive scan error:', filePath, e);
+            this.addScanLog('WARNING', `${this.t('archiveScanFailed')}: ${filePath}`);
+          }
+          
+          requestAnimationFrame(() => {
+            this.updateScanUIImmediate(filePath);
+          });
+          
+          return { filePath, success: true };
+        }
+        
+        // 如果是压缩包但压缩包扫描未启用，跳过扫描
+        if (isArchiveFile && !this.archiveScanManager?.isEnabled()) {
+          this.scannedFilesCount++;
+          this.driverProcessCheckCount++;
+          this.scanProgress = (this.scannedFilesCount / this.totalFilesCount) * 100;
+          
+          this.addScanLog('INFO', `${this.t('archiveScanSkipped')}: ${filePath}`);
+          
+          requestAnimationFrame(() => {
+            this.updateScanUIImmediate(filePath);
+          });
+          
+          return { filePath, success: true };
+        }
+        
+        try {
+          // 仅本地引擎扫描（云端哈希已单独处理）
+          const localResult = await engineManager.scanFile(filePath) as any;
+
+          this.scannedFilesCount++;
+          this.driverProcessCheckCount++;
+          this.scanProgress = (this.scannedFilesCount / this.totalFilesCount) * 100;
+
+          // 处理本地扫描结果
+          if (localResult) {
+            this.processLocalScanResult(localResult);
+          }
+
+          requestAnimationFrame(() => {
+            this.updateScanUIImmediate(filePath);
+          });
+
+          return { filePath, success: true };
+        } catch (e) {
+          console.error('Scan file error:', filePath, e);
+          this.scannedFilesCount++;
+          this.driverProcessCheckCount++;
+          this.scanProgress = (this.scannedFilesCount / this.totalFilesCount) * 100;
+
+          requestAnimationFrame(() => {
+            this.updateScanUIImmediate(filePath);
+          });
+
+          return { filePath, success: false, error: true };
+        }
+      });
+      
+      await Promise.all(scanPromises);
+    } catch (e) {
+      console.error('Batch scan error:', e);
+      this.addScanLog('ERROR', `Batch error: ${e}`);
+      // 确保批次内所有文件都被计数
+      for (const file of batch) {
+        this.scannedFilesCount++;
+        this.driverProcessCheckCount++;
+        this.scanProgress = (this.scannedFilesCount / this.totalFilesCount) * 100;
+        this.updateScanUI(file);
+      }
+    }
+
+    if (this.scannedFilesCount % 20 === 0) {
+      this.addScanLog('INFO', `Scanned ${this.scannedFilesCount}/${this.totalFilesCount} files`);
+    }
+
+    // 释放锁，让下一次 scanBatch 可以正常执行完成逻辑
+    this.scanBatchRunning = false;
+
+    // 进度已在每个文件处理时实时计算，这里不再重复计算
+    // 使用 requestAnimationFrame 确保 UI 更新更流畅
+    requestAnimationFrame(() => {
+      if (this.isScanning) {
+        this.scanBatch();
+      }
+    });
+  }
+
+  private stopSpeedTimer() {
+    if (this.scanSpeedTimer) {
+      window.clearInterval(this.scanSpeedTimer);
+      this.scanSpeedTimer = null;
+    }
+  }
+
+  // 检查文件是否为压缩包
+  private isArchiveFile(filePath: string): boolean {
+    const ext = filePath.toLowerCase().split('.').pop();
+    if (!ext) return false;
+
+    const archiveExts = ['zip', 'rar', '7z', 'tar', 'gz', 'tgz', 'bz2', 'xz'];
+    if (archiveExts.includes(ext)) {
+      return true;
+    }
+
+    // 检查是否为自解压安装程序 (.exe)
+    if (ext === 'exe') {
+      // 通过文件头检查是否为自解压程序
+      // 这里简化处理，实际可以通过调用后端检查
+      return false; // 暂时不自动检测自解压exe
+    }
+
+    return false;
+  }
+
+  // 对单个压缩包执行拆包扫描
+  private async processArchiveFile(filePath: string): Promise<void> {
+    this.scannedFilesCount++;
+    this.driverProcessCheckCount++;
+    this.scanProgress = (this.scannedFilesCount / this.totalFilesCount) * 100;
+
+    if (!this.archiveScanManager?.isEnabled()) {
+      this.addScanLog('INFO', `${this.t('archiveScanSkipped')}: ${filePath}`);
+      requestAnimationFrame(() => {
+        this.updateScanUIImmediate(filePath);
+      });
+      return;
+    }
+
+    try {
+      this.addScanLog('INFO', `扫描压缩包: ${filePath}`);
+      const { invoke } = await import('@tauri-apps/api/core');
+      const archiveResult = await invoke<string>('scan_archive_command', { archivePath: filePath });
+      const result = JSON.parse(archiveResult);
+
+      if (result.files && result.files.length > 0) {
+        let threatCount = 0;
+        for (const innerFile of result.files) {
+          if (innerFile.scan_result && innerFile.scan_result.result === 'MALICIOUS') {
+            threatCount++;
+            this.scanThreats++;
+            this.totalThreatsFound++;
+
+            // 显示格式: archive.zip -> virus.exe
+            const displayPath = `${filePath} -> ${innerFile.inner_path}`;
+            this.detectedThreats.push({
+              path: displayPath,
+              probability: innerFile.scan_result.probability,
+              virus_family: innerFile.scan_result.virus_family,
+              family_category: innerFile.scan_result.family_category,
+              is_infector: false
+            });
+
+            const familyInfo = innerFile.scan_result.virus_family ? ` [${innerFile.scan_result.virus_family}]` : '';
+            this.addScanLog('WARNING', `${this.t('archiveThreat')}: ${displayPath}${familyInfo} - ${(innerFile.scan_result.probability * 100).toFixed(1)}%`);
+            this.addScanThreat(innerFile.scan_result.virus_family || 'Trojan.Generic', displayPath, innerFile.scan_result.probability, innerFile.scan_result.family_category);
+          }
+        }
+
+        if (threatCount > 0) {
+          this.updateThreatCountUI();
+          this.addScanLog('WARNING', `${this.t('threatsFoundInArchive').replace('{count}', String(threatCount))}: ${filePath}`);
+        } else {
+          this.addScanLog('INFO', `${this.t('archiveSafe')}: ${filePath}`);
+        }
+      } else if (result.has_password) {
+        this.addScanLog('INFO', `${this.t('archiveEncrypted')}: ${filePath}`);
+      } else if (result.error) {
+        this.addScanLog('WARNING', `${this.t('archiveScanFailed')}: ${filePath} - ${result.error}`);
+      }
+    } catch (e) {
+      console.error('Archive scan error:', filePath, e);
+      this.addScanLog('WARNING', `${this.t('archiveScanFailed')}: ${filePath}`);
+    }
+
+    requestAnimationFrame(() => {
+      this.updateScanUIImmediate(filePath);
+    });
+  }
+
+  // 检查文件是否为脚本
+  private isScriptFile(filePath: string): boolean {
+    const ext = filePath.toLowerCase().split('.').pop();
+    if (!ext) return false;
+    const scriptExts = ['bat', 'cmd', 'ps1', 'vbs', 'js', 'wsf', 'wsh', 'jse', 'vbe', 'hta'];
+    return scriptExts.includes(ext);
+  }
+
+
+
+  // 获取威胁的中文分类标签（优先使用后端的 family_category，云端结果则从家族名推导）
+  private getThreatCategory(threat: { virus_family?: string; family_category?: string }): string | undefined {
+    // 后端已提供分类，直接使用
+    if (threat.family_category) return threat.family_category;
+    
+    const name = threat.virus_family;
+    if (!name) return undefined;
+
+    const lower = name.toLowerCase();
+
+    // 勒索病毒
+    if (lower.includes('ransom') || lower.includes('locky') || lower.includes('wannacry')) return '勒索病毒';
+    // 蠕虫病毒
+    if (lower.includes('worm') || lower.includes('nimda') || lower.includes('ramnit')) return '蠕虫病毒';
+    // 挖矿程序
+    if (lower.includes('miner') || lower.includes('xmrig')) return '挖矿程序';
+    // 远程控制木马
+    if (lower.includes('/asyncrat') || lower.includes('darkcomet') || lower.includes('dcrat')
+      || lower.includes('gh0st') || lower.includes('nanocore') || lower.includes('poisonivy')
+      || lower.includes('quasar') || lower.includes('remcos') || lower.includes('xworm')
+      || lower.includes('/rat')) return '远程控制木马';
+    // 银狐木马
+    if (lower.includes('silverfox')) return '银狐木马';
+    // 云端通用检测
+    if (lower.includes('cloud/virus') || lower.includes('cloudscan/virus')) return '木马病毒';
+    // 窃密木马
+    if (lower.includes('agenttesla') || lower.includes('formbook') || lower.includes('redline')
+      || lower.includes('spark') || lower.includes('vidar')) return '窃密木马';
+    // 银行木马
+    if (lower.includes('emotet')) return '银行木马';
+    // 破坏性病毒
+    if (lower.includes('killdisk') || lower.includes('raptor') || lower.includes('smileghost')
+      || lower.includes('stonecutter') || lower.includes('unfixable') || lower.includes('vinememz')) return '破坏性病毒';
+    // 恶意程序
+    if (lower.includes('systemkiller') || lower.includes('terminator')) return '恶意程序';
+    // 恶意安装程序
+    if (lower.includes('rogue')) return '恶意安装程序';
+    // 木马病毒（兜底）
+    if (lower.includes('trojan') || lower.includes('heuristic')) return '木马病毒';
+
+    return undefined;
+  }
+
+  private async processLocalScanResult(result: ScanResult) {
+    // 本地模型检测结果处理
+    if (result.result === 'MALICIOUS') {
+      // 辅助云查询：本地引擎检出威胁后，先查云端哈希库白名单，命中则跳过误报
+      if (this.auxiliaryCloudScanManager.isEnabled() && this.cloudHashManager) {
+        try {
+          let hash = result.file_hash;
+          if (!hash) {
+            const { invoke } = await import('@tauri-apps/api/core');
+            const hashes = await invoke<(string | null)[]>('calculate_file_hashes_command', { filePaths: [result.file_path] });
+            hash = hashes?.[0] || undefined;
+          }
+          if (hash) {
+            const cloudResult = await this.cloudHashManager.forceCheckHash(hash);
+            if (cloudResult) {
+              console.log('[AuxiliaryCloud] Manual scan result:', result.file_path, cloudResult.result);
+              if (cloudResult.result === 'white') {
+                this.addScanLog('INFO', `命中云端: ${result.file_path}`);
+                return;
+              }
+            }
+          }
+        } catch (e) {
+          console.error('[AuxiliaryCloud] Failed to query cloud hash:', e);
+        }
+      }
+
+      // 非系统路径或云端扫描关闭，使用本地结果
+      const existingIdx = this.detectedThreats.findIndex(t => t.path === result.file_path);
+      if (existingIdx < 0) {
+        this.scanThreats++;
+        this.totalThreatsFound++;
+        this.detectedThreats.push({
+          path: result.file_path,
+          probability: result.probability,
+          virus_family: result.virus_family,
+          family_category: result.family_category,
+          is_infector: result.is_infector
+        });
+      }
+      const familyInfo = result.virus_family ? ` [${result.virus_family}]` : '';
+      const infectorInfo = result.is_infector ? ' [感染型病毒]' : '';
+      this.addScanLog('WARNING', `Threat detected: ${result.file_path}${familyInfo}${infectorInfo} (Probability: ${(result.probability * 100).toFixed(2)}%)`);
+      // 实时显示威胁（扫描未完成即可看到）
+      const threatDisplayName = result.virus_family
+        || (result.is_infector ? 'Infector' : '')
+        || this.getThreatCategory({ virus_family: result.virus_family, family_category: result.family_category })
+        || 'Trojan.Generic';
+      this.addScanThreat(threatDisplayName, result.file_path, result.probability, result.family_category);
+      
+      // 只更新威胁计数，不重新渲染整个页面
+      this.updateThreatCountUI();
+    } else if (result.result === 'ERROR') {
+      this.addScanLog('ERROR', `Scan error for ${result.file_path}: ${result.error}`);
+    }
+  }
+
+  private addScanLog(level: string, message: string) {
+    const now = new Date();
+    const time = now.toLocaleTimeString();
+
+    this.logs.unshift(`[${time}] [${level}] ${message}`);
+    if (this.logs.length > 50) {
+      this.logs.pop();
+    }
+  }
+
+  // 实时显示扫描中检出的威胁（替代原扫描日志区）。
+  // 扫描未完成时用户即可看到已检出的具体威胁，不用等扫描结束。
+  private addScanThreat(threatName: string, filePath: string, probability: number, category?: string) {
+    const container = document.querySelector('.scan-threats-area') as HTMLElement | null;
+    if (!container) return;
+
+    // 移除空态占位
+    const emptyEl = container.querySelector('.scan-threats-empty');
+    if (emptyEl) emptyEl.remove();
+
+    const entry = document.createElement('div');
+    entry.className = 'scan-threat-entry';
+    entry.setAttribute('data-path', this.escapeHtml(filePath));
+    const badge = category ? `<span class="threat-category-badge">${this.escapeHtml(category)}</span>` : '';
+    entry.innerHTML = `
+      <input type="checkbox" class="threat-checkbox" checked data-path="${this.escapeHtml(filePath)}">
+      ${badge}
+      <span class="threat-name">${this.escapeHtml(threatName)}</span>
+      <span class="threat-path-simple" title="${this.escapeHtml(filePath)}">${this.escapeHtml(filePath)}</span>
+      <span class="scan-threat-prob">${(probability * 100).toFixed(1)}%</span>
+    `;
+    // 新威胁插入顶部，保持最多 30 条
+    container.insertBefore(entry, container.firstChild);
+    while (container.children.length > 30) {
+      container.removeChild(container.lastChild!);
+    }
+  }
+
+  // 只更新威胁计数UI，不重新渲染整个页面
+  private updateThreatCountUI() {
+    const threatStat = document.querySelector('.scan-stat:nth-child(1) .stat-num') as HTMLElement;
+    if (threatStat) {
+      threatStat.textContent = String(this.scanThreats);
+    }
+
+    // 检测到威胁时，更新标题、SVG 颜色和进度条颜色
+    if (this.scanThreats > 0) {
+      // 更新标题
+      const titleEl = document.querySelector('.scan-card-title') as HTMLElement;
+      if (titleEl && !titleEl.querySelector('.scan-threat-count')) {
+        titleEl.innerHTML = `${this.t('scanDetected')} <span class="scan-threat-count">${this.scanThreats}</span> 个${this.t('threats')}`;
+      } else if (titleEl) {
+        const countEl = titleEl.querySelector('.scan-threat-count') as HTMLElement;
+        if (countEl) countEl.textContent = String(this.scanThreats);
+      }
+
+      // SVG 颜色变红
+      const svg = document.querySelector('.scan-anim-icon') as SVGElement;
+      if (svg) {
+        const dangerColor = '#D13438';
+        const dangerLight = 'rgba(209, 52, 56, 0.12)';
+        const defs = svg.querySelector('defs');
+        if (defs) {
+          // 更新渐变色
+          const stops = defs.querySelectorAll('stop');
+          if (stops.length >= 4) {
+            stops[0].setAttribute('stop-color', dangerColor);
+            stops[1].setAttribute('stop-color', dangerColor);
+            stops[2].setAttribute('stop-color', dangerColor);
+            stops[3].setAttribute('stop-color', dangerColor);
+          }
+        }
+        // 文档背景
+        const docBg = svg.querySelector('rect[x="10"]');
+        if (docBg) {
+          docBg.setAttribute('stroke', dangerColor);
+          docBg.setAttribute('fill', dangerLight);
+        }
+        // 文档折角
+        const corner = svg.querySelector('path');
+        if (corner) corner.setAttribute('stroke', dangerColor);
+        // 文字行
+        const lines = svg.querySelectorAll('rect[x="16"]');
+        lines.forEach(line => line.setAttribute('fill', dangerColor));
+        // 扫描线
+        const beam = svg.querySelector('rect.scan-beam');
+        if (beam) beam.setAttribute('fill', dangerColor);
+      }
+
+      // 进度条变红
+      const progressBar = document.querySelector('.scan-progress-bar') as HTMLElement;
+      if (progressBar && !progressBar.classList.contains('danger')) {
+        progressBar.classList.add('danger');
+      }
+      const progressFill = document.querySelector('.progress-fill') as HTMLElement;
+      if (progressFill && !progressFill.classList.contains('danger')) {
+        progressFill.classList.add('danger');
+      }
+    }
+  }
+
+  // 立即更新 UI（同步，不延迟）
+  private updateScanUIImmediate(currentFile: string) {
+    this.updateThreatCountUI();
+    const progressBar = document.querySelector('.scan-progress-bar') as HTMLElement;
+    const progressFill = document.querySelector('.scan-progress-bar .progress-fill') as HTMLElement;
+    const progressText = document.querySelector('.scan-progress-text') as HTMLElement;
+    const scanningFilePath = document.querySelector('.scanning-file-path') as HTMLElement;
+    
+    if (this.isTraversing) {
+       // 遍历目录阶段：不确定进度条动画
+       if (progressBar && !progressBar.classList.contains('indeterminate')) {
+         progressBar.classList.add('indeterminate');
+       }
+       if (progressText) {
+         progressText.textContent = '0%';
+       }
+     } else {
+      // 扫描阶段：正常百分比进度
+      if (progressBar) {
+        progressBar.classList.remove('indeterminate');
+      }
+      if (progressFill) {
+        progressFill.style.width = `${this.scanProgress}%`;
+      }
+      if (progressText) {
+        progressText.textContent = `${Math.floor(this.scanProgress)}%`;
+      }
+    }
+    if (scanningFilePath) {
+      scanningFilePath.textContent = currentFile;
+    }
+    
+    const scannedStat = document.querySelector('.scan-stat:nth-child(2) .stat-num') as HTMLElement;
+    if (scannedStat) {
+      scannedStat.textContent = String(this.scannedFilesCount);
+    }
+    
+    const totalStat = document.querySelector('.scan-stat:nth-child(3) .stat-num') as HTMLElement;
+    if (totalStat) {
+      totalStat.textContent = String(this.totalFilesCount);
+    }
+    
+    const elapsedTime = Math.floor((Date.now() - this.scanStartTime) / 1000);
+    const timeStat = document.querySelector('.scan-stat:nth-child(5) .stat-num') as HTMLElement;
+    if (timeStat) {
+      timeStat.textContent = `${elapsedTime}s`;
+    }
+    
+    const threatStat = document.querySelector('.scan-stat:nth-child(1) .stat-num') as HTMLElement;
+    if (threatStat) {
+      threatStat.textContent = String(this.scanThreats);
+    }
+    
+    // 同步更新任务栏进度条（每5%更新一次，避免过于频繁）
+    if (Math.floor(this.scanProgress) % 5 === 0) {
+      this.updateTaskbarProgress(this.scanProgress).catch(e => console.error('Failed to update taskbar progress:', e));
+    }
+  }
+
+  private updateScanUI(currentFile: string) {
+    // 使用 requestAnimationFrame 确保 UI 立即更新
+    requestAnimationFrame(() => {
+      this.updateScanUIImmediate(currentFile);
+    });
+    
+    // 每扫描10个文件更新一次活动日志标题（异步，不阻塞主流程）
+    if (this.scannedFilesCount % 10 === 0) {
+      setTimeout(() => this.updateActivityLogHeader(), 0);
+    }
+  }
+
+  private stopScan() {
+    this.isScanning = false;
+    this.scanBatchRunning = false;
+    // 停止后将进度设为100%，render() 会显示扫描完成页而非跳回主页
+    this.scanProgress = 100;
+    if (this.scanTimer) {
+      clearInterval(this.scanTimer);
+      this.scanTimer = null;
+    }
+    this.stopSpeedTimer();
+    // 清除任务栏进度条
+    this.updateTaskbarProgress(null).catch(e => console.error('Failed to clear taskbar progress:', e));
+    this.render();
+    
+  }
+
+  // 等待后台扫描完成（YARA扫描等）
+  private async waitForBackgroundScans(): Promise<void> {
+    const maxWaitTime = 30000; // 最大等待30秒
+    const checkInterval = 100; // 每100ms检查一次
+    const startTime = Date.now();
+    
+    // 获取当前已处理的文件数
+    const initialProcessedCount = this.scannedFilesCount;
+    let stableCount = 0;
+    
+    while (Date.now() - startTime < maxWaitTime) {
+      // 检查是否有新的威胁被添加（通过比较已扫描文件数）
+      if (this.scannedFilesCount > initialProcessedCount) {
+        // 有新的扫描结果，继续等待
+        stableCount = 0;
+      } else {
+        // 没有新的扫描结果，增加稳定计数
+        stableCount++;
+      }
+      
+      // 如果连续2秒没有新的扫描结果，认为后台扫描已完成
+      if (stableCount >= 20) { // 20 * 100ms = 2秒
+        console.log(`[ScanComplete] Background scans finished after ${Date.now() - startTime}ms`);
+        break;
+      }
+      
+      // 保险：所有文件都已计数且稳定1秒后强制结束
+      if (this.scannedFilesCount >= this.totalFilesCount && stableCount >= 10) {
+        console.log(`[ScanComplete] All files accounted for, finishing early`);
+        break;
+      }
+      
+      await new Promise(resolve => setTimeout(resolve, checkInterval));
+    }
+    
+    // 最后再等待一小段时间，确保所有结果都被处理
+    await new Promise(resolve => setTimeout(resolve, 500));
+    console.log(`[ScanComplete] Final threat count: ${this.scanThreats}`);
+  }
+
+  private resetScanAndGoHome() {
+    this.isScanning = false;
+    this.scanProgress = 0;
+    this.currentScanFileIndex = 0;
+    this.scannedFilesCount = 0;
+    this.scanThreats = 0;
+    this.scanStartTime = 0;
+    if (this.scanTimer) {
+      clearInterval(this.scanTimer);
+      this.scanTimer = null;
+    }
+    // 清除任务栏进度条
+    this.updateTaskbarProgress(null).catch(e => console.error('Failed to clear taskbar progress:', e));
+    this.currentPage = 'home';
+    this.render();
+    setTimeout(() => this.scrollToSection('home'), 100);
+  }
+
+  private async handleDetectedThreats() {
+    if (this.detectedThreats.length === 0) {
+      return;
+    }
+
+    // 检测 .sys 驱动木马：常规隔离无法处理，需提示用户使用系统急救箱
+    const driverThreats = this.detectedThreats.filter(t => t.path.toLowerCase().endsWith('.sys'));
+    if (driverThreats.length > 0) {
+      await this.showDriverThreatWarning(driverThreats);
+      // 将驱动威胁从待处理列表移除，避免常规隔离失败或误操作
+      this.detectedThreats = this.detectedThreats.filter(t => !t.path.toLowerCase().endsWith('.sys'));
+      this.scanThreats = this.detectedThreats.length;
+      this.render();
+
+      if (this.detectedThreats.length === 0) {
+        return;
+      }
+    }
+
+    // 分离感染型病毒和普通威胁
+    const infectorThreats = this.detectedThreats.filter(t => t.is_infector);
+    const normalThreats = this.detectedThreats.filter(t => !t.is_infector);
+
+    let message = this.t('detectedThreats').replace('{count}', String(this.detectedThreats.length));
+    if (infectorThreats.length > 0) {
+      message += '\n- ' + this.t('infectorVirus') + ': ' + infectorThreats.length + ' ' + this.t('willBeCleaned');
+    }
+    if (normalThreats.length > 0) {
+      message += '\n- ' + this.t('normalThreats') + ': ' + normalThreats.length + ' ' + this.t('willBeQuarantined');
+    }
+    message += '\n\n' + this.t('confirmProcess');
+
+    const confirmed = confirm(message);
+    if (!confirmed) {
+      return;
+    }
+
+    this.addLog('INFO', this.t('startProcessing').replace('{count}', String(this.detectedThreats.length)));
+
+    let successCount = 0;
+    let failCount = 0;
+
+    // 处理感染型病毒（清除并修复）
+    const infectorResults: any[] = [];
+    for (const threat of infectorThreats) {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const { appLocalDataDir } = await import('@tauri-apps/api/path');
+        const quarantineDir = await appLocalDataDir() + '\\quarantine';
+        
+        const result = await invoke('clean_infector_file', {
+          filePath: threat.path,
+          quarantineDir: quarantineDir
+        }) as any;
+
+        infectorResults.push({ threat, result });
+
+        if (result.success) {
+          successCount++;
+          this.addLog('INFO', this.t('cleanedInfector') + ': ' + threat.path);
+          this.addLog('INFO', '  - ' + this.t('maliciousSection') + ': ' + (result.malicious_section || 'Unknown'));
+          this.addLog('INFO', '  - ' + this.t('originalEntryPoint') + ': 0x' + (result.original_entry_point || 0).toString(16).toUpperCase().padStart(8, '0'));
+          if (result.quarantine_id) {
+            this.addLog('INFO', '  - ' + this.t('quarantineId') + ': ' + result.quarantine_id);
+          }
+          // 记录处理日志
+          if (result.cleaning_log && result.cleaning_log.length > 0) {
+            this.addLog('INFO', '  - ' + this.t('cleaningLog') + ':');
+            for (const log of result.cleaning_log) {
+              this.addLog('INFO', `    ${log}`);
+            }
+          }
+        } else {
+          failCount++;
+          this.addLog('ERROR', this.t('failedToClean') + ': ' + threat.path + ' - ' + result.message);
+        }
+      } catch (error) {
+        failCount++;
+        this.addLog('ERROR', this.t('failedToClean') + ': ' + threat.path + ' - ' + error);
+      }
+    }
+
+    // 处理普通威胁（隔离）
+    for (const threat of normalThreats) {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const result = await invoke('quarantine_threat_file', {
+          filePath: threat.path,
+          threatName: (threat as any).fromCloud ? (threat.virus_family || 'CloudInference') : (this.virusFamilyAnalysisManager.isEnabled() ? (threat.virus_family || 'Trojan.Win32.General') : 'Trojan.Generic'),
+          threatLevel: threat.probability > 0.7 ? 'High' : (threat.probability > 0.4 ? 'Medium' : 'Low')
+        }) as any;
+
+        // 收集普通威胁的处理结果
+        infectorResults.push({ threat, result });
+
+        if (result.success) {
+          successCount++;
+          this.addLog('INFO', this.t('quarantined') + ': ' + threat.path + ' -> ' + result.id);
+        } else {
+          failCount++;
+          this.addLog('ERROR', this.t('quarantineFailed') + ': ' + threat.path);
+        }
+      } catch (error) {
+        failCount++;
+        this.addLog('ERROR', this.t('quarantineError') + ': ' + threat.path + ' - ' + error);
+        // 错误也要加入结果列表
+        infectorResults.push({ threat, result: { success: false, message: String(error) } });
+      }
+    }
+
+    // 显示处理结果页面
+    this.showCleaningResults(infectorResults, successCount, failCount);
+    
+    this.addLog('INFO', this.t('processingComplete').replace('{success}', String(successCount)).replace('{fail}', String(failCount)));
+
+    // 清空威胁列表
+    this.detectedThreats = [];
+    this.scanThreats = 0;
+    // 将所有来自 scan 的待处理威胁标记为已处理
+    for (const threat of this.pendingThreats) {
+      if (threat.source === 'scan' && threat.status === 'pending') {
+        threat.status = 'resolved';
+      }
+    }
+    this.updateNotificationBadge();
+    this.render();
+  }
+
+  private showDriverThreatWarning(driverThreats: any[]): Promise<void> {
+    return new Promise((resolve) => {
+      const modal = document.createElement('div');
+      modal.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.25);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 10001;
+        backdrop-filter: blur(4px);
+      `;
+
+      modal.innerHTML = `
+        <div style="
+          background: #FFFFFF;
+          border-radius: 8px;
+          max-width: 480px;
+          width: 90%;
+          box-shadow: 0 32px 64px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.05);
+          animation: contentDialogShow 0.2s cubic-bezier(0.0, 0.0, 0.2, 1);
+          font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
+          overflow: hidden;
+        ">
+          <div style="display: flex; align-items: flex-start; gap: 16px; padding: 24px 24px 16px 24px;">
+            <div style="width: 20px; height: 20px; flex-shrink: 0; margin-top: 2px;">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M10 2C14.4183 2 18 5.58172 18 10C18 14.4183 14.4183 18 10 18C5.58172 18 2 14.4183 2 10C2 5.58172 5.58172 2 10 2ZM10 3C6.13401 3 3 6.13401 3 10C3 13.866 6.13401 17 10 17C13.866 17 17 13.866 17 10C17 6.13401 13.866 3 10 3ZM10.75 13.25C10.75 13.6642 10.4142 14 10 14C9.58579 14 9.25 13.6642 9.25 13.25V6.75C9.25 6.33579 9.58579 6 10 6C10.4142 6 10.75 6.33579 10.75 6.75V13.25Z" fill="#D13438"/>
+              </svg>
+            </div>
+            <div style="flex: 1;">
+              <div style="font-size: 18px; font-weight: 600; color: #1C1C1C; line-height: 1.4; margin-bottom: 8px;">发现驱动木马</div>
+              <div style="font-size: 14px; color: #5F5F5F; line-height: 1.6;">
+                <p style="margin: 0 0 8px 0;">检测到 <strong style="color: #D13438;">${driverThreats.length} 个</strong>驱动级威胁（.sys 文件）。</p>
+                <p style="margin: 0 0 8px 0;">此类威胁运行在内核层，主程序无法通过常规隔离方式安全移除。</p>
+                <p style="margin: 0 0 8px 0; color: #D13438; font-weight: 500;">请使用系统急救箱进行深度查杀。该功能即将上线。</p>
+                <div style="margin-top: 10px; padding: 6px 8px; background: #FEF0F0; border-radius: 6px; border: 1px solid rgba(209, 52, 56, 0.12);">
+                  ${driverThreats.map(t => `
+                    <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 4px;">
+                      <span style="color: #1C1C1C; word-break: break-all; flex: 1; font-size: 12px; line-height: 1; padding-top: 2px;">${t.path.split(/[\\/]/).pop() || t.path}</span>
+                      <span style="color: #D13438; font-weight: 500; flex-shrink: 0; font-size: 11px; padding: 2px 6px; background: rgba(209, 52, 56, 0.08); border-radius: 4px; line-height: 1; padding-top: 3px;">${t.virus_family || t.threat_name || 'Rootkit.Driver.Generic'}</span>
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+            </div>
+          </div>
+          <div style="display: flex; justify-content: flex-end; padding: 16px 24px 24px 24px; background: #F3F3F3; border-top: 1px solid rgba(0, 0, 0, 0.05);">
+            <button id="driver-threat-warning-ok" style="padding: 6px 16px; border: none; background: #005FB8; border-radius: 4px; font-size: 14px; font-weight: 400; color: white; cursor: pointer; font-family: inherit; transition: all 0.15s ease; min-width: 80px; box-shadow: 0 1px 2px rgba(0,0,0,0.1);" onmouseover="this.style.background='#0066C7'" onmouseout="this.style.background='#005FB8'" onmousedown="this.style.background='#004E92'" onmouseup="this.style.background='#0066C7'">我知道了</button>
+          </div>
+        </div>
+        <style>
+          @keyframes contentDialogShow {
+            from { opacity: 0; transform: scale(0.95) translateY(-10px); }
+            to { opacity: 1; transform: scale(1) translateY(0); }
+          }
+        </style>
+      `;
+
+      document.body.appendChild(modal);
+
+      const close = () => {
+        modal.remove();
+        resolve();
+      };
+
+      document.getElementById('driver-threat-warning-ok')?.addEventListener('click', close);
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) close();
+      });
+    });
+  }
+
+  private showCleaningResults(infectorResults: any[], successCount: number, failCount: number) {
+    // 创建处理结果弹窗 - FLUENT小清新风格
+    const modal = document.createElement('div');
+    modal.className = 'cleaning-results-modal';
+    modal.innerHTML = `
+      <div class="cleaning-results-overlay"></div>
+      <div class="cleaning-results-content">
+        <div class="cleaning-results-header">
+          <h2>${this.t('threatProcessingResult')}</h2>
+          <button class="close-btn">&times;</button>
+        </div>
+        <div class="cleaning-results-body">
+          <!-- 左上角简洁统计 -->
+          <div class="mini-stats">
+            <span class="stat-item ok">${successCount} ${this.t('success')}</span>
+            <span class="stat-item err">${failCount} ${this.t('failed')}</span>
+          </div>
+          
+          <!-- 可展开的小列表 -->
+          ${infectorResults.length > 0 ? `
+            <div class="compact-list">
+              ${infectorResults.map(({ threat, result }) => `
+                <details class="compact-item">
+                  <summary>
+                    <span class="fname">${threat.path.split(/[\\/]/).pop()}</span>
+                    <span class="tag ${result.success ? 'ok' : 'err'}">${result.success ? (threat.is_infector ? this.t('cleanedMaliciousCode') : this.t('quarantined')) : this.t('failed')}</span>
+                  </summary>
+                  <div class="compact-detail">
+                    <p class="fpath">${threat.path}</p>
+                    ${result.success ? `
+                      <div class="info-row">
+                        <span>${this.t('maliciousSection')}: ${result.malicious_section || '-'}</span>
+                        <span>${this.t('originalEntryPoint')}: 0x${(result.original_entry_point || 0).toString(16).toUpperCase().padStart(8, '0')}</span>
+                      </div>
+                    ` : `
+                      <p class="err-msg">${this.t('failedReason')}: ${result.message || this.t('unknownError')}</p>
+                    `}
+                  </div>
+                </details>
+              `).join('')}
+            </div>
+          ` : ''}
+        </div>
+        <div class="cleaning-results-footer">
+          <button class="btn-close">${this.t('confirm')}</button>
+        </div>
+      </div>
+    `;
+    
+    // 添加样式 - FLNT极简风格
+    const style = document.createElement('style');
+    style.textContent = `
+      .cleaning-results-modal {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      }
+      .cleaning-results-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.3);
+      }
+      .cleaning-results-content {
+        position: relative;
+        background: #fff;
+        border-radius: 8px;
+        width: 90%;
+        max-width: 480px;
+        max-height: 70vh;
+        display: flex;
+        flex-direction: column;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+        overflow: hidden;
+      }
+      .cleaning-results-header {
+        padding: 16px 20px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid #f0f0f0;
+      }
+      .cleaning-results-header h2 {
+        margin: 0;
+        font-size: 15px;
+        font-weight: 500;
+        color: #333;
+      }
+      .close-btn {
+        background: none;
+        border: none;
+        width: 24px;
+        height: 24px;
+        font-size: 18px;
+        cursor: pointer;
+        color: #999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .close-btn:hover {
+        color: #666;
+      }
+      .cleaning-results-body {
+        padding: 16px 20px;
+        overflow-y: auto;
+        flex: 1;
+      }
+      /* 左上角小统计 */
+      .mini-stats {
+        display: flex;
+        gap: 12px;
+        margin-bottom: 16px;
+        font-size: 13px;
+      }
+      .stat-item {
+        padding: 4px 10px;
+        border-radius: 4px;
+        font-weight: 500;
+      }
+      .stat-item.ok {
+        color: #52c41a;
+        background: #f6ffed;
+        border: 1px solid #b7eb8f;
+      }
+      .stat-item.err {
+        color: #ff4d4f;
+        background: #fff2f0;
+        border: 1px solid #ffccc7;
+      }
+      /* 紧凑列表 */
+      .compact-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .compact-item {
+        background: #fafafa;
+        border-radius: 6px;
+        border: 1px solid #f0f0f0;
+        overflow: hidden;
+      }
+      .compact-item summary {
+        padding: 10px 12px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        cursor: pointer;
+        font-size: 13px;
+        list-style: none;
+      }
+      .compact-item summary::-webkit-details-marker {
+        display: none;
+      }
+      .compact-item .fname {
+        color: #333;
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        margin-right: 8px;
+      }
+      .compact-item .tag {
+        font-size: 11px;
+        padding: 2px 8px;
+        border-radius: 3px;
+        flex-shrink: 0;
+      }
+      .compact-item .tag.ok {
+        color: #52c41a;
+        background: #f6ffed;
+      }
+      .compact-item .tag.err {
+        color: #ff4d4f;
+        background: #fff2f0;
+      }
+      .compact-detail {
+        padding: 10px 12px;
+        border-top: 1px solid #f0f0f0;
+        font-size: 12px;
+        color: #666;
+      }
+      .compact-detail .fpath {
+        margin: 0 0 8px 0;
+        word-break: break-all;
+        font-family: monospace;
+        color: #999;
+      }
+      .compact-detail .info-row {
+        display: flex;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+      .compact-detail .err-msg {
+        margin: 0;
+        color: #ff4d4f;
+      }
+      .cleaning-results-footer {
+        padding: 12px 20px;
+        border-top: 1px solid #f0f0f0;
+        display: flex;
+        justify-content: flex-end;
+      }
+      .cleaning-results-footer .btn-close {
+        padding: 6px 16px;
+        border-radius: 4px;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        border: none;
+        background: #1890ff;
+        color: white;
+      }
+      .cleaning-results-footer .btn-close:hover {
+        background: #40a9ff;
+      }
+    `;
+    document.head.appendChild(style);
+    document.body.appendChild(modal);
+    
+    // 绑定关闭事件
+    const closeModal = () => {
+      modal.remove();
+      style.remove();
+    };
+    
+    modal.querySelector('.close-btn')?.addEventListener('click', closeModal);
+    modal.querySelector('.btn-close')?.addEventListener('click', closeModal);
+    modal.querySelector('.cleaning-results-overlay')?.addEventListener('click', closeModal);
+  }
+
+  private addLog(level: string, message: string) {
+    this.logUploadManager.collectRecentLog(level, message);
+    const now = new Date();
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    const time = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+    const logEntry = `${time} | ${level} | ${message}`;
+    this.logs.unshift(logEntry);
+    if (this.logs.length > 50) {
+      this.logs.pop();
+    }
+    
+    // 更新原来的日志容器
+    const logContainer = document.getElementById('log-container');
+    if (logContainer) {
+      logContainer.innerHTML = this.logs.map(log => `<div class="log-entry">${log}</div>`).join('');
+    }
+    
+    // 更新主页的日志容器
+    const homeLogContainer = document.getElementById('home-log-container');
+    if (homeLogContainer) {
+      homeLogContainer.innerHTML = this.logs.map(log => `<div class="log-entry" style="word-wrap: break-word; word-break: break-all;">${log}</div>`).join('');
+    }
+  }
+
+  private addInitialLogs() {
+    // 延迟一点执行，确保 DOM 完全渲染
+    setTimeout(() => {
+      // 获取扫描引擎真实信息（ONNX 模型路径 + 加载状态）
+      this.getScannerInfo().then(info => {
+        if (info?.model_loaded && info.model_path) {
+          this.addLog('INFO', `ONNX 模型已加载: ${info.model_path}`);
+        } else {
+          this.addLog('WARNING', 'ONNX 模型未加载，引擎不可用');
+        }
+      }).catch(() => {
+        this.addLog('INFO', 'Melix 扫描引擎已初始化');
+      });
+
+      // 添加驱动防护启动日志（如果防护已启用）
+      if (this.driverProtectionManager.isEnabled()) {
+        this.addLog('INFO', 'Driver protection started');
+      }
+    }, 100);
+  }
+
+  private async getScannerInfo(): Promise<{ model_loaded: boolean; model_path: string | null } | null> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const result = await invoke<any>('get_scanner_info_command');
+      console.log('[Startup] Scanner info from Rust:', JSON.stringify(result));
+      return result;
+    } catch (e) {
+      console.warn('[Startup] Failed to get scanner info:', e);
+      return null;
+    }
+  }
+
+  /** 获取引擎状态（仅病毒分析相关引擎） */
+  private async collectEngineStatuses(): Promise<{name:string;status:string;desc:string;version:string}[]> {
+    const engines: {name:string;status:string;desc:string;version:string}[] = [];
+
+    // 核心检测引擎（仅病毒分析相关）
+    engines.push({name:'Melix 深度学习引擎', status:'已加载', desc:'基于 ONNX 的恶意文件检测模型', version:'v10.2.33'});
+    engines.push({name:'本地特征码引擎', status:'已就绪', desc:'内置特征码规则库匹配', version:'v10.2.33'});
+    engines.push({name:'病毒家族分析引擎', status:'已就绪', desc:'家族分类', version:'v10.2.33'});
+    engines.push({name:'行为分析引擎', status:'已就绪', desc:'PE 导入表 + 字符串行为提取', version:'v10.2.33'});
+
+    // 云端引擎
+    const cloudHashOk = this.cloudHashManager ? await this.cloudHashManager.isConnected() : false;
+    engines.push({name:'云端哈希引擎', status:cloudHashOk?'已连接':'未就绪', desc:'云端 MD5 哈希数据库', version:'v10.2.33'});
+
+    // 白名单引擎
+    engines.push({name:'白名单引擎', status:'已就绪', desc:'MD5 白名单过滤', version:'v10.2.33'});
+
+    // 规则引擎数量
+    try {
+      const eng = await import('@tauri-apps/api/core').then(m => m.invoke<any>('get_engine_rule_count'));
+      const count = eng?.signatures ?? 0;
+      engines.push({name:'规则引擎', status:`${count} 条签名`, desc:'外部病毒家族规则文件', version:'v1.0'});
+    } catch {
+      engines.push({name:'规则引擎', status:'未加载', desc:'外部病毒家族规则文件', version:'v1.0'});
+    }
+
+    return engines;
+  }
+
+  private async showEngineOverview() {
+    const existing = document.getElementById('engine-overlay');
+    if (existing) existing.remove();
+
+    const engines = await this.collectEngineStatuses();
+    const total = engines.length;
+    const running = engines.filter(e => !['未就绪','未加载'].includes(e.status)).length;
+
+    const modal = document.createElement('div');
+    modal.style.cssText = `
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0, 0, 0, 0.25); display: flex; align-items: center;
+      justify-content: center; z-index: 10001; backdrop-filter: blur(4px);
+    `;
+
+    modal.innerHTML = `
+      <div style="
+        background: #FFFFFF; border-radius: 8px; max-width: 620px; width: 90%;
+        box-shadow: 0 32px 64px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.05);
+        animation: whitelistDialogShow 0.2s cubic-bezier(0.0,0.0,0.2,1);
+        font-family: 'Segoe UI Variable','Segoe UI',system-ui,-apple-system,sans-serif;
+        overflow: hidden; max-height: 80vh; display: flex; flex-direction: column;
+      ">
+        <div style="padding: 24px 24px 0 24px;">
+          <div style="font-size: 18px; font-weight: 600; color: #1C1C1C; margin-bottom: 4px;">引擎概览</div>
+          <div style="font-size: 14px; color: #5F5F5F; margin-bottom: 16px;">共 ${total} 个引擎 · ${running} 个就绪</div>
+        </div>
+        <div style="flex: 1; overflow-y: auto; padding: 0 24px; min-height: 60px;">
+          <table style="width:100%;border-collapse:collapse;font-size:13px;">
+            <thead>
+              <tr style="border-bottom:2px solid #EDEDED;">
+                <th style="text-align:left;padding:8px 12px;color:#5F5F5F;font-weight:500;width:28px;"></th>
+                <th style="text-align:left;padding:8px 12px;color:#5F5F5F;font-weight:500;">引擎名称</th>
+                <th style="text-align:left;padding:8px 12px;color:#5F5F5F;font-weight:500;">状态</th>
+                <th style="text-align:left;padding:8px 12px;color:#5F5F5F;font-weight:500;">说明</th>
+                <th style="text-align:left;padding:8px 12px;color:#5F5F5F;font-weight:500;">版本</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${engines.map((e, i) => {
+                const statusColor = (s: string) => {
+                  if (['已加载','已就绪','已连接'].some(x => s.includes(x))) return '#107C10';
+                  if (s.includes('未加载')) return '#A80000';
+                  if (s.includes('未就绪')) return '#9D9D9D';
+                  return '#9D9D9D';
+                };
+                const dotColor = statusColor(e.status);
+                return `<tr style="border-bottom:1px solid #F3F3F3;">
+                  <td style="padding:10px 12px;text-align:center;font-size:11px;color:#9D9D9D;">${i+1}</td>
+                  <td style="padding:10px 12px;font-weight:500;color:#1A1A1A;">${e.name}</td>
+                  <td style="padding:10px 12px;">
+                    <span style="display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border-radius:10px;font-size:12px;font-weight:500;background:${dotColor}18;color:${dotColor};">
+                      <span style="width:6px;height:6px;border-radius:50%;background:${dotColor};"></span>
+                      ${e.status}
+                    </span>
+                  </td>
+                  <td style="padding:10px 12px;color:#5F5F5F;">${e.desc}</td>
+                  <td style="padding:10px 12px;color:#9D9D9D;font-size:12px;">${e.version}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+        <div style="display: flex; justify-content: flex-end; padding: 16px 24px 24px 24px; background: #F3F3F3; border-top: 1px solid rgba(0,0,0,0.05);">
+          <button id="engine-close-btn" style="padding: 6px 16px; border: none; background: #005FB8; border-radius: 4px; font-size: 14px; font-weight: 400; color: white; cursor: pointer; font-family: inherit; min-width: 80px; box-shadow: 0 1px 2px rgba(0,0,0,0.1);">完成</button>
+        </div>
+      </div>
+      <style>
+        @keyframes whitelistDialogShow {
+          from { opacity: 0; transform: scale(0.95) translateY(-10px); }
+          to { opacity: 1; transform: scale(1) translateY(0); }
+        }
+        #engine-overlay div::-webkit-scrollbar { width: 6px; height: 6px; }
+        #engine-overlay div::-webkit-scrollbar-track { background: transparent; }
+        #engine-overlay div::-webkit-scrollbar-thumb { background: #D0D0D0; border-radius: 3px; }
+        #engine-overlay div::-webkit-scrollbar-thumb:hover { background: #B0B0B0; }
+      </style>
+    `;
+
+    document.body.appendChild(modal);
+    modal.id = 'engine-overlay';
+
+    document.getElementById('engine-close-btn')?.addEventListener('click', () => modal.remove());
+    modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+  }
+
+  // ==================== Demo Mode / 演示模式 ====================
+  private readonly demoSteps: Array<{ target: string; text: string; position: 'top' | 'bottom' | 'left' | 'right' | 'center'; navigate?: Page }> = [
+    { target: '#hero-card', text: '欢迎使用 XIGUASecurity 10x！这里是安全概览，显示当前电脑的整体防护状态。', position: 'bottom' },
+    { target: '.realtime-panel', text: '实时防护面板集中管理驱动防护、文件防护、基础防护等核心能力。', position: 'left' },
+    { target: '.feature-cards', text: '功能卡片可以快速进入病毒扫描、隔离区、系统优化和隐私保护。', position: 'left' },
+    { target: '#section-scan', text: '病毒扫描提供快速、全盘和自定义扫描，满足不同场景的安全需求。', position: 'bottom' },
+    { target: '#section-notifications', text: '通知中心汇总所有安全事件，包括威胁、拦截、扫描和隔离记录。', position: 'bottom' },
+    { target: '#section-settings', text: '设置中心可以调整主题、扫描敏感度、白名单和防护开关。', position: 'bottom' },
+    { target: '#section-quarantine', text: '隔离区存放所有被隔离的威胁文件，可以在这里恢复或彻底删除。', position: 'bottom', navigate: 'quarantine' as Page },
+    { target: '.edr-reports-page-title', text: 'EDR 报告时间线记录所有拦截和终止事件的详细信息，方便追溯。', position: 'bottom', navigate: 'toolbox_edr_reports' as Page },
+    { target: '#hero-card', text: '以上是 XIGUASecurity 10x 的核心功能。现在开始，享受全面的安全防护吧！', position: 'center' },
+  ];
+
+  private startDemoMode() {
+    if (this.demoMode) return;
+    console.log('[Demo] Starting demo mode');
+    this.demoMode = true;
+    this.demoStepIndex = 0;
+    this.currentPage = 'home';
+    this.render();
+    this.createDemoOverlay();
+    // 等首页渲染完成后再启动演示
+    setTimeout(() => {
+      const hero = document.querySelector('#hero-card');
+      if (hero) {
+        console.log('[Demo] Home page ready, starting step 0');
+        setTimeout(() => this.runDemoStep(), 300);
+      } else {
+        console.warn('[Demo] Home page not ready, retrying');
+        this.stopDemoMode();
+      }
+    }, 500);
+  }
+
+  private stopDemoMode() {
+    if (!this.demoMode) return;
+    console.log('[Demo] Stopping demo mode');
+    this.demoMode = false;
+    if (this.demoTimer) {
+      clearTimeout(this.demoTimer);
+      this.demoTimer = null;
+    }
+    this.removeDemoOverlay();
+    this.removeDemoHighlight();
+    // 回到首页
+    this.currentPage = 'home';
+    this.render();
+  }
+
+  private runDemoStep() {
+    if (!this.demoMode) {
+      this.stopDemoMode();
+      return;
+    }
+    if (this.demoStepIndex >= this.demoSteps.length) {
+      console.log('[Demo] All steps completed');
+      this.stopDemoMode();
+      return;
+    }
+
+    const step = this.demoSteps[this.demoStepIndex];
+    console.log('[Demo] Step %d: target=%s navigate=%s', this.demoStepIndex, step.target, step.navigate || 'none');
+
+    // 切换页面
+    if (step.navigate) {
+      this.currentPage = step.navigate;
+    } else {
+      this.currentPage = 'home';
+    }
+    this.render();
+
+    // 用 requestAnimationFrame 确保布局就绪
+    requestAnimationFrame(() => {
+      // 内联区块：直接 scrollIntoView
+      if (!step.navigate) {
+        const el = document.querySelector(step.target) as HTMLElement;
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        } else {
+          console.warn('[Demo] Scroll target not in DOM:', step.target);
+        }
+      }
+
+      // 等滚动 + 布局完成后弹气泡
+      setTimeout(() => {
+        const target = document.querySelector(step.target) as HTMLElement;
+        if (!target) {
+          console.warn('[Demo] Target not found, skip:', step.target);
+          this.demoStepIndex++;
+          this.runDemoStep();
+          return;
+        }
+        console.log('[Demo] Showing bubble for step', this.demoStepIndex);
+        this.showDemoBubble(target, step.text, step.position);
+        this.demoTimer = window.setTimeout(() => {
+          this.demoStepIndex++;
+          this.runDemoStep();
+        }, 4500);
+      }, 500);
+    });
+  }
+
+  private createDemoOverlay() {
+    let overlay = document.getElementById('demo-overlay');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = 'demo-overlay';
+      overlay.className = 'demo-overlay';
+      overlay.addEventListener('click', () => this.stopDemoMode());
+      document.body.appendChild(overlay);
+    }
+    overlay.classList.add('active');
+  }
+
+  private removeDemoOverlay() {
+    document.getElementById('demo-overlay')?.classList.remove('active');
+  }
+
+  private showDemoBubble(target: HTMLElement, text: string, position: 'top' | 'bottom' | 'left' | 'right' | 'center') {
+    this.removeDemoBubble();
+    this.removeDemoHighlight();
+
+    if (position !== 'center') {
+      target.classList.add('demo-highlight');
+    }
+
+    const bubble = document.createElement('div');
+    bubble.id = 'demo-bubble';
+    bubble.className = 'demo-bubble';
+    bubble.setAttribute('data-position', position);
+    bubble.innerHTML = `
+      <div class="demo-bubble-text">${text}</div>
+      <div class="demo-bubble-step">步骤 ${this.demoStepIndex + 1} / ${this.demoSteps.length}</div>
+      <div class="demo-bubble-actions">
+        <button class="demo-bubble-btn secondary" id="demo-skip">退出演示</button>
+      </div>
+    `;
+    document.body.appendChild(bubble);
+
+    // 计算位置
+    const rect = target.getBoundingClientRect();
+    const bubbleRect = bubble.getBoundingClientRect();
+    const gap = 14;
+    let top = 0, left = 0;
+
+    if (position === 'center') {
+      top = window.innerHeight / 2 - bubbleRect.height / 2;
+      left = window.innerWidth / 2 - bubbleRect.width / 2;
+    } else {
+      switch (position) {
+        case 'bottom':
+          top = rect.bottom + gap;
+          left = rect.left + rect.width / 2 - bubbleRect.width / 2;
+          break;
+        case 'top':
+          top = rect.top - bubbleRect.height - gap;
+          left = rect.left + rect.width / 2 - bubbleRect.width / 2;
+          break;
+        case 'left':
+          top = rect.top + rect.height / 2 - bubbleRect.height / 2;
+          left = rect.left - bubbleRect.width - gap;
+          break;
+        case 'right':
+          top = rect.top + rect.height / 2 - bubbleRect.height / 2;
+          left = rect.right + gap;
+          break;
+      }
+    }
+    // 边界保护
+    const padding = 12;
+    top = Math.max(padding, Math.min(top, window.innerHeight - bubbleRect.height - padding));
+    left = Math.max(padding, Math.min(left, window.innerWidth - bubbleRect.width - padding));
+    bubble.style.top = `${top}px`;
+    bubble.style.left = `${left}px`;
+
+    requestAnimationFrame(() => bubble.classList.add('active'));
+
+    document.getElementById('demo-skip')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.stopDemoMode();
+    });
+    bubble.addEventListener('click', (e) => e.stopPropagation());
+  }
+
+  private removeDemoBubble() {
+    document.getElementById('demo-bubble')?.remove();
+  }
+
+  private removeDemoHighlight() {
+    document.querySelectorAll('.demo-highlight').forEach(el => el.classList.remove('demo-highlight'));
+  }
+}
+
+// Initialize app when DOM is ready
+document.addEventListener('DOMContentLoaded', () => {
+  new App();
+});

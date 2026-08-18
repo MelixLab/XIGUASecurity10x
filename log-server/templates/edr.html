@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XIGUASecurity - {{ device.device_name }} EDR 拦截</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header class="app-bar acrylic">
+        <div class="brand">
+            <div class="logo">X</div>
+            <span>{{ device.device_name }} - EDR 拦截</span>
+        </div>
+        <div class="actions">
+            <a href="/device/{{ device.device_name }}" class="btn btn-secondary">返回设备</a>
+            <a href="/device/{{ device.device_name }}/timeline" class="btn btn-secondary">行为时间线</a>
+            <a href="/" class="btn btn-secondary">设备列表</a>
+            <a href="/logout" class="btn btn-secondary">退出登录</a>
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="card">
+            <h2 class="card-title">EDR 拦截记录</h2>
+            <div class="filter-bar">
+                <input type="search" id="keywordFilter" placeholder="搜索进程名或关键词" style="max-width: 320px;">
+                <button class="btn btn-primary" onclick="loadEdr()">刷新</button>
+            </div>
+            <div id="edrContainer" class="log-list">
+                <div class="empty-state">正在加载...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function loadEdr() {
+            const keyword = document.getElementById('keywordFilter').value;
+            const url = new URL('/api/edr', window.location.origin);
+            url.searchParams.set('device_name', '{{ device.device_name }}');
+            if (keyword) url.searchParams.set('keyword', keyword);
+
+            const res = await fetch(url);
+            const data = await res.json();
+            const container = document.getElementById('edrContainer');
+            if (!data.logs || data.logs.length === 0) {
+                container.innerHTML = '<div class="empty-state">该设备暂无 EDR 拦截记录</div>';
+                return;
+            }
+            container.innerHTML = data.logs.map(log => `
+                <div class="log-item">
+                    <div class="log-header">
+                        <span class="log-category">EDR</span>
+                        <span class="log-time">${log.timestamp}</span>
+                    </div>
+                    <div class="log-summary">${log.summary}</div>
+                    <div class="log-meta">
+                        ${log.details && log.details.code ? `Code: ${log.details.code} · ` : ''}
+                        ${log.details && log.details.pid ? `PID: ${log.details.pid} · ` : ''}
+                        ${log.details && log.details.process_name ? `进程: ${log.details.process_name} · ` : ''}
+                        ${log.details && log.details.score ? `评分: ${log.details.score} · ` : ''}
+                        ${log.details && log.details.classification ? `分类: ${log.details.classification}` : ''}
+                    </div>
+                    <div class="log-actions" style="margin-top:8px;">
+                        <a href="/device/{{ device.device_name }}/edr/${log.id}" class="btn btn-primary">查看行为链</a>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        document.getElementById('keywordFilter').addEventListener('keydown', e => {
+            if (e.key === 'Enter') loadEdr();
+        });
+
+        loadEdr();
+        setInterval(loadEdr, 10000);
+    </script>
+</body>
+</html>

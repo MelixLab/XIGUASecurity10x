@@ -1,0 +1,101 @@
+你看当前它的 ini 配置里面是不是启用了追踪啊？我严重怀疑他是用了那个 Sandbox IE 官方的 enable to T R A C E 的追踪功能。但是我没证据。
+17:11
+好思路！Sandboxie 的 Trace 功能可以记录沙箱内所有文件、注册表、IPC、网络操作。让我看看引擎写了哪些 ini 配置——之前反编译里看到它操作 Sandboxie.ini 和 C:\Windows\Sandboxie.ini。
+
+让我先检查你系统上当前的 Sandboxie.ini 配置。
+
+已执行 1 条命令
+手动终止输出
+我问你，它是不是有方案？我要用它的方案，但是我不确定它当前用的是不是方案。是不是这套房？
+17:11
+对，就是这套方案。证据确凿：
+
+看 [hsxa1e75026] 这个沙箱配置，跟 AUTOSandBox 完全不同——这才是引擎实际使用的沙箱：
+
+配置项	值	作用
+InjectDll64	hsx_timewarp.dll	注入自定义 DLL 到沙箱内进程
+OpenFilePath	hsx_timewarp.dll	允许沙箱内进程读取这个 DLL
+NormalFilePath	hsx_lab_drop\*	沙箱内文件释放目录
+ClosedFilePath	InternetAccessDevices	阻断网络
+FakeAdminRights	y	伪造管理员权限
+DropAdminRights	y	降低实际权限
+核心是 InjectDll64=hsx_timewarp.dll——这不是 Sandboxie 的 Trace 功能，而是更强大的方案：
+
+引擎通过 Sandboxie 的 InjectDll64 机制，把一个自研的 hsx_timewarp.dll 注入到沙箱内的目标进程中。这个 DLL 在进程内部 hook API 调用（文件读写、注册表操作、网络连接等），直接从进程内部收集行为数据，比外部文件系统快照精确得多。
+
+而你的 AUTOSandBox 配置确实用了 Trace（FileTrace=wcd、KeyTrace=wcd），但 Trace 只是写日志文件，不是结构化行为收集。
+
+你要用它的方案，需要做两件事：
+
+写一个类似 hsx_timewarp.dll 的行为监控 DLL
+在 AUTOSandBox 配置里加 InjectDll64=<你的DLL路径>
+你手上有这个 hsx_timewarp.dll 文件吗？如果有的话我可以用 Ghidra 逆向它的 hook 逻辑。
+
+你也没必要非得去逆向人家的 DLL 文件，你上网上自己搜文档，你自己写一个不就行了？
+17:13
+已搜索 20 个网页
+已取消压缩
+手动终止输出
+不是，人家原作者都说了，不是用 DLL 去注入进程的，所以肯定不是这么获取行为的。
+17:16
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+I now have the complete picture. Let me present my findings to the user.
+
+经过深入研究 Sandboxie 源码，我找到了答案：参考引擎使用的是 Sandboxie 内置的 Monitor API（内核驱动级监控），而不是 DLL 注入。
+
+核心发现如下：
+
+Sandboxie 内置 Monitor API
+Sandboxie 的内核驱动 SbieDrv.sys 已经通过 minifilter 回调、注册表回调等机制拦截了所有文件、注册表、IPC、管道、网络操作。这些操作被记录在驱动的内部日志缓冲区中，可以通过以下 API 读取：
+
+SbieApi_MonitorControl — 启用/禁用监控
+SbieApi_MonitorGetEx — 读取一条 trace 条目（包含类型、路径、PID、TID）
+Monitor 类型定义（来自 api_flags.h）
+
+Plain Text
+
+MONITOR_FILE    = 0x0A  // 文件操作
+MONITOR_KEY     = 0x0B  // 注册表操作  
+MONITOR_IPC     = 0x03  // IPC 通信
+MONITOR_PIPE    = 0x02  // 命名管道
+MONITOR_NETFW   = 0x0D  // 网络防火墙
+MONITOR_SCM     = 0x0E  // 服务控制管理器
+MONITOR_DNS     = 0x11  // DNS 查询
+MONITOR_RPC     = 0x10  // RPC 调用
+每条记录还包含操作结果标志（ALLOWED/DENIED/SUCCESS/FAILURE）。
+
+工作原理
+引擎调用 SbieApi_MonitorControl(TRUE) 启用监控
+在沙盒中运行恶意软件
+Sandboxie 内核驱动自动记录所有资源访问
+引擎循环调用 SbieApi_MonitorGetEx() 读取所有 trace 条目
+解析条目，映射为行为事件 → 判定 verdict
+hsx_timewarp.dll 的真正用途
+InjectDll64=hsx_timewarp.dll 不是用于行为收集，而是用于时间欺骗（hook GetSystemTime 等函数，让恶意软件误以为时间已过，从而触发时间相关的 payload）。
+
+当前代码的问题
+当前代码使用轮询方式（文件系统快照 diff + 进程树扫描 + 网络连接检查），这会遗漏大量行为。需要改为使用 Sandboxie Monitor API 实时读取内核级 trace 数据。
+
+要我现在开始实现这个方案吗？核心改动是替换 collect_behavior_events 函数，通过 DeviceIoControl 调用 SbieDrv 驱动的 Monitor API。

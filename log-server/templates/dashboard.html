@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XIGUASecurity - 日志管理后台</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header class="app-bar acrylic">
+        <div class="brand">
+            <div class="logo">X</div>
+            <span>XIGUASecurity 日志管理后台</span>
+        </div>
+        <div class="actions">
+            <a href="/threats" class="btn btn-secondary">威胁管理</a>
+            <a href="/logout" class="btn btn-secondary">退出登录</a>
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value">{{ stats.online_devices }}</div>
+                <div class="stat-label">在线设备</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{{ stats.total_devices }}</div>
+                <div class="stat-label">累计设备</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{{ stats.today_logs }}</div>
+                <div class="stat-label">今日日志</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{{ stats.total_logs }}</div>
+                <div class="stat-label">累计日志</div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2 class="card-title">设备列表</h2>
+            {% if devices %}
+            <table class="device-list">
+                <thead>
+                    <tr>
+                        <th>设备名</th>
+                        <th>状态</th>
+                        <th>首次上线</th>
+                        <th>最后活跃</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for device in devices %}
+                    <tr>
+                        <td>{{ device.device_name }}</td>
+                        <td>
+                            <span class="status">
+                                <span class="status-dot {% if device.is_online %}online{% else %}offline{% endif %}"></span>
+                                {% if device.is_online %}在线{% else %}离线{% endif %}
+                            </span>
+                        </td>
+                        <td>{{ device.created_at }}</td>
+                        <td>{{ device.last_seen }}</td>
+                        <td><a href="/device/{{ device.device_name }}">查看日志</a></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="empty-state">暂无设备上报日志</div>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>

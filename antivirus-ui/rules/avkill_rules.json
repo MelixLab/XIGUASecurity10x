@@ -1,0 +1,32 @@
+{
+  "rules": [
+    {
+      "name": "PUA:Win32/DefenderKiller",
+      "malware_type": "PUA",
+      "family": "AVKill",
+      "behavior_req": {
+        "ProcessManip": 2,
+        "UAC/Privilege": 1
+      },
+      "unique_strings": [
+        "MsMpEng.exe",
+        "TerminateProcess",
+        "WinDefend"
+      ],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "Trojan/AgentTesla",
+      "malware_type": "Trojan",
+      "family": "AgentTesla",
+      "behavior_req": {},
+      "unique_strings": [
+        "AgentTesla",
+        "agenttesla"
+      ],
+      "packer": null,
+      "compiler": null
+    }
+  ]
+}

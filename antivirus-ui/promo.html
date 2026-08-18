@@ -1,0 +1,1096 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>XIGUASecurity 10x - Promo</title>
+  <style>
+    /* ==================== Base & Theme (from styles.css) ==================== */
+    * { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; text-rendering: optimizeLegibility; margin: 0; padding: 0; box-sizing: border-box; }
+    @property --hero-glow { syntax: '<color>'; inherits: true; initial-value: rgba(96, 165, 250, 0.55); }
+    @property --hero-mid { syntax: '<color>'; inherits: true; initial-value: rgba(59, 130, 246, 0.22); }
+    @property --hero-edge { syntax: '<color>'; inherits: true; initial-value: rgba(59, 130, 246, 0.45); }
+    :root {
+      --acr-a: 1; --bg-primary: #f8fbff; --bg-secondary: #eef4fc; --bg-tertiary: #e8f0f8; --bg-sidebar: #f0f6fd;
+      --bg-card: rgba(255, 255, 255, 0.88); --bg-hover: rgba(0, 120, 212, 0.06); --bg-active: rgba(0, 120, 212, 0.1);
+      --text-primary: #1a1a1a; --text-secondary: #5a5a5a; --text-tertiary: #8a8a8a; --text-inverse: #ffffff;
+      --border-color: #d0e3f5; --border-light: #e8f0f8;
+      --accent-primary: #0078d4; --accent-secondary: #106ebe; --accent-light: rgba(0, 120, 212, 0.12);
+      --accent-lighter: rgba(0, 120, 212, 0.06); --accent-bg: rgba(239, 246, 255, 0.8);
+      --success: #107c10; --warning: #ffc107; --error: #d13438; --danger: #d13438; --info: #0078d4;
+      --shadow-sm: 0 1px 2px rgba(0, 120, 212, 0.06);
+      --shadow-md: 0 4px 6px -1px rgba(0, 120, 212, 0.1), 0 2px 4px -1px rgba(0, 120, 212, 0.06);
+      --shadow-lg: 0 10px 15px -3px rgba(0, 120, 212, 0.1), 0 4px 6px -2px rgba(0, 120, 212, 0.05);
+      --radius-sm: 6px; --radius-md: 8px; --radius-lg: 12px; --radius-xl: 16px;
+      --transition-fast: 0.15s ease; --transition-normal: 0.2s ease; --transition-slow: 0.3s ease;
+      --titlebar-height: 48px; --sidebar-width: 180px;
+    }
+    html, body { width: 100%; height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 14px; line-height: 1.5; color: var(--text-primary); overflow: hidden; user-select: none; }
+    .desktop { width: 100vw; height: 100vh; background: linear-gradient(135deg, #1a5f9e 0%, #5b9bd5 50%, #8ec5e9 100%); position: relative; display: flex; align-items: center; justify-content: center; }
+    .desktop::before { content: ''; position: absolute; inset: 0; background: radial-gradient(circle at 20% 80%, rgba(255,255,255,0.12) 0%, transparent 40%), radial-gradient(circle at 80% 20%, rgba(255,255,255,0.08) 0%, transparent 35%); pointer-events: none; }
+    .desktop-icon { position: absolute; top: 24px; left: 24px; display: flex; flex-direction: column; align-items: center; gap: 6px; color: white; font-size: 12px; text-shadow: 0 1px 2px rgba(0,0,0,0.3); transition: all 0.3s ease; }
+    .desktop-icon svg { width: 40px; height: 40px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.2)); }
+    .desktop-icon.encrypted { opacity: 0.5; transform: scale(0.95); }
+    .desktop-icon.encrypted .encrypt-overlay { display: flex; }
+    .encrypt-overlay { position: absolute; top: 0; left: 50%; transform: translateX(-50%); width: 34px; height: 34px; display: none; align-items: center; justify-content: center; border-radius: 6px; background: rgba(209, 52, 56, 0.9); color: white; font-size: 16px; font-weight: 700; }
+    .app-window { width: 1080px; height: 720px; background: var(--bg-primary); border-radius: 8px; box-shadow: 0 24px 60px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.12); display: flex; flex-direction: column; overflow: hidden; position: relative; z-index: 10; }
+    #app { width: 100%; height: 100%; display: flex; flex-direction: column; overflow: hidden; background: var(--bg-primary); }
+    .titlebar { height: var(--titlebar-height); background: var(--bg-secondary); border-bottom: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between; padding: 0 16px; z-index: 1000; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .titlebar-left { display: flex; align-items: center; gap: 10px; flex: 1; }
+    .titlebar-brand { display: flex; flex-direction: column; line-height: 1.2; }
+    .titlebar-icon { width: 22px; height: 22px; color: var(--accent-primary); display: flex; align-items: center; justify-content: center; }
+    .titlebar-icon img { width: 20px; height: 20px; object-fit: contain; }
+    .titlebar-text { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+    .titlebar-controls { display: flex; align-items: center; gap: 4px; position: relative; }
+    .titlebar-btn { width: 36px; height: 32px; display: flex; align-items: center; justify-content: center; border: none; background: transparent; color: var(--text-secondary); cursor: pointer; border-radius: var(--radius-sm); transition: all var(--transition-fast); }
+    .titlebar-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+    .titlebar-btn.close:hover { background: var(--error); color: white; }
+    .titlebar-btn svg { width: 16px; height: 16px; }
+    .titlebar-menu-container { position: relative; display: flex; align-items: center; gap: 6px; }
+    .titlebar-menu-dropdown { position: absolute; top: calc(100% + 4px); left: 50%; transform: translateX(-50%) scale(0.95); opacity: 0; visibility: hidden; pointer-events: none; transition: all 0.15s cubic-bezier(0.0, 0.0, 0.2, 1); background: var(--bg-card); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.12), 0 0 0 1px rgba(0,0,0,0.05); padding: 4px; min-width: 140px; z-index: 10001; }
+    .titlebar-menu-dropdown.open { opacity: 1; visibility: visible; pointer-events: auto; transform: translateX(-50%) scale(1); }
+    .menu-dropdown-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 4px; cursor: pointer; color: var(--text-primary); font-size: 14px; transition: background 0.1s ease; }
+    .menu-dropdown-item:hover { background: var(--bg-hover); }
+    .menu-dropdown-item svg { flex-shrink: 0; color: #5F5F5F; }
+    .main-container { flex: 1; display: flex; overflow: hidden; background: transparent; position: relative; z-index: 1; }
+    .sidebar { width: var(--sidebar-width); background: var(--bg-sidebar); border-right: 1px solid var(--border-color); display: flex; flex-direction: column; padding: 12px 10px; gap: 4px; box-shadow: 2px 0 8px rgba(0,0,0,0.06); z-index: 100; transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1), padding 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+    .sidebar-top { display: flex; flex-direction: column; gap: 4px; }
+    .sidebar-item { height: 40px; display: flex; align-items: center; gap: 12px; padding: 0 12px; border-radius: var(--radius-md); color: var(--text-secondary); cursor: pointer; transition: all var(--transition-fast); position: relative; font-size: 13px; font-weight: 500; }
+    .sidebar-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+    .sidebar-item.active { background: var(--accent-light); color: var(--accent-primary); }
+    .sidebar-item svg { width: 18px; height: 18px; }
+    .sidebar-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sidebar-bottom { margin-top: auto; display: flex; flex-direction: column; gap: 4px; }
+    .sidebar-badge { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: #d13438; color: #fff; font-size: 10px; font-weight: 600; min-width: 18px; height: 18px; line-height: 18px; padding: 0 5px; border-radius: 9px; text-align: center; pointer-events: none; }
+    .content { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: transparent; position: relative; z-index: 1; }
+    .scroll-container { flex: 1; overflow-y: auto; overflow-x: hidden; scroll-behavior: smooth; }
+    .page-section { min-height: 100%; padding: 24px; display: flex; flex-direction: column; box-sizing: border-box; width: 100%; max-width: 100%; }
+    .page-header { margin-bottom: 24px; }
+    .page-title { font-size: 24px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
+    .page-subtitle { font-size: 13px; color: var(--text-secondary); }
+    .card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: 20px; margin-bottom: 16px; transform: translateZ(0); backface-visibility: hidden; transition: all var(--transition-fast); backdrop-filter: blur(10px); }
+    .card:hover { box-shadow: var(--shadow-sm); }
+    .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+    .card-title { font-size: 16px; font-weight: 600; color: var(--text-primary); }
+    .home-grid { display: grid; grid-template-columns: 1.25fr 0.75fr; grid-template-rows: auto auto auto auto 1fr auto; gap: 16px; width: 100%; max-width: 1200px; margin: 0 auto; min-height: 100%; }
+    .home-grid > .hero-card { grid-column: 1 / 2; grid-row: 1 / 4; }
+    .home-grid > .realtime-panel { grid-column: 2 / 3; grid-row: 1 / 3; }
+    .home-grid > .feature-cards { grid-column: 2 / 3; grid-row: 3 / 5; }
+    .home-grid > .stats-row { grid-column: 1 / 2; grid-row: 4 / 5; }
+    .home-grid > .logs-panel { grid-column: 1 / 3; grid-row: 5 / 6; }
+    .home-grid > .bottom-status-bar { grid-column: 1 / 3; grid-row: 6 / 7; }
+    .hero-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: 28px; display: flex; align-items: center; justify-content: space-between; gap: 24px; box-shadow: var(--shadow-md); position: relative; z-index: 2; min-height: 280px; overflow: visible; isolation: isolate; --hero-glow: rgba(96, 165, 250, 0.55); --hero-mid: rgba(59, 130, 246, 0.22); --hero-edge: rgba(59, 130, 246, 0.45); }
+    .hero-card.status-safe { --hero-glow: rgba(96, 165, 250, 0.55); --hero-mid: rgba(59, 130, 246, 0.22); --hero-edge: rgba(59, 130, 246, 0.45); }
+    .hero-card.status-warning { --hero-glow: rgba(251, 146, 60, 0.55); --hero-mid: rgba(249, 115, 22, 0.22); --hero-edge: rgba(249, 115, 22, 0.45); }
+    .hero-card.status-danger { --hero-glow: rgba(248, 113, 113, 0.6); --hero-mid: rgba(239, 68, 68, 0.28); --hero-edge: rgba(239, 68, 68, 0.5); }
+    .hero-card.status-danger .hero-title { color: var(--error); }
+    .hero-bg { position: absolute; inset: 0; border-radius: inherit; overflow: hidden; pointer-events: none; z-index: 0; }
+    .hero-bg::before { content: ''; position: absolute; top: 0; right: 0; width: 100%; height: 100%; background: radial-gradient(circle at 85% 50%, var(--hero-glow) 0%, var(--hero-mid) 35%, transparent 65%), radial-gradient(circle at 100% 50%, var(--hero-edge) 0%, transparent 55%); opacity: 0.85; pointer-events: none; transition: --hero-glow 0.8s cubic-bezier(0.4, 0, 0.2, 1), --hero-mid 0.8s cubic-bezier(0.4, 0, 0.2, 1), --hero-edge 0.8s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.8s cubic-bezier(0.4, 0, 0.2, 1); }
+    .hero-content { flex: 1; display: flex; flex-direction: column; gap: 12px; z-index: 1; padding-top: 6px; }
+    .hero-title { font-size: 26px; font-weight: 700; color: var(--text-primary); margin: 0; line-height: 1.3; }
+    .hero-subtitle { font-size: 14px; color: var(--text-secondary); margin: 0; }
+    .hero-actions { margin-top: 16px; display: flex; flex-direction: column; gap: 12px; }
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 10px 20px; font-size: 13px; font-weight: 500; border-radius: var(--radius-md); border: 1px solid transparent; cursor: pointer; transition: all var(--transition-fast); }
+    .btn-primary { background: var(--accent-primary); color: white; }
+    .btn-primary:hover { background: var(--accent-secondary); }
+    .btn-secondary { background: var(--bg-tertiary); color: var(--text-primary); border-color: var(--border-color); }
+    .btn-secondary:hover { background: var(--bg-hover); }
+    .btn-danger { background: var(--error); color: white; }
+    .btn-danger:hover { background: #b91c1c; }
+    .btn.hero-scan-btn { align-self: flex-start; padding: 12px 24px; font-size: 14px; font-weight: 400; border-radius: var(--radius-md); background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-color); box-shadow: none; transition: background 0.2s ease, border-color 0.2s ease; }
+    .btn.hero-scan-btn:hover { background: var(--bg-hover); border-color: var(--border-color); box-shadow: none; }
+    .btn.hero-scan-btn .hero-scan-arrow { width: 14px; height: 14px; opacity: 0.55; transition: transform var(--transition-fast); }
+    .hero-scan-dropdown { position: relative; align-self: flex-start; }
+    .hero-scan-menu { position: absolute; top: calc(100% + 6px); left: 0; min-width: 160px; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-md); box-shadow: 0 8px 24px rgba(0,0,0,0.1); padding: 6px; display: none; flex-direction: column; gap: 2px; z-index: 100; overflow: hidden; }
+    .hero-scan-menu.open { display: flex; }
+    .hero-scan-option { padding: 8px 12px; font-size: 13px; color: var(--text-primary); border-radius: var(--radius-sm); cursor: pointer; transition: background 0.2s ease; }
+    .hero-scan-option:hover { background: var(--bg-secondary); }
+    .hero-meta { display: flex; align-items: center; gap: 16px; font-size: 12px; color: var(--text-tertiary); }
+    .hero-link { color: var(--accent-primary); text-decoration: none; font-weight: 500; }
+    .hero-link:hover { text-decoration: underline; }
+    .hero-shield-placeholder { width: 160px; height: 160px; flex-shrink: 0; z-index: 1; display: flex; align-items: center; justify-content: center; }
+    .realtime-panel { padding: 20px; margin-bottom: 0; }
+    .realtime-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+    .realtime-title { font-size: 15px; font-weight: 600; color: var(--text-primary); margin: 0; }
+    .realtime-badge { font-size: 11px; font-weight: 600; color: var(--success); background: rgba(16, 124, 16, 0.1); padding: 3px 8px; border-radius: 12px; }
+    .realtime-list { display: flex; flex-direction: column; gap: 14px; }
+    .realtime-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .realtime-info { min-width: 0; flex: 1; }
+    .realtime-name { font-size: 13px; font-weight: 500; color: var(--text-primary); margin-bottom: 2px; }
+    .realtime-desc { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .toggle { position: relative; width: 44px; height: 24px; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 12px; cursor: pointer; transition: all var(--transition-fast); box-sizing: border-box; }
+    .toggle.active { background: var(--accent-primary); border-color: transparent; }
+    .toggle-thumb { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; background: white; border-radius: 50%; transition: all var(--transition-fast); box-shadow: var(--shadow-sm); }
+    .toggle.active .toggle-thumb { transform: translateX(20px); }
+    .feature-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .feature-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: 16px; display: flex; align-items: center; gap: 12px; cursor: pointer; transition: all var(--transition-fast); }
+    .feature-card:hover { background: var(--bg-hover); border-color: var(--accent-primary); transform: translateY(-1px); box-shadow: var(--shadow-sm); }
+    .feature-icon { width: 40px; height: 40px; border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .feature-icon svg { width: 20px; height: 20px; }
+    .feature-icon-blue { background: rgba(0, 120, 212, 0.12); color: #0078d4; }
+    .feature-icon-green { background: rgba(16, 124, 16, 0.12); color: #107c10; }
+    .feature-icon-orange { background: rgba(234, 88, 12, 0.12); color: #ea580c; }
+    .feature-icon-purple { background: rgba(124, 58, 237, 0.12); color: #7c3aed; }
+    .feature-info { flex: 1; min-width: 0; }
+    .feature-title { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 2px; }
+    .feature-desc { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .feature-arrow { color: var(--text-tertiary); flex-shrink: 0; }
+    .feature-arrow svg { width: 16px; height: 16px; }
+    .stats-row { padding: 18px 24px; margin-bottom: 0; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    .stat-item { display: flex; flex-direction: column; gap: 4px; min-width: 80px; }
+    .stat-num { font-size: 22px; font-weight: 700; color: var(--text-primary); line-height: 1; }
+    .stat-label { font-size: 12px; color: var(--text-tertiary); }
+    .stat-protection { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+    .stat-protection-label { font-size: 13px; color: var(--text-secondary); }
+    .logs-panel { padding: 20px; margin-bottom: 0; display: flex; flex-direction: column; min-height: 200px; max-height: 320px; }
+    .logs-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .logs-title { font-size: 15px; font-weight: 600; color: var(--text-primary); margin: 0; }
+    .logs-view-all { font-size: 12px; color: var(--accent-primary); text-decoration: none; font-weight: 500; }
+    .logs-view-all:hover { text-decoration: underline; }
+    .logs-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+    .logs-list .log-entry { padding: 4px 0; font-size: 12px; color: var(--text-secondary); line-height: 1.5; border-bottom: none; background: transparent; }
+    .thin-scrollbar::-webkit-scrollbar { width: 4px; }
+    .thin-scrollbar::-webkit-scrollbar-track { background: transparent; }
+    .thin-scrollbar::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 2px; }
+    .bottom-status-bar { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-lg); font-size: 12px; color: var(--text-secondary); }
+    .bottom-status-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .bottom-status-divider { color: var(--border-color); }
+    .bottom-status-link { color: var(--accent-primary); text-decoration: none; font-weight: 500; }
+    .bottom-status-right { display: flex; align-items: center; gap: 8px; }
+    .engine-status-value { display: inline-flex; align-items: center; gap: 4px; color: var(--success); font-weight: 600; }
+    .engine-status-value svg { width: 14px; height: 14px; }
+    .action-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 20px; }
+    .action-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 16px; cursor: pointer; transform: translateZ(0); backface-visibility: hidden; transition: all var(--transition-fast); display: flex; align-items: center; gap: 12px; position: relative; backdrop-filter: blur(10px); }
+    .action-card:hover { background: var(--accent-lighter); border-color: var(--accent-primary); transform: translateY(-1px); }
+    .action-icon { width: 40px; height: 40px; background: var(--accent-light); border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; color: var(--accent-primary); flex-shrink: 0; }
+    .action-icon svg { width: 20px; height: 20px; }
+    .action-content { flex: 1; }
+    .action-title { font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 2px; }
+    .action-desc { font-size: 12px; color: var(--text-tertiary); }
+    .action-arrow { color: var(--text-tertiary); }
+    .scanning-page { flex: 1; display: flex; flex-direction: column; padding: 24px; overflow-y: auto; }
+    .scan-main-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: 24px; flex: 1; display: flex; flex-direction: column; }
+    .scan-card-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 20px; gap: 16px; }
+    .scan-card-header > div:first-child { flex: 1; min-width: 0; overflow: hidden; }
+    .scan-card-title { font-size: 20px; font-weight: 600; color: var(--text-primary); }
+    .scanning-file-path { font-size: 13px; color: var(--text-secondary); margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .scan-header-left { display: flex; align-items: center; gap: 14px; flex: 1; min-width: 0; }
+    .scan-anim-container { flex-shrink: 0; width: 48px; height: 48px; display: flex; align-items: center; justify-content: center; overflow: visible; }
+    .scan-anim-icon { width: 48px; height: 48px; }
+    .scan-progress-area { margin-bottom: 20px; }
+    .scan-progress-bar { height: 8px; background: var(--bg-tertiary); border-radius: 4px; overflow: hidden; margin-bottom: 8px; }
+    .scan-progress-bar .progress-fill { height: 100%; background: var(--accent-primary); border-radius: 4px; transition: width 0.3s ease; }
+    .scan-progress-bar.danger { background: rgba(209, 52, 56, 0.18); }
+    .scan-progress-bar.danger .progress-fill { background: var(--danger); }
+    .scan-progress-text { font-size: 14px; color: var(--text-secondary); }
+    .scan-threat-count { color: var(--danger); font-weight: 700; }
+    .scan-stats-row { display: flex; gap: 24px; padding: 16px 0; border-top: 1px solid var(--border-light); border-bottom: 1px solid var(--border-light); margin-bottom: 16px; align-items: center; }
+    .scan-stat { display: flex; align-items: baseline; gap: 8px; }
+    .scan-stat .stat-num { font-size: 18px; font-weight: 600; }
+    .stat-name { font-size: 13px; color: var(--text-secondary); }
+    .scan-logs-area { flex: 1; overflow-y: auto; }
+    .log-entry { padding: 4px 0; color: var(--text-secondary); border-bottom: 1px solid var(--border-light); font-size: 12px; }
+    .log-entry:last-child { border-bottom: none; }
+    .log-time { color: var(--text-tertiary); }
+    .log-level { font-weight: 600; }
+    .log-level.info { color: var(--info); }
+    .log-level.success { color: var(--success); }
+    .log-level.warning { color: var(--warning); }
+    .log-level.error { color: var(--error); }
+    .scan-simple-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; padding: 0 8px; }
+    .scan-simple-title { font-size: 24px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
+    .scan-simple-subtitle { font-size: 13px; color: var(--text-secondary); }
+    .scan-simple-list { display: flex; flex-direction: column; gap: 8px; padding: 0 8px; }
+    .scan-simple-item { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; transition: all 0.2s; }
+    .threat-category-badge { font-size: 11px; font-weight: 400; color: #fff; background: #EF5350; padding: 2px 8px; border-radius: 4px; flex-shrink: 0; white-space: nowrap; line-height: 1.4; }
+    .threat-name { font-size: 14px; font-weight: 500; color: var(--danger); flex-shrink: 0; }
+    .threat-path-simple { font-size: 13px; color: var(--text-secondary); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .scan-simple-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; padding: 60px 20px; margin-left: -20px; }
+    .btn-fluent-primary { padding: 6px 16px; border: none; background: #005FB8; border-radius: 4px; font-size: 14px; font-weight: 400; color: white; cursor: pointer; font-family: inherit; min-width: 80px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); transition: all 0.15s ease; }
+    .btn-fluent-primary:hover { background: #0066C7; }
+    .btn-fluent-secondary { padding: 6px 16px; border: 1px solid var(--border-color); background: var(--bg-card); border-radius: 4px; font-size: 14px; font-weight: 400; color: var(--text-primary); cursor: pointer; font-family: inherit; box-shadow: 0 1px 2px rgba(0,0,0,0.05); transition: all 0.15s ease; }
+    .btn-fluent-secondary:hover { background: var(--bg-hover); }
+    .settings-list { display: flex; flex-direction: column; gap: 8px; }
+    .setting-group { display: flex; flex-direction: column; gap: 8px; }
+    .setting-group-title { font-size: 13px; font-weight: 400; color: var(--text-secondary); padding: 16px 4px 8px 4px; margin: 0; }
+    .setting-group:first-child .setting-group-title { padding-top: 4px; }
+    .setting-item { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-md); }
+    .setting-info { display: flex; flex-direction: column; }
+    .setting-title { font-size: 14px; font-weight: 500; color: var(--text-primary); }
+    .setting-desc { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+    .notif-card { display: flex; gap: 12px; padding: 14px 16px; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; cursor: pointer; transition: all 0.2s ease; }
+    .notif-card:hover { background: var(--bg-hover); }
+    .edr-process-list { display: flex; flex-direction: column; gap: 6px; }
+    .edr-process-item { cursor: pointer; }
+    .edr-empty-state { text-align: center; padding: 40px; color: var(--text-secondary); }
+    .edr-timeline { display: flex; flex-direction: column; gap: 10px; }
+    .edr-timeline-item { display: flex; gap: 12px; align-items: flex-start; padding: 12px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-card); }
+    .edr-timeline-dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 4px; flex-shrink: 0; }
+    .edr-timeline-content { flex: 1; }
+    .edr-timeline-title { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 2px; }
+    .edr-timeline-desc { font-size: 12px; color: var(--text-secondary); }
+    .edr-timeline-time { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
+    .quarantine-item { padding: 15px 20px; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; }
+    .quarantine-item:last-child { border-bottom: none; }
+    .btn-sm { padding: 6px 12px; font-size: 12px; }
+    .page-stage { position: relative; flex: 1; overflow: hidden; }
+    .page-stage > .page-section { position: absolute; inset: 0; opacity: 0; transform: translateX(20px); transition: opacity 0.4s ease, transform 0.4s ease; pointer-events: none; overflow-y: auto; }
+    .page-stage > .page-section.active { opacity: 1; transform: translateX(0); pointer-events: auto; }
+    .overlay { position: fixed; inset: 0; z-index: 20000; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.25); opacity: 0; visibility: hidden; transition: opacity 0.25s ease, visibility 0.25s ease; }
+    .overlay.open { opacity: 1; visibility: visible; }
+    .popup-frame { position: fixed; bottom: 20px; right: 20px; z-index: 20000; border-radius: 8px; overflow: hidden; box-shadow: 0 12px 40px rgba(0,0,0,0.2), 0 0 0 1px rgba(0,0,0,0.06); transform: translateY(20px); opacity: 0; pointer-events: none; transition: opacity 0.25s ease, transform 0.25s ease; }
+    .popup-frame.show { transform: translateY(0); opacity: 1; pointer-events: auto; }
+    .popup-frame iframe { border: none; display: block; background: #ffffff; }
+    #edr-alert-frame iframe { width: 420px; height: 240px; }
+    #intercept-alert-frame iframe { width: 360px; height: 540px; }
+    .edr-alert-window { width: 420px; background: #ffffff; border-radius: 8px; box-shadow: 0 12px 40px rgba(0,0,0,0.2), 0 0 0 1px rgba(0,0,0,0.06); padding: 16px 20px; display: flex; flex-direction: column; justify-content: space-between; transform: scale(0.95); transition: transform 0.25s ease; }
+    .overlay.open .edr-alert-window { transform: scale(1); }
+    .edr-alert-close { align-self: flex-end; width: 24px; height: 24px; border: none; background: transparent; border-radius: 4px; cursor: pointer; display: flex; align-items: center; justify-content: center; color: #999; transition: background .15s, color .15s; }
+    .edr-alert-close:hover { background: #f0f0f0; color: #333; }
+    .edr-alert-header { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
+    .edr-alert-check { width: 36px; height: 36px; flex-shrink: 0; border-radius: 50%; background: #10b981; display: flex; align-items: center; justify-content: center; }
+    .edr-alert-check svg { width: 20px; height: 20px; stroke: white; stroke-width: 2.5; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+    .edr-alert-title { font-size: 15px; font-weight: 600; color: #1a1a1a; line-height: 1.3; }
+    .edr-alert-subtitle { font-size: 11px; color: #666; line-height: 1.4; margin-top: 1px; }
+    .edr-alert-body { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 4px; margin: 12px 0; }
+    .edr-detail-row { display: flex; align-items: baseline; gap: 6px; font-size: 12px; line-height: 1.6; }
+    .edr-detail-label { color: #888; white-space: nowrap; flex-shrink: 0; min-width: 52px; }
+    .edr-detail-value { color: #1a1a1a; overflow: hidden; text-overflow: ellipsis; white-space: normal; word-break: break-all; line-height: 1.4; max-height: 60px; }
+    .edr-threat-reason { font-size: 12px; color: #dc2626; font-weight: 500; margin-top: 4px; line-height: 1.4; }
+    .edr-alert-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+    .edr-alert-btn { padding: 6px 16px; border: none; border-radius: 4px; font-size: 12px; font-weight: 500; cursor: pointer; transition: all .15s; height: 30px; line-height: 18px; }
+    .edr-alert-btn.primary { background: #005fb8; color: white; }
+    .edr-alert-btn.secondary { background: #f0f0f0; color: #333; border: 1px solid #d0d0d0; }
+    .toast-stack { position: fixed; bottom: 24px; right: 24px; z-index: 30000; display: flex; flex-direction: column; gap: 10px; pointer-events: none; }
+    .toast { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px 16px; box-shadow: 0 8px 24px rgba(0,0,0,0.12); display: flex; align-items: center; gap: 10px; min-width: 240px; transform: translateX(120%); transition: transform 0.35s cubic-bezier(0.0, 0.0, 0.2, 1); pointer-events: auto; }
+    .toast.show { transform: translateX(0); }
+    .toast-icon { width: 22px; height: 22px; flex-shrink: 0; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+    .toast-icon.success { background: rgba(16, 185, 129, 0.12); color: #10b981; }
+    .toast-icon.error { background: rgba(209, 52, 56, 0.12); color: #d13438; }
+    .toast-icon.info { background: rgba(0, 120, 212, 0.12); color: #0078d4; }
+    .toast-icon svg { width: 14px; height: 14px; }
+    .toast-content { flex: 1; }
+    .toast-title { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 2px; }
+    .toast-message { font-size: 12px; color: var(--text-secondary); }
+    .ransom-popup { width: 420px; background: #ffffff; border-radius: 8px; box-shadow: 0 12px 40px rgba(0,0,0,0.2), 0 0 0 1px rgba(0,0,0,0.06); padding: 20px; }
+    .ransom-popup-header { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+    .ransom-popup-icon { width: 40px; height: 40px; border-radius: 50%; background: rgba(209, 52, 56, 0.1); color: var(--danger); display: flex; align-items: center; justify-content: center; }
+    .ransom-popup-title { font-size: 16px; font-weight: 600; color: #1a1a1a; }
+    .ransom-popup-subtitle { font-size: 12px; color: #666; }
+    .ransom-popup-body { font-size: 13px; color: #1a1a1a; line-height: 1.5; margin-bottom: 16px; }
+    .ransom-popup-actions { display: flex; gap: 8px; justify-content: flex-end; }
+    .taskbar { position: absolute; bottom: 0; left: 0; right: 0; height: 40px; background: rgba(230, 242, 255, 0.92); backdrop-filter: blur(12px); border-top: 1px solid rgba(255,255,255,0.4); display: flex; align-items: center; justify-content: space-between; padding: 0 16px; z-index: 5; }
+    .taskbar-left { display: flex; align-items: center; gap: 8px; }
+    .taskbar-icon { width: 28px; height: 28px; border-radius: 4px; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background 0.15s; }
+    .taskbar-icon:hover { background: rgba(255,255,255,0.5); }
+    .taskbar-icon.active { background: rgba(255,255,255,0.7); }
+    .taskbar-search { width: 160px; height: 28px; background: rgba(255,255,255,0.6); border-radius: 4px; border: 1px solid rgba(0,0,0,0.05); display: flex; align-items: center; padding: 0 8px; gap: 6px; font-size: 12px; color: #555; }
+    .taskbar-right { display: flex; align-items: center; gap: 12px; font-size: 12px; color: #333; }
+    @keyframes pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.02); opacity: 0.9; } }
+    .shield-pulse { animation: pulse 2s ease-in-out infinite; }
+    @keyframes scanTrail { 0% { transform: translateY(-6px); } 50% { transform: translateY(26px); } 100% { transform: translateY(-6px); } }
+    .scan-trail-up { animation: scanTrail 1.8s ease-in-out infinite; }
+    @keyframes scanBeam { 0% { transform: translateY(0); } 50% { transform: translateY(32px); } 100% { transform: translateY(0); } }
+    .scan-beam-anim { animation: scanBeam 1.8s ease-in-out infinite; }
+    @keyframes fadeInUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    .fade-in { animation: fadeInUp 0.4s ease forwards; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <div class="desktop" id="desktop">
+    <div class="desktop-icon" id="desktop-doc">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>
+      <span>重要文档.txt</span>
+      <div class="encrypt-overlay">!</div>
+    </div>
+
+    <div class="app-window" id="app-window">
+      <div id="app">
+        <div class="titlebar" data-tauri-drag-region>
+          <div class="titlebar-left">
+            <div class="titlebar-icon">
+              <img src="icons/icon.png" alt="XIGUA Security" style="width: 20px; height: 20px;">
+            </div>
+            <div class="titlebar-brand">
+              <span class="titlebar-text">XIGUASecurity</span>
+            </div>
+          </div>
+          <div class="titlebar-controls">
+            <button class="titlebar-btn" id="notification-btn" title="通知中心" style="position: relative;">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+              <span id="notification-badge" style="position: absolute; top: 2px; right: 2px; width: 8px; height: 8px; border-radius: 50%; background: #d13438; display: none;"></span>
+            </button>
+            <div class="titlebar-menu-container">
+              <button class="titlebar-btn" id="menu-btn" title="菜单">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+              </button>
+              <div class="titlebar-menu-dropdown" id="menu-dropdown">
+                <div class="menu-dropdown-item">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 16px; height: 16px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                  <span>云平台</span>
+                </div>
+                <div class="menu-dropdown-item">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 16px; height: 16px;"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+                  <span>引擎概览</span>
+                </div>
+              </div>
+            </div>
+            <button class="titlebar-btn" id="minimize-btn" title="最小化">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/></svg>
+            </button>
+            <button class="titlebar-btn close" id="close-btn" title="关闭">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="main-container">
+          <div class="sidebar" id="sidebar">
+            <div class="sidebar-top">
+              <div class="sidebar-item active" data-page="home" title="概览"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg><span class="sidebar-label">概览</span></div>
+              <div class="sidebar-item" data-page="scan" title="病毒扫描"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><span class="sidebar-label">病毒扫描</span></div>
+              <div class="sidebar-item" data-page="sandbox" title="沙箱"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" x2="12" y1="22.08" y2="12"/></svg><span class="sidebar-label">沙箱</span></div>
+              <div class="sidebar-item" data-page="notifications" title="通知中心"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg><span class="sidebar-label">通知中心</span><span class="sidebar-badge" id="sidebar-badge" style="display:none">0</span></div>
+              <div class="sidebar-item" data-page="toolbox" title="工具箱"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg><span class="sidebar-label">工具箱</span></div>
+            </div>
+            <div class="sidebar-bottom">
+              <div class="sidebar-item" data-page="settings" title="设置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg><span class="sidebar-label">设置</span></div>
+              <div class="sidebar-item sidebar-collapse-btn" title="收起侧边栏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg><span class="sidebar-label">收起侧边栏</span></div>
+            </div>
+          </div>
+
+          <div class="content">
+            <div class="page-stage" id="page-stage">
+              <!-- Home -->
+              <section class="page-section home-section active" id="page-home" data-page="home">
+                <div class="home-grid">
+                  <div class="hero-card status-safe" id="hero-card">
+                    <div class="hero-bg"></div>
+                    <div class="hero-content">
+                      <h2 class="hero-title" id="home-status-title">已保护您的计算机 1 天</h2>
+                      <p class="hero-subtitle" id="home-status-subtitle">系统处于安全状态</p>
+                      <div class="hero-actions">
+                        <div class="hero-scan-dropdown">
+                          <button class="btn btn-primary hero-scan-btn" id="hero-scan-trigger">
+                            <span class="hero-scan-label">快速扫描</span>
+                            <svg class="hero-scan-arrow" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>
+                          </button>
+                        </div>
+                        <div class="hero-meta">
+                          <span class="hero-last-scan">上次扫描：刚刚</span>
+                          <a href="#" class="hero-link">扫描记录</a>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="hero-shield-placeholder"></div>
+                  </div>
+
+                  <div class="realtime-panel card">
+                    <div class="realtime-header">
+                      <h3 class="realtime-title">实时防护</h3>
+                      <span class="realtime-badge">运行中</span>
+                    </div>
+                    <div class="realtime-list">
+                      <div class="realtime-item">
+                        <div class="realtime-info"><div class="realtime-name">驱动防护</div><div class="realtime-desc">由驱动防护提供的主动防御</div></div>
+                        <div class="toggle active"><div class="toggle-thumb"></div></div>
+                      </div>
+                      <div class="realtime-item">
+                        <div class="realtime-info"><div class="realtime-name">基础防护</div><div class="realtime-desc">R3级别进程监控</div></div>
+                        <div class="toggle active"><div class="toggle-thumb"></div></div>
+                      </div>
+                      <div class="realtime-item">
+                        <div class="realtime-info"><div class="realtime-name">文件防护</div><div class="realtime-desc">监控文件操作</div></div>
+                        <div class="toggle active"><div class="toggle-thumb"></div></div>
+                      </div>
+                      <div class="realtime-item">
+                        <div class="realtime-info"><div class="realtime-name">静默模式</div><div class="realtime-desc">开启后自动拦截威胁</div></div>
+                        <div class="toggle"><div class="toggle-thumb"></div></div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="feature-cards">
+                    <div class="feature-card" data-feature="scan">
+                      <div class="feature-icon feature-icon-blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="3"/></svg></div>
+                      <div class="feature-info"><div class="feature-title">病毒扫描</div><div class="feature-desc">全面扫描系统威胁</div></div>
+                      <div class="feature-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></div>
+                    </div>
+                    <div class="feature-card" data-feature="quarantine">
+                      <div class="feature-icon feature-icon-green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
+                      <div class="feature-info"><div class="feature-title">隔离区</div><div class="feature-desc">管理隔离的威胁文件</div></div>
+                      <div class="feature-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></div>
+                    </div>
+                    <div class="feature-card" data-feature="optimize">
+                      <div class="feature-icon feature-icon-orange"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20v2"/><path d="M12 2v2"/><path d="M17 20v2"/><path d="M17 2v2"/><path d="M2 12h2"/><path d="M2 17h2"/><path d="M2 7h2"/><path d="M20 12h2"/><path d="M20 17h2"/><path d="M20 7h2"/><path d="M7 20v2"/><path d="M7 2v2"/><rect x="4" y="4" width="16" height="16" rx="2"/></svg></div>
+                      <div class="feature-info"><div class="feature-title">系统优化</div><div class="feature-desc">优化系统性能和启动项</div></div>
+                      <div class="feature-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></div>
+                    </div>
+                    <div class="feature-card" data-feature="privacy">
+                      <div class="feature-icon feature-icon-purple"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg></div>
+                      <div class="feature-info"><div class="feature-title">隐私保护</div><div class="feature-desc">保护您的隐私安全</div></div>
+                      <div class="feature-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></div>
+                    </div>
+                  </div>
+
+                  <div class="stats-row card">
+                    <div class="stat-item"><span class="stat-num" id="stat-checked-count">12,847</span><span class="stat-label">已检查文件</span></div>
+                    <div class="stat-item"><span class="stat-num" id="stat-intercept-count">3</span><span class="stat-label">已拦截行为</span></div>
+                    <div class="stat-item"><span class="stat-num" id="stat-protected-days">1 天</span><span class="stat-label">保护时长</span></div>
+                    <div class="stat-protection"><span class="stat-protection-label">实时防护</span><div class="toggle active"><div class="toggle-thumb"></div></div></div>
+                  </div>
+
+                  <div class="logs-panel card">
+                    <div class="logs-header"><h3 class="logs-title">最近日志</h3><a href="#" class="logs-view-all">查看全部</a></div>
+                    <div class="logs-list thin-scrollbar" id="home-logs-list">
+                      <div class="log-entry">[2026-07-17 11:58:32] XIGUASecurity Start</div>
+                      <div class="log-entry">[2026-07-17 11:58:33] 驱动防护加载成功</div>
+                      <div class="log-entry">[2026-07-17 11:58:34] 基础防护已启动</div>
+                      <div class="log-entry">[2026-07-17 11:58:35] 文件防护已启动</div>
+                    </div>
+                  </div>
+
+                  <div class="bottom-status-bar">
+                    <div class="bottom-status-left">
+                      <span>病毒库版本 v2.4.1</span><span class="bottom-status-divider">|</span><span>上次更新 2026-07-17</span><a href="#" class="bottom-status-link">检查更新</a>
+                    </div>
+                    <div class="bottom-status-right">
+                      <span>引擎状态</span><span class="engine-status-value"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg> 正常</span>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <!-- Scan -->
+              <section class="page-section" id="page-scan" data-page="scan">
+                <div class="page-header"><div class="page-title">病毒扫描</div><div class="page-subtitle">选择扫描类型开始检查系统安全</div></div>
+                <div class="action-grid">
+                  <div class="action-card" id="start-quick-scan">
+                    <div class="action-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div>
+                    <div class="action-content"><div class="action-title">快速扫描</div><div class="action-desc">扫描关键系统区域，约需 1-2 分钟</div></div>
+                    <div class="action-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></div>
+                  </div>
+                  <div class="action-card">
+                    <div class="action-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
+                    <div class="action-content"><div class="action-title">全盘扫描</div><div class="action-desc">深度扫描所有文件，约需 15-30 分钟</div></div>
+                    <div class="action-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></div>
+                  </div>
+                  <div class="action-card">
+                    <div class="action-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg></div>
+                    <div class="action-content"><div class="action-title">自定义扫描</div><div class="action-desc">选择特定文件夹进行扫描</div></div>
+                    <div class="action-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></div>
+                  </div>
+                </div>
+                <div class="card" style="margin-top: 20px;">
+                  <div class="card-header"><span class="card-title">上次扫描</span></div>
+                  <div style="color: var(--text-secondary); font-size: 13px;">
+                    <div style="margin-bottom: 8px;"><span style="color: var(--success); font-weight: 500;">✓</span> 快速扫描完成 - 未发现威胁</div>
+                    <div style="color: var(--text-tertiary); font-size: 12px;">2026-07-17 11:58 | 1,247 files | 2s</div>
+                  </div>
+                </div>
+              </section>
+
+              <!-- Scanning -->
+              <section class="page-section" id="page-scanning" data-page="scanning">
+                <div class="scanning-page">
+                  <div class="scan-main-card">
+                    <div class="scan-card-header">
+                      <div class="scan-header-left">
+                        <div class="scan-anim-container">
+                          <svg class="scan-anim-icon" width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" overflow="visible">
+                            <defs><linearGradient id="trail-up" x1="0" y1="1" x2="0" y2="0"><stop offset="0%" stop-color="#0078d4" stop-opacity="0.35"/><stop offset="100%" stop-color="#0078d4" stop-opacity="0"/></linearGradient><linearGradient id="trail-down" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#0078d4" stop-opacity="0.35"/><stop offset="100%" stop-color="#0078d4" stop-opacity="0"/></linearGradient></defs>
+                            <rect x="10" y="6" width="28" height="36" rx="4" stroke="#0078d4" stroke-width="1.8" fill="rgba(0,120,212,0.12)" opacity="0.5"/>
+                            <path d="M28 6v8h8" stroke="#0078d4" stroke-width="1.5" fill="none" opacity="0.4"/>
+                            <rect x="16" y="18" width="16" height="2.5" rx="1" fill="#0078d4" opacity="0.3"/>
+                            <rect x="16" y="24" width="12" height="2.5" rx="1" fill="#0078d4" opacity="0.2"/>
+                            <rect x="16" y="30" width="14" height="2.5" rx="1" fill="#0078d4" opacity="0.25"/>
+                            <rect class="scan-trail-up" x="4" y="-6" width="40" height="12" rx="1.5" fill="url(#trail-up)" opacity="0.7"/>
+                            <rect class="scan-beam-anim" x="4" y="6" width="40" height="2.5" rx="1.25" fill="#0078d4" opacity="0.75"/>
+                          </svg>
+                        </div>
+                        <div>
+                          <div class="scan-card-title" id="scan-card-title">正在扫描</div>
+                          <div class="scanning-file-path" id="scan-current-file">C:\Windows\System32\kernel32.dll</div>
+                        </div>
+                      </div>
+                      <button class="btn-fluent-secondary" id="stop-scan-btn">停止</button>
+                    </div>
+                    <div class="scan-progress-area">
+                      <div class="scan-progress-bar" id="scan-progress-bar"><div class="progress-fill" id="scan-progress-fill" style="width: 0%"></div></div>
+                      <div class="scan-progress-text" id="scan-progress-text">0%</div>
+                    </div>
+                    <div class="scan-stats-row">
+                      <div class="scan-stat"><span class="stat-num" id="scan-threat-count" style="color: var(--danger);">0</span><span class="stat-name">威胁</span></div>
+                      <div class="scan-stat"><span class="stat-num" id="scan-scanned-count">0</span><span class="stat-name">已扫描</span></div>
+                      <div class="scan-stat"><span class="stat-num" id="scan-total-count">5,284</span><span class="stat-name">总文件</span></div>
+                      <div class="scan-stat"><span class="stat-num" id="scan-speed">0</span><span class="stat-name">速度</span></div>
+                      <div class="scan-stat"><span class="stat-num" id="scan-time">0s</span><span class="stat-name">用时</span></div>
+                    </div>
+                    <div class="scan-logs-area">
+                      <div class="log-entry"><span class="log-time">[11:58:35]</span><span class="log-level info"> | INFO |</span> 正在扫描系统文件...</div>
+                      <div class="log-entry"><span class="log-time">[11:58:36]</span><span class="log-level info"> | INFO |</span> 已扫描 0 个文件</div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <!-- Scan Results -->
+              <section class="page-section" id="page-scan-results" data-page="scan-results">
+                <div class="scanning-page">
+                  <div class="scan-simple-header">
+                    <div>
+                      <div class="scan-simple-title">病毒扫描</div>
+                      <div class="scan-simple-subtitle" id="scan-result-summary">发现 1 个病毒，扫描 1,247 个文件，耗时 5 秒</div>
+                    </div>
+                    <div style="display: flex; gap: 10px;">
+                      <button class="btn-fluent-primary">处理</button>
+                      <button class="btn-fluent-secondary">完成</button>
+                    </div>
+                  </div>
+                  <div class="scan-simple-list" id="scan-threat-list">
+                    <div class="scan-simple-item">
+                      <input type="checkbox" class="threat-checkbox" checked>
+                      <span class="threat-category-badge">木马</span>
+                      <span class="threat-name">Trojan.Dropper.TempLauncher</span>
+                      <span class="threat-path-simple">C:\Windows\Temp\rundll32.exe</span>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <!-- Sandbox -->
+              <section class="page-section" id="page-sandbox" data-page="sandbox">
+                <div class="page-header"><div class="page-title">沙箱</div><div class="page-subtitle">上传文件到云端沙箱进行深度行为分析</div></div>
+                <div class="sandbox-upload-area" style="background: var(--bg-card); border: 2px dashed var(--border-color); border-radius: 12px; padding: 40px 20px; text-align: center; cursor: pointer; transition: all 0.2s ease; margin-bottom: 20px;">
+                  <div style="margin-bottom: 12px; opacity: 0.5;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 48px; height: 48px; color: var(--text-tertiary);"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg></div>
+                  <div style="font-size: 14px; color: var(--text-secondary); margin-bottom: 4px;">点击选择文件或拖拽到此区域</div>
+                  <div style="font-size: 12px; color: var(--text-tertiary);">支持 exe、dll、doc、pdf 等常见文件格式</div>
+                </div>
+                <div class="card" style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; margin-bottom: 20px;">
+                  <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 22px; height: 22px; color: var(--accent-primary);"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg><div style="font-size: 16px; font-weight: 600; color: var(--text-primary);">分析进度</div></div>
+                  <div style="font-size: 13px; color: var(--text-secondary); margin-bottom: 12px;">等待上传文件...</div>
+                  <div class="scan-progress-bar"><div class="progress-fill" style="width: 0%"></div></div>
+                </div>
+              </section>
+
+              <!-- Notifications -->
+              <section class="page-section" id="page-notifications" data-page="notifications">
+                <div class="page-header" style="margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between;">
+                  <div><div class="page-title">通知中心</div><div class="page-subtitle" id="notif-subtitle">1 条未读</div></div>
+                  <div style="display: flex; gap: 8px;">
+                    <button class="btn-fluent-secondary" style="padding: 6px 14px; font-size: 12px;">全部已读</button>
+                    <button class="btn-fluent-secondary" style="padding: 6px 14px; font-size: 12px;">清空全部</button>
+                  </div>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 6px;" id="notifications-list">
+                  <div class="notif-card" data-type="threat">
+                    <div style="flex-shrink: 0; width: 36px; height: 36px; border-radius: 50%; background: rgba(209, 52, 56, 0.1); display: flex; align-items: center; justify-content: center;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#d13438" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></div>
+                    <div style="flex: 1; min-width: 0;">
+                      <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 2px;"><div style="font-size: 13px; font-weight: 600; color: var(--text-primary);">扫描检测到威胁</div><div style="width: 6px; height: 6px; border-radius: 50%; background: #0078d4; flex-shrink: 0;"></div></div>
+                      <div style="font-size: 12px; color: var(--text-secondary); line-height: 1.5;">发现 1 个威胁文件，建议立即处理</div>
+                      <div style="font-size: 11px; color: var(--text-tertiary); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">C:\Windows\Temp\rundll32.exe</div>
+                      <div style="font-size: 11px; color: var(--text-tertiary); margin-top: 4px;">2026-07-17 11:59 · 扫描检测</div>
+                    </div>
+                    <div style="flex-shrink: 0; display: flex; align-items: center; gap: 8px;"><button style="padding: 4px 10px; font-size: 11px; border-radius: 4px; border: 1px solid transparent; background: #0067C0; color: #fff; cursor: pointer;">隔离</button></div>
+                  </div>
+                  <div class="notif-card" data-type="intercept">
+                    <div style="flex-shrink: 0; width: 36px; height: 36px; border-radius: 50%; background: rgba(209, 52, 56, 0.1); display: flex; align-items: center; justify-content: center;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#d13438" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 9h6v6H9z"/><path d="M15 9l-6 6"/></svg></div>
+                    <div style="flex: 1; min-width: 0;">
+                      <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 2px;"><div style="font-size: 13px; font-weight: 600; color: var(--text-primary);">实时防护已拦截</div><div style="width: 6px; height: 6px; border-radius: 50%; background: #0078d4; flex-shrink: 0;"></div></div>
+                      <div style="font-size: 12px; color: var(--text-secondary); line-height: 1.5;">驱动防护已自动终止 rundll32.exe</div>
+                      <div style="font-size: 11px; color: var(--text-tertiary); margin-top: 4px;">2026-07-17 11:59 · 驱动防护</div>
+                    </div>
+                    <div style="flex-shrink: 0; display: flex; align-items: center; gap: 8px;"><button style="padding: 4px 10px; font-size: 11px; border-radius: 4px; border: 1px solid transparent; background: #0067C0; color: #fff; cursor: pointer;">完成</button></div>
+                  </div>
+                </div>
+              </section>
+
+              <!-- Quarantine -->
+              <section class="page-section" id="page-quarantine" data-page="quarantine">
+                <div class="page-header"><div class="page-title">隔离区</div><div class="page-subtitle">管理被隔离的威胁文件</div></div>
+                <div class="card" style="margin-bottom: 20px;">
+                  <div style="display: flex; justify-content: space-between; align-items: center; padding: 20px;">
+                    <div style="display: flex; gap: 30px;">
+                      <div style="text-align: center;"><div style="font-size: 32px; font-weight: 600; color: var(--danger);" id="quarantine-count">1</div><div style="font-size: 12px; color: var(--text-secondary); margin-top: 5px;">已隔离文件</div></div>
+                      <div style="text-align: center;"><div style="font-size: 32px; font-weight: 600; color: var(--text-primary);">1.2 MB</div><div style="font-size: 12px; color: var(--text-secondary); margin-top: 5px;">占用空间</div></div>
+                    </div>
+                    <button class="btn btn-secondary"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 5px;"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>刷新</button>
+                  </div>
+                </div>
+                <div class="card" id="quarantine-list-card">
+                  <div style="padding: 15px 20px; border-bottom: 1px solid var(--border-color); font-weight: 500;">隔离文件列表</div>
+                  <div style="max-height: 500px; overflow-y: auto;">
+                    <div class="quarantine-item">
+                      <div style="flex: 1; min-width: 0;">
+                        <div style="font-weight: 500; margin-bottom: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">rundll32.exe</div>
+                        <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">原始位置: C:\Windows\Temp\rundll32.exe</div>
+                        <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 3px;">威胁类型: <span style="color: var(--danger);">Trojan.Dropper.TempLauncher</span></div>
+                        <div style="font-size: 12px; color: var(--text-secondary);">隔离时间: 2026-07-17 11:59 | 大小: 1.2 MB</div>
+                      </div>
+                      <div style="display: flex; gap: 8px; margin-left: 15px;">
+                        <button class="btn btn-secondary btn-sm"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg></button>
+                        <button class="btn btn-danger btn-sm"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg></button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <!-- EDR -->
+              <section class="page-section" id="page-edr" data-page="edr">
+                <div class="page-header"><div class="page-title">程序监控</div><div class="page-subtitle">监控程序行为，拦截恶意进程</div></div>
+                <div class="settings-list">
+                  <div class="setting-group">
+                    <div class="setting-group-title" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 0; padding-top: 0;">
+                      <span>监控程序 (1)</span>
+                      <div style="position: relative; width: 240px;">
+                        <input type="text" placeholder="搜索进程名称或PID..." style="width: 100%; padding: 6px 10px 6px 32px; border: 1px solid var(--border-color); border-radius: 4px; font-size: 12px; background: var(--bg-secondary); color: var(--text-primary); outline: none; height: 32px; box-sizing: border-box;">
+                        <svg style="position: absolute; left: 8px; top: 50%; transform: translateY(-50%); width: 14px; height: 14px; color: var(--text-tertiary); pointer-events: none;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                      </div>
+                    </div>
+                    <div class="edr-process-list" id="edr-process-list">
+                      <div class="setting-item edr-process-item" data-pid="4820" style="background: rgba(211, 52, 56, 0.08);">
+                        <div class="setting-info">
+                          <div class="setting-title" style="display: flex; align-items: center; gap: 8px;">rundll32.exe<span style="padding: 2px 6px; border-radius: 3px; font-size: 10px; background: var(--danger); color: white;">Trojan.Dropper.TempLauncher</span></div>
+                          <div class="setting-desc">PID: 4820 | 事件: 12 个 | 网络: 3 | 文件: 7</div>
+                        </div>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-tertiary);"><path d="M9 18l6-6-6-6"/></svg>
+                      </div>
+                      <div class="setting-item edr-process-item" data-pid="1240">
+                        <div class="setting-info">
+                          <div class="setting-title" style="display: flex; align-items: center; gap: 8px;">svchost.exe<span style="padding: 2px 6px; border-radius: 3px; font-size: 10px; background: var(--success); color: white;">低风险</span></div>
+                          <div class="setting-desc">PID: 1240 | 事件: 2 个 | 网络: 0 | 文件: 1</div>
+                        </div>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-tertiary);"><path d="M9 18l6-6-6-6"/></svg>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <!-- EDR Detail -->
+              <section class="page-section" id="page-edr-detail" data-page="edr-detail">
+                <div style="display: flex; align-items: center; gap: 15px; padding: 24px 24px 16px; border-bottom: 1px solid var(--border-color); flex-shrink: 0;">
+                  <button class="btn btn-secondary" id="edr-back-btn" style="padding: 8px 12px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg></button>
+                  <div>
+                    <div style="display: flex; align-items: center; gap: 10px;"><span style="font-size: 20px; font-weight: 600;">rundll32.exe</span><span style="padding: 2px 10px; border-radius: 4px; font-size: 11px; background: var(--danger); color: white;">Trojan.Dropper.TempLauncher</span></div>
+                    <div style="font-size: 13px; color: var(--text-secondary);">PID: 4820 | 13 个事件</div>
+                  </div>
+                </div>
+                <div style="flex: 1; overflow-y: auto; padding: 20px 24px;">
+                  <div class="edr-timeline">
+                    <div class="edr-timeline-item"><div class="edr-timeline-dot" style="background: #0078D4;"></div><div class="edr-timeline-content"><div class="edr-timeline-title">创建网络连接</div><div class="edr-timeline-desc">svchost_fake.exe 尝试连接 185.220.101.32:443</div><div class="edr-timeline-time">11:58:42.115</div></div></div>
+                    <div class="edr-timeline-item"><div class="edr-timeline-dot" style="background: #D13438;"></div><div class="edr-timeline-content"><div class="edr-timeline-title">写入可疑文件</div><div class="edr-timeline-desc">C:\Windows\Temp\rundll32.exe</div><div class="edr-timeline-time">11:58:43.201</div></div></div>
+                    <div class="edr-timeline-item"><div class="edr-timeline-dot" style="background: #7C3AED;"></div><div class="edr-timeline-content"><div class="edr-timeline-title">创建子进程</div><div class="edr-timeline-desc">powershell.exe -enc UwB0AGEAcgB0AC0AUwBsAGUAZQBwAA==</div><div class="edr-timeline-time">11:58:44.512</div></div></div>
+                    <div class="edr-timeline-item"><div class="edr-timeline-dot" style="background: #CA8A04;"></div><div class="edr-timeline-content"><div class="edr-timeline-title">修改注册表启动项</div><div class="edr-timeline-desc">HKCU\Software\Microsoft\Windows\CurrentVersion\Run</div><div class="edr-timeline-time">11:58:45.003</div></div></div>
+                    <div class="edr-timeline-item"><div class="edr-timeline-dot" style="background: #D13438;"></div><div class="edr-timeline-content"><div class="edr-timeline-title">进程被驱动防护终止</div><div class="edr-timeline-desc">EDR_AUTO_KILL pid=4820</div><div class="edr-timeline-time">11:58:45.891</div></div></div>
+                  </div>
+                </div>
+              </section>
+
+              <!-- Toolbox -->
+              <section class="page-section" id="page-toolbox" data-page="toolbox">
+                <div class="page-header"><div class="page-title">工具箱</div><div class="page-subtitle">系统工具箱</div></div>
+                <div class="settings-list">
+                  <div class="setting-group">
+                    <div class="setting-group-title">系统工具</div>
+                    <div class="setting-item" style="cursor: pointer;">
+                      <div class="setting-info"><div class="setting-title">弹窗拦截</div><div class="setting-desc">拦截恶意弹窗和广告，保护您的浏览体验</div></div>
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-tertiary);"><path d="M9 18l6-6-6-6"/></svg>
+                    </div>
+                    <div class="setting-item" style="cursor: pointer;">
+                      <div class="setting-info"><div class="setting-title">垃圾清理</div><div class="setting-desc">清理系统垃圾文件，释放磁盘空间</div></div>
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-tertiary);"><path d="M9 18l6-6-6-6"/></svg>
+                    </div>
+                    <div class="setting-item" style="cursor: pointer;">
+                      <div class="setting-info"><div class="setting-title">EDR 历史报告</div><div class="setting-desc">查看驱动防护拦截的进程行为链报告</div></div>
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-tertiary);"><path d="M9 18l6-6-6-6"/></svg>
+                    </div>
+                    <div class="setting-item" style="cursor: pointer;">
+                      <div class="setting-info"><div class="setting-title">进程管理</div><div class="setting-desc">查看和管理系统进程，支持驱动强制终止</div></div>
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-tertiary);"><path d="M9 18l6-6-6-6"/></svg>
+                    </div>
+                    <div class="setting-item" style="cursor: pointer;">
+                      <div class="setting-info"><div class="setting-title">系统修复</div><div class="setting-desc">检测并修复被病毒篡改的系统设置</div></div>
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-tertiary);"><path d="M9 18l6-6-6-6"/></svg>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <!-- Settings -->
+              <section class="page-section" id="page-settings" data-page="settings">
+                <div class="page-header"><div class="page-title">设置</div><div class="page-subtitle">自定义应用程序设置</div></div>
+                <div class="settings-list">
+                  <div class="setting-group"><div class="setting-group-title">防护设置</div>
+                    <div class="setting-item"><div class="setting-info"><div class="setting-title">增强模式</div><div class="setting-desc">此选项可以增强扫描引擎</div></div><div class="toggle active"><div class="toggle-thumb"></div></div></div>
+                    <div class="setting-item"><div class="setting-info"><div class="setting-title">静默模式</div><div class="setting-desc">开启后驱动防护将自动拦截威胁</div></div><div class="toggle"><div class="toggle-thumb"></div></div></div>
+                    <div class="setting-item"><div class="setting-info"><div class="setting-title">勒索软件防护</div><div class="setting-desc">备份重要文件并监控异常批量修改</div></div><div class="toggle active"><div class="toggle-thumb"></div></div></div>
+                  </div>
+                  <div class="setting-group"><div class="setting-group-title">外观设置</div>
+                    <div class="setting-item"><div class="setting-info"><div class="setting-title">主题颜色</div><div class="setting-desc">选择界面主题颜色</div></div><div style="font-size: 13px; color: var(--text-secondary);">蓝色主题</div></div>
+                    <div class="setting-item"><div class="setting-info"><div class="setting-title">窗口材质</div><div class="setting-desc">选择 Windows 原生窗口背景效果</div></div><div style="font-size: 13px; color: var(--text-secondary);">关闭</div></div>
+                  </div>
+                </div>
+              </section>
+
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="taskbar">
+      <div class="taskbar-left">
+        <div class="taskbar-icon active">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#0078d4" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 18px; height: 18px;"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        </div>
+        <div class="taskbar-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#333" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 18px; height: 18px;"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M7 7h10"/><path d="M7 12h10"/><path d="M7 17h10"/></svg>
+        </div>
+        <div class="taskbar-search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#666" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 14px; height: 14px;"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+          <span>搜索</span>
+        </div>
+      </div>
+      <div class="taskbar-right">
+        <span id="taskbar-time">12:00</span>
+        <span id="taskbar-date">2026-07-17</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- EDR Alert Overlay -->
+  <div class="overlay edr-overlay" id="edr-alert-overlay">
+    <div class="edr-alert-window">
+      <button class="edr-alert-close" id="edr-alert-close">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width: 14px; height: 14px;"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+      </button>
+      <div class="edr-alert-header">
+        <div class="edr-alert-check">
+          <svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
+        </div>
+        <div>
+          <div class="edr-alert-title">安全解除威胁</div>
+          <div class="edr-alert-subtitle">我们已将进程强制结束</div>
+        </div>
+      </div>
+      <div class="edr-alert-body">
+        <div class="edr-detail-row"><span class="edr-detail-label">进程</span><span class="edr-detail-value" id="edr-alert-process">rundll32.exe</span></div>
+        <div class="edr-detail-row"><span class="edr-detail-label">路径</span><span class="edr-detail-value" id="edr-alert-path">C:\Windows\Temp\rundll32.exe</span></div>
+        <div class="edr-threat-reason">感染了 Trojan.Dropper.TempLauncher</div>
+        <div class="edr-detail-row" style="margin-top:6px"><span class="edr-detail-label">威胁说明</span><span class="edr-detail-value">该进程属于木马程序，可能会窃取信息、下载载荷或控制设备。</span></div>
+      </div>
+      <div class="edr-alert-actions">
+        <button class="edr-alert-btn secondary">扫描电脑</button>
+        <button class="edr-alert-btn primary">查看行为链</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Ransomware Alert Overlay -->
+  <div class="overlay" id="ransom-alert-overlay">
+    <div class="ransom-popup">
+      <div class="ransom-popup-header">
+        <div class="ransom-popup-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 22px; height: 22px;"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        </div>
+        <div>
+          <div class="ransom-popup-title">实时防护拦截</div>
+          <div class="ransom-popup-subtitle">检测到可疑操作，等待您的决策</div>
+        </div>
+      </div>
+      <div class="ransom-popup-body">
+        <div style="margin-bottom: 8px;"><strong>拦截类型：</strong>勒索软件拦截</div>
+        <div style="margin-bottom: 8px;"><strong>拦截进程：</strong>svchost_fake.exe</div>
+        <div style="margin-bottom: 8px;"><strong>拦截目标：</strong>C:\Users\User\Documents\重要文档.txt</div>
+        系统检测到“svchost_fake.exe”在短时间内批量修改了文档，勒索病毒防护已自动拦截该进程。
+      </div>
+      <div class="ransom-popup-actions">
+        <button class="btn-fluent-secondary">忽略</button>
+        <button class="btn-fluent-primary">拦截</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast stack -->
+  <div class="toast-stack" id="toast-stack"></div>
+
+  <script>
+    // Icons
+    const Icons = {
+      home: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>`,
+      search: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>`,
+      grid: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>`,
+      shield: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>`,
+      shieldCheck: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>`,
+      scan: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="3"/></svg>`,
+      cpu: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20v2"/><path d="M12 2v2"/><path d="M17 20v2"/><path d="M17 2v2"/><path d="M2 12h2"/><path d="M2 17h2"/><path d="M2 7h2"/><path d="M20 12h2"/><path d="M20 17h2"/><path d="M20 7h2"/><path d="M7 20v2"/><path d="M7 2v2"/><rect x="4" y="4" width="16" height="16" rx="2"/></svg>`,
+      eye: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>`,
+      zap: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>`,
+      folder: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>`,
+      arrowRight: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>`,
+      check: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>`,
+      bell: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>`,
+      box: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" x2="12" y1="22.08" y2="12"/></svg>`
+    };
+
+    // State
+    const state = {
+      currentPage: 'home',
+      isScanning: false,
+      scanProgress: 0,
+      scanThreats: 0,
+      scannedCount: 0,
+      scanSpeed: 0,
+      scanTime: 0,
+      scanTimer: null,
+      notificationCount: 0,
+      loopTimer: null
+    };
+
+    const pages = ['home', 'scan', 'sandbox', 'notifications', 'quarantine', 'edr', 'toolbox', 'settings'];
+    const sidebarMap = { home: 'home', scanning: 'scan', scan: 'scan', 'scan-results': 'scan', sandbox: 'sandbox', notifications: 'notifications', quarantine: 'quarantine', edr: 'edr', 'edr-detail': 'edr', toolbox: 'toolbox', settings: 'settings' };
+
+    function switchPage(pageId) {
+      document.querySelectorAll('.page-section').forEach(el => el.classList.remove('active'));
+      const target = document.getElementById('page-' + pageId);
+      if (target) target.classList.add('active');
+      document.querySelectorAll('.sidebar-item').forEach(el => el.classList.remove('active'));
+      const sb = sidebarMap[pageId];
+      const sidebarItem = document.querySelector('.sidebar-item[data-page="' + sb + '"]');
+      if (sidebarItem) sidebarItem.classList.add('active');
+      state.currentPage = pageId;
+    }
+
+    function showToast(title, message, type = 'info') {
+      const stack = document.getElementById('toast-stack');
+      const toast = document.createElement('div');
+      toast.className = 'toast';
+      const iconSvg = type === 'success' ? Icons.check : type === 'error' ? Icons.shield : Icons.bell;
+      toast.innerHTML = `<div class="toast-icon ${type}">${iconSvg}</div><div class="toast-content"><div class="toast-title">${title}</div><div class="toast-message">${message}</div></div>`;
+      stack.appendChild(toast);
+      requestAnimationFrame(() => toast.classList.add('show'));
+      setTimeout(() => {
+        toast.classList.remove('show');
+        setTimeout(() => toast.remove(), 350);
+      }, 4000);
+    }
+
+    function showOverlay(id) {
+      document.getElementById(id).classList.add('open');
+    }
+    function hideOverlay(id) {
+      document.getElementById(id).classList.remove('open');
+    }
+
+    function updateSidebarBadge(count) {
+      const badge = document.getElementById('sidebar-badge');
+      const titlebarBadge = document.getElementById('notification-badge');
+      if (count > 0) { badge.textContent = count; badge.style.display = 'block'; titlebarBadge.style.display = 'block'; }
+      else { badge.style.display = 'none'; titlebarBadge.style.display = 'none'; }
+    }
+
+    function updateTaskbarTime() {
+      const now = new Date();
+      document.getElementById('taskbar-time').textContent = now.toTimeString().slice(0, 5);
+      document.getElementById('taskbar-date').textContent = now.toISOString().slice(0, 10);
+    }
+    setInterval(updateTaskbarTime, 1000);
+    updateTaskbarTime();
+
+    // Scan simulation
+    function startScanSimulation() {
+      switchPage('scanning');
+      state.isScanning = true;
+      state.scanProgress = 0;
+      state.scanThreats = 0;
+      state.scannedCount = 0;
+      state.scanTime = 0;
+      const totalFiles = 5284;
+      const fill = document.getElementById('scan-progress-fill');
+      const bar = document.getElementById('scan-progress-bar');
+      const text = document.getElementById('scan-progress-text');
+      const title = document.getElementById('scan-card-title');
+      const currentFile = document.getElementById('scan-current-file');
+      const threatCount = document.getElementById('scan-threat-count');
+      const scannedCount = document.getElementById('scan-scanned-count');
+      const speedEl = document.getElementById('scan-speed');
+      const timeEl = document.getElementById('scan-time');
+      const files = ['C:\\Windows\\System32\\kernel32.dll', 'C:\\Windows\\System32\\ntdll.dll', 'C:\\Windows\\System32\\user32.dll', 'C:\\Users\\User\\AppData\\Local\\Temp\\setup.exe', 'C:\\Windows\\Temp\\rundll32.exe'];
+      bar.classList.remove('danger');
+      title.innerHTML = '正在扫描';
+      const scanFiles = [];
+      for (let i = 0; i < 40; i++) scanFiles.push(files[i % files.length]);
+
+      if (state.scanTimer) clearInterval(state.scanTimer);
+      state.scanTimer = setInterval(() => {
+        state.scanTime++;
+        const speed = Math.floor(Math.random() * 80) + 120;
+        state.scanSpeed = speed;
+        state.scannedCount += speed;
+        state.scanProgress = Math.min(100, (state.scannedCount / totalFiles) * 100);
+        fill.style.width = state.scanProgress + '%';
+        text.textContent = Math.floor(state.scanProgress) + '%';
+        speedEl.textContent = speed + '/s';
+        timeEl.textContent = state.scanTime + 's';
+        scannedCount.textContent = state.scannedCount.toLocaleString();
+        currentFile.textContent = scanFiles[Math.floor(state.scanTime / 2) % scanFiles.length];
+
+        if (state.scanProgress >= 85 && state.scanThreats === 0) {
+          state.scanThreats = 1;
+          threatCount.textContent = '1';
+          bar.classList.add('danger');
+          title.innerHTML = '检测到 <span class="scan-threat-count">1</span> 个威胁';
+        }
+
+        if (state.scanProgress >= 100) {
+          clearInterval(state.scanTimer);
+          state.scanTimer = null;
+          state.isScanning = false;
+          setTimeout(() => {
+            document.getElementById('scan-result-summary').textContent = `发现 1 个病毒，扫描 ${state.scannedCount.toLocaleString()} 个文件，耗时 ${state.scanTime} 秒`;
+            switchPage('scan-results');
+            showToast('扫描完成', '发现 1 个威胁，已自动隔离', 'error');
+            updateSidebarBadge(2);
+            scheduleNext();
+          }, 1200);
+        }
+      }, 100);
+    }
+
+    function setHeroDanger() {
+      const hero = document.getElementById('hero-card');
+      const title = document.getElementById('home-status-title');
+      const subtitle = document.getElementById('home-status-subtitle');
+      hero.classList.remove('status-safe');
+      hero.classList.add('status-danger');
+      title.textContent = '发现高风险';
+      title.style.color = 'var(--error)';
+      subtitle.textContent = '检测到 1 个威胁，建议立即处理';
+    }
+
+    function resetHeroSafe() {
+      const hero = document.getElementById('hero-card');
+      const title = document.getElementById('home-status-title');
+      const subtitle = document.getElementById('home-status-subtitle');
+      hero.classList.remove('status-danger');
+      hero.classList.add('status-safe');
+      title.style.color = '';
+      title.textContent = '已保护您的计算机 1 天';
+      subtitle.textContent = '系统处于安全状态';
+    }
+
+    // Timeline orchestration
+    const timeline = [
+      { t: 0,    action: 'init' },
+      { t: 2500,  action: 'startScan' },
+      { t: 9000,  action: 'showEdrAlert' },
+      { t: 13500, action: 'showInterceptToast' },
+      { t: 15500, action: 'goNotifications' },
+      { t: 21000, action: 'goQuarantine' },
+      { t: 26500, action: 'goEdr' },
+      { t: 32000, action: 'goEdrDetail' },
+      { t: 37000, action: 'ransomwareAttack' },
+      { t: 43000, action: 'showRansomPopup' },
+      { t: 49000, action: 'goHome' },
+      { t: 52000, action: 'outroToast' },
+      { t: 56000, action: 'loop' }
+    ];
+
+    let startTime = Date.now();
+    let timelineActive = true;
+
+    function runTimeline() {
+      startTime = Date.now();
+      function tick() {
+        if (!timelineActive) return;
+        const elapsed = Date.now() - startTime;
+        const events = timeline.filter(e => e.t <= elapsed && !e.done);
+        events.forEach(e => { e.done = true; executeEvent(e.action); });
+        if (elapsed < 65000) requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+    }
+
+    function scheduleNext() {
+      // Used after scan completes to keep timeline flowing naturally
+    }
+
+    function executeEvent(action) {
+      switch (action) {
+        case 'init':
+          switchPage('home');
+          break;
+        case 'startScan':
+          startScanSimulation();
+          break;
+        case 'showEdrAlert':
+          if (state.currentPage === 'scan-results') {
+            showOverlay('edr-alert-overlay');
+          }
+          break;
+        case 'showInterceptToast':
+          hideOverlay('edr-alert-overlay');
+          showToast('实时防护已拦截', '驱动防护已自动终止 rundll32.exe', 'error');
+          break;
+        case 'goNotifications':
+          switchPage('notifications');
+          document.getElementById('notif-subtitle').textContent = '2 条未读';
+          break;
+        case 'goQuarantine':
+          switchPage('quarantine');
+          setHeroDanger();
+          break;
+        case 'goEdr':
+          switchPage('edr');
+          break;
+        case 'goEdrDetail':
+          switchPage('edr-detail');
+          break;
+        case 'ransomwareAttack':
+          document.getElementById('desktop-doc').classList.add('encrypted');
+          break;
+        case 'showRansomPopup':
+          showOverlay('ransom-alert-overlay');
+          break;
+        case 'goHome':
+          hideOverlay('ransom-alert-overlay');
+          document.getElementById('desktop-doc').classList.remove('encrypted');
+          resetHeroSafe();
+          switchPage('home');
+          updateSidebarBadge(0);
+          break;
+        case 'outroToast':
+          showToast('系统安全', '所有威胁已处理，系统处于安全状态', 'success');
+          break;
+        case 'loop':
+          setTimeout(() => location.reload(), 2000);
+          break;
+      }
+    }
+
+    // Manual interactions (optional, page is auto-play but clickable)
+    document.querySelectorAll('.sidebar-item[data-page]').forEach(item => {
+      item.addEventListener('click', () => switchPage(item.dataset.page));
+    });
+    document.getElementById('start-quick-scan').addEventListener('click', startScanSimulation);
+    document.getElementById('hero-scan-trigger').addEventListener('click', startScanSimulation);
+    document.getElementById('edr-back-btn').addEventListener('click', () => switchPage('edr'));
+    document.querySelectorAll('.edr-process-item').forEach(item => {
+      item.addEventListener('click', () => switchPage('edr-detail'));
+    });
+    document.getElementById('menu-btn').addEventListener('click', () => {
+      document.getElementById('menu-dropdown').classList.toggle('open');
+    });
+    document.getElementById('edr-alert-close').addEventListener('click', () => hideOverlay('edr-alert-overlay'));
+
+    // Start auto-play on load
+    window.addEventListener('DOMContentLoaded', () => {
+      runTimeline();
+    });
+
+  </script>
+</body>
+</html>

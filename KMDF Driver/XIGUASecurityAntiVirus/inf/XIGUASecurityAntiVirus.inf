@@ -1,0 +1,97 @@
+;=============================================================================
+; AVDriver.inf - KMDF 杀毒驱动安装信息文件
+;
+; 目标系统: Windows 10 20H2 ~ Windows 11 24H2
+; KMDF 版本: 1.31
+;=============================================================================
+
+[Version]
+Signature       = "$WINDOWS NT$"
+Class           = "System"
+ClassGuid       = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider        = %ProviderName%
+DriverVer       = 06/01/2024,1.0.1.0
+
+[SourceDisksNames]
+1 = %DiskName%
+
+[SourceDisksFiles]
+XIGUASecurityAntiVirus.sys = 1,,
+
+[DestinationDirs]
+DefaultDestDir             = 12
+AVDriver.CopyFiles         = 12
+
+;=============================================================================
+; 制造商和硬件 ID
+;=============================================================================
+
+[Manufacturer]
+%ManufacturerName% = Standard, NTamd64
+
+[Standard.NTamd64]
+%DeviceDesc% = AVDriver_Install, Root\AVDriver
+
+;=============================================================================
+; DDInstall 安装节
+;=============================================================================
+
+[AVDriver_Install]
+CopyFiles = AVDriver.CopyFiles
+AddReg    = AVDriver.AddReg
+
+[AVDriver_Install.NTamd64]
+CopyFiles = AVDriver.CopyFiles
+AddReg    = AVDriver.AddReg
+
+[AVDriver.CopyFiles]
+XIGUASecurityAntiVirus.sys
+
+[AVDriver.AddReg]
+HKR, "Parameters", "DeviceName", REG_SZ, "\Device\AVDriver"
+
+;=============================================================================
+; DDInstall.Services 服务安装节
+;=============================================================================
+
+[AVDriver_Install.Services]
+AddService = AVDriver, 0x00000002, AVDriver.Service
+
+[AVDriver_Install.Services.NTamd64]
+AddService = AVDriver, 0x00000002, AVDriver.Service
+
+;=============================================================================
+; Service 安装节
+;=============================================================================
+
+[AVDriver.Service]
+DisplayName    = %ServiceName%
+ServiceType    = 1                 ; SERVICE_KERNEL_DRIVER
+StartType      = 3                 ; SERVICE_DEMAND_START
+ErrorControl   = 1                 ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %12%\XIGUASecurityAntiVirus.sys
+LoadOrderGroup = ExtendedBase
+
+;=============================================================================
+; WDF 特定配置
+;=============================================================================
+
+[AVDriver_Install.Wdf]
+KmdfService = AVDriver, AVDriver_Wdf
+
+[AVDriver_Install.Wdf.NTamd64]
+KmdfService = AVDriver, AVDriver_Wdf
+
+[AVDriver_Wdf]
+KmdfLibraryVersion = 1.31
+
+;=============================================================================
+; 字符串定义
+;=============================================================================
+
+[Strings]
+ProviderName      = "AVDriver Team"
+ManufacturerName  = "AVDriver"
+DeviceDesc        = "AVDriver AntiVirus Driver"
+ServiceName       = "AVDriver"
+DiskName          = "AVDriver Installation Disk"

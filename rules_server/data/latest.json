@@ -1,0 +1,22 @@
+{
+  "version": "1.01",
+  "updated_at": "2026-07-04 20:54:37",
+  "description": "系统文件白名单",
+  "files": {
+    "whitelist": {
+      "version": "1.01",
+      "url": "/api/rules/download/1.01/whitelist.json",
+      "hash": "5DDFBE96808CC1FCE139E9364267C1A168374FD2AFA206EBD809376A02D7CF59"
+    },
+    "blacklist": {
+      "version": "1.01",
+      "url": "/api/rules/download/1.01/blacklist.json",
+      "hash": "8D267569FA7D017713F3F2989804D7CED56BEABDAD10D4CE86047F2ABF7559A6"
+    },
+    "virus_families": {
+      "version": "1.01",
+      "url": "/api/rules/download/1.01/virus_families.json",
+      "hash": "68C4EF80D7C2E8C95EC412C6047D944682211E3185C7629C49E6FF5F802C1BF8"
+    }
+  }
+}

@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>弹窗提示</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: "Segoe UI Variable", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: #ffffff;
+            width: 320px;
+            height: 120px;
+            overflow: hidden;
+            border-radius: 8px;
+            user-select: none;
+        }
+        
+        .popup-prompt-container {
+            width: 320px;
+            height: 120px;
+            display: flex;
+            flex-direction: column;
+            background: #ffffff;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            border: 1px solid #e5e7eb;
+        }
+        
+        .content {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            padding: 12px 16px;
+            gap: 12px;
+        }
+        
+        .icon {
+            width: 36px;
+            height: 36px;
+            background: #fff3cd;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        
+        .icon svg {
+            width: 20px;
+            height: 20px;
+            color: #d97706;
+        }
+        
+        .info {
+            flex: 1;
+            min-width: 0;
+        }
+        
+        .title {
+            font-size: 13px;
+            font-weight: 600;
+            color: #1f2937;
+            margin-bottom: 3px;
+        }
+        
+        .subtitle {
+            font-size: 12px;
+            color: #6b7280;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .actions {
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            gap: 8px;
+            padding: 0 16px 12px;
+        }
+        
+        .btn {
+            padding: 5px 14px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            font-family: inherit;
+            border: 1px solid transparent;
+            transition: all 0.15s ease;
+        }
+        
+        .btn-ignore {
+            background: transparent;
+            border-color: #e5e7eb;
+            color: #4b5563;
+        }
+        
+        .btn-ignore:hover {
+            background: #f9fafb;
+        }
+        
+        .btn-purify {
+            background: #005FB8;
+            color: #ffffff;
+        }
+        
+        .btn-purify:hover {
+            background: #0066C7;
+        }
+    </style>
+</head>
+<body>
+    <div class="popup-prompt-container">
+        <div class="content">
+            <div class="icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                    <line x1="12" y1="9" x2="12" y2="13"/>
+                    <circle cx="12" cy="17" r="1" fill="currentColor" stroke="none"/>
+                </svg>
+            </div>
+            <div class="info">
+                <div class="title" id="title-text">疑似广告窗口</div>
+                <div class="subtitle" id="window-title">--</div>
+            </div>
+        </div>
+        <div class="actions">
+            <button class="btn btn-ignore" id="btn-ignore">忽略</button>
+            <button class="btn btn-purify" id="btn-purify">净化</button>
+        </div>
+    </div>
+    
+    <script>
+        const translations = {
+            'zh-CN': {
+                title: '疑似广告窗口',
+                ignore: '忽略',
+                purify: '净化'
+            },
+            'zh-TW': {
+                title: '疑似廣告視窗',
+                ignore: '忽略',
+                purify: '淨化'
+            },
+            'en-US': {
+                title: 'Suspicious Ad Popup',
+                ignore: 'Ignore',
+                purify: 'Purify'
+            }
+        };
+
+        const params = new URLSearchParams(window.location.search);
+        const currentLang = ['zh-CN', 'zh-TW', 'en-US'].includes(params.get('lang')) ? params.get('lang') : 'zh-CN';
+        const hwnd = parseInt(params.get('hwnd') || '0', 10);
+        const title = decodeURIComponent(params.get('title') || '');
+        const keyword = decodeURIComponent(params.get('keyword') || '');
+
+        function t(key) {
+            return translations[currentLang]?.[key] ?? translations['zh-CN']?.[key] ?? key;
+        }
+
+        document.getElementById('title-text').textContent = t('title');
+        document.getElementById('btn-ignore').textContent = t('ignore');
+        document.getElementById('btn-purify').textContent = t('purify');
+        document.getElementById('window-title').textContent = title || '--';
+
+        async function closeWindow() {
+            try {
+                if (window.__TAURI__ && window.__TAURI__.window) {
+                    await window.__TAURI__.window.getCurrentWindow().close();
+                }
+            } catch (e) {
+                console.error('[PopupPrompt] Failed to close window:', e);
+            }
+        }
+
+        async function getInvoke() {
+            if (window.__TAURI__ && window.__TAURI__.core) {
+                return window.__TAURI__.core.invoke;
+            }
+            const { invoke } = await import('https://cdn.jsdelivr.net/npm/@tauri-apps/api@2/core.js');
+            return invoke;
+        }
+
+        document.getElementById('btn-ignore').addEventListener('click', async () => {
+            try {
+                const invoke = await getInvoke();
+                await invoke('dismiss_popup_prompt', { hwnd });
+            } catch (e) {
+                console.error('[PopupPrompt] Failed to dismiss:', e);
+            }
+            await closeWindow();
+        });
+
+        document.getElementById('btn-purify').addEventListener('click', async () => {
+            try {
+                const invoke = await getInvoke();
+                await invoke('purify_popup', { hwnd, title, keyword });
+            } catch (e) {
+                console.error('[PopupPrompt] Failed to purify:', e);
+            }
+            await closeWindow();
+        });
+
+        // 2 分钟后自动忽略并关闭，给用户充足时间决策
+        setTimeout(async () => {
+            try {
+                const invoke = await getInvoke();
+                await invoke('dismiss_popup_prompt', { hwnd });
+            } catch (e) {
+                console.error('[PopupPrompt] Auto-dismiss failed:', e);
+            }
+            await closeWindow();
+        }, 120000);
+    </script>
+</body>
+</html>

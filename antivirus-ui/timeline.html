@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>防护时间线 - XIGUASecurity</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: var(--bg-primary, #f5f5f5);
+            color: var(--text-primary, #1a1a1a);
+            min-height: 100vh;
+            padding: 24px;
+        }
+
+        .timeline-header {
+            margin-bottom: 24px;
+        }
+
+        .timeline-header h1 {
+            font-size: 24px;
+            font-weight: 600;
+            color: var(--text-primary, #1a1a1a);
+            margin-bottom: 8px;
+        }
+
+        .timeline-header p {
+            font-size: 14px;
+            color: var(--text-secondary, #666);
+        }
+
+        .timeline-container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .timeline-item {
+            display: flex;
+            margin-bottom: 20px;
+            position: relative;
+        }
+
+        .timeline-item:last-child {
+            margin-bottom: 0;
+        }
+
+        /* 左侧时间轴 */
+        .timeline-left {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 60px;
+            flex-shrink: 0;
+        }
+
+        .timeline-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: var(--accent-primary, #2196F3);
+            border: 2px solid #fff;
+            box-shadow: 0 0 0 2px var(--accent-primary, #2196F3);
+            z-index: 2;
+        }
+
+        .timeline-dot.block {
+            background: #dc3545;
+            box-shadow: 0 0 0 2px #dc3545;
+        }
+
+        .timeline-dot.warning {
+            background: #ffc107;
+            box-shadow: 0 0 0 2px #ffc107;
+        }
+
+        .timeline-dot.success {
+            background: #28a745;
+            box-shadow: 0 0 0 2px #28a745;
+        }
+
+        .timeline-dot.info {
+            background: #17a2b8;
+            box-shadow: 0 0 0 2px #17a2b8;
+        }
+
+        .timeline-line {
+            width: 2px;
+            flex: 1;
+            background: var(--border-color, #e0e0e0);
+            margin-top: 8px;
+        }
+
+        .timeline-item:last-child .timeline-line {
+            display: none;
+        }
+
+        .timeline-time {
+            font-size: 12px;
+            color: var(--text-secondary, #666);
+            margin-top: 4px;
+            text-align: center;
+        }
+
+        /* 右侧内容卡片 */
+        .timeline-content {
+            flex: 1;
+            margin-left: 16px;
+        }
+
+        .timeline-card {
+            background: var(--bg-card, #fff);
+            border-radius: 8px;
+            padding: 16px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            border: 1px solid var(--border-color, #e0e0e0);
+        }
+
+        .timeline-card-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .timeline-icon {
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .timeline-icon svg {
+            width: 100%;
+            height: 100%;
+        }
+
+        .timeline-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary, #1a1a1a);
+            flex: 1;
+        }
+
+        .timeline-relative-time {
+            font-size: 12px;
+            color: var(--text-secondary, #666);
+        }
+
+        .timeline-description {
+            font-size: 13px;
+            color: var(--text-secondary, #666);
+            line-height: 1.5;
+            word-wrap: break-word;
+            word-break: break-all;
+        }
+
+        .timeline-meta {
+            display: flex;
+            gap: 12px;
+            margin-top: 8px;
+            font-size: 12px;
+            color: var(--text-tertiary, #999);
+        }
+
+        .timeline-meta-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        /* 空状态 */
+        .timeline-empty {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-secondary, #666);
+        }
+
+        .timeline-empty-icon {
+            width: 64px;
+            height: 64px;
+            margin: 0 auto 16px;
+            opacity: 0.5;
+        }
+
+        .timeline-empty h3 {
+            font-size: 16px;
+            font-weight: 500;
+            margin-bottom: 8px;
+        }
+
+        .timeline-empty p {
+            font-size: 14px;
+        }
+
+        /* 加载更多 */
+        .timeline-load-more {
+            text-align: center;
+            padding: 20px;
+        }
+
+        .timeline-load-more button {
+            padding: 8px 24px;
+            border: 1px solid var(--border-color, #e0e0e0);
+            background: var(--bg-card, #fff);
+            border-radius: 4px;
+            font-size: 14px;
+            color: var(--text-primary, #1a1a1a);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .timeline-load-more button:hover {
+            background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+        }
+
+        /* 筛选标签 */
+        .timeline-filters {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .timeline-filter {
+            padding: 6px 12px;
+            border: 1px solid var(--border-color, #e0e0e0);
+            background: var(--bg-card, #fff);
+            border-radius: 16px;
+            font-size: 13px;
+            color: var(--text-secondary, #666);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .timeline-filter.active {
+            background: var(--accent-primary, #2196F3);
+            color: #fff;
+            border-color: var(--accent-primary, #2196F3);
+        }
+
+        .timeline-filter:hover:not(.active) {
+            background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+        }
+
+        /* 日期分组 */
+        .timeline-date-group {
+            margin-bottom: 24px;
+        }
+
+        .timeline-date-group:last-child {
+            margin-bottom: 0;
+        }
+
+        .timeline-date-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border-color, #e0e0e0);
+        }
+
+        .timeline-date-label {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary, #1a1a1a);
+        }
+
+        .timeline-date-count {
+            font-size: 12px;
+            color: var(--text-secondary, #666);
+            background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+            padding: 2px 8px;
+            border-radius: 12px;
+        }
+
+        .timeline-date-events {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="timeline-header">
+        <h1>防护时间线</h1>
+        <p>查看所有安全防护事件的详细记录</p>
+    </div>
+
+    <div class="timeline-filters">
+        <button class="timeline-filter active" data-filter="all">全部</button>
+        <button class="timeline-filter" data-filter="block">拦截</button>
+        <button class="timeline-filter" data-filter="scan">扫描</button>
+        <button class="timeline-filter" data-filter="update">更新</button>
+        <button class="timeline-filter" data-filter="system">系统</button>
+    </div>
+
+    <div class="timeline-container" id="timeline-container">
+        <!-- 时间线内容将通过 JavaScript 动态生成 -->
+        <div class="timeline-empty">
+            <svg class="timeline-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <circle cx="12" cy="12" r="10"/>
+                <path d="M12 6v6l4 2"/>
+            </svg>
+            <h3>暂无记录</h3>
+            <p>防护事件将在这里显示</p>
+        </div>
+    </div>
+
+    <script>
+        (function() {
+
+// 图标 SVG
+const Icons = {
+  block: '<svg viewBox="0 0 24 24" fill="none" stroke="#dc3545" stroke-width="2" shape-rendering="geometricPrecision"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></svg>',
+  warning: '<svg viewBox="0 0 24 24" fill="none" stroke="#ffc107" stroke-width="2" shape-rendering="geometricPrecision"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><circle cx="12" cy="17" r="1" fill="#ffc107" stroke="none"/></svg>',
+  scan: '<svg viewBox="0 0 24 24" fill="none" stroke="#2196F3" stroke-width="2" shape-rendering="geometricPrecision"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>',
+  update: '<svg viewBox="0 0 24 24" fill="none" stroke="#28a745" stroke-width="2" shape-rendering="geometricPrecision"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21h5v-5"/></svg>',
+  system: '<svg viewBox="0 0 24 24" fill="none" stroke="#17a2b8" stroke-width="2" shape-rendering="geometricPrecision"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>',
+  info: '<svg viewBox="0 0 24 24" fill="none" stroke="#6c757d" stroke-width="2" shape-rendering="geometricPrecision"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><circle cx="12" cy="8" r="1" fill="#6c757d" stroke="none"/></svg>',
+};
+
+// 时间线管理器
+class TimelineManager {
+  constructor() {
+    this.events = [];
+    this.currentFilter = 'all';
+    this.container = document.getElementById('timeline-container');
+    this.init();
+  }
+
+  async init() {
+    this.setupFilters();
+    await this.loadEvents();
+    this.render();
+    setInterval(() => this.refresh(), 5000);
+  }
+
+  setupFilters() {
+    const filters = document.querySelectorAll('.timeline-filter');
+    const self = this;
+    filters.forEach(filter => {
+      filter.addEventListener('click', function(e) {
+        const filterType = this.dataset.filter || 'all';
+        filters.forEach(f => f.classList.remove('active'));
+        this.classList.add('active');
+        self.currentFilter = filterType;
+        self.render();
+      });
+    });
+  }
+
+  async loadEvents() {
+    try {
+      const events = await window.__TAURI__.core.invoke('get_timeline_events');
+      this.events = events;
+      console.log('[Timeline] Loaded', events.length, 'events from backend');
+    } catch (e) {
+      console.error('Failed to load timeline events:', e);
+      this.events = [];
+    }
+  }
+
+  getFilteredEvents() {
+    if (this.currentFilter === 'all') return this.events;
+    return this.events.filter(e => e.event_type === this.currentFilter);
+  }
+
+  groupEventsByDate(events) {
+    const grouped = {};
+    events.forEach(event => {
+      const date = new Date(event.timestamp);
+      const dateKey = date.toLocaleDateString('zh-CN', {
+        year: 'numeric', month: 'long', day: 'numeric', weekday: 'long'
+      });
+      if (!grouped[dateKey]) grouped[dateKey] = [];
+      grouped[dateKey].push(event);
+    });
+    return grouped;
+  }
+
+  formatRelativeTime(timestamp) {
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diff = now.getTime() - date.getTime();
+    const minutes = Math.floor(diff / 60000);
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+    if (minutes < 1) return '刚刚';
+    if (minutes < 60) return minutes + ' 分钟前';
+    if (hours < 24) return hours + ' 小时前';
+    if (days < 30) return days + ' 天前';
+    return date.toLocaleDateString('zh-CN');
+  }
+
+  formatTime(timestamp) {
+    const date = new Date(timestamp);
+    return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  }
+
+  render() {
+    if (!this.container) return;
+    const filtered = this.getFilteredEvents();
+    if (filtered.length === 0) {
+      this.container.innerHTML = '<div class="timeline-empty"><svg class="timeline-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg><h3>暂无记录</h3><p>防护事件将在这里显示</p></div>';
+      return;
+    }
+    const grouped = this.groupEventsByDate(filtered);
+    let html = '';
+    for (const date in grouped) {
+      html += this.renderDateGroup(date, grouped[date]);
+    }
+    this.container.innerHTML = html;
+  }
+
+  renderDateGroup(date, events) {
+    const self = this;
+    const eventsHtml = events.map(function(event, index) {
+      return self.renderEvent(event, index, events.length);
+    }).join('');
+    return '<div class="timeline-date-group"><div class="timeline-date-header"><span class="timeline-date-label">' + date + '</span><span class="timeline-date-count">' + events.length + ' 个事件</span></div><div class="timeline-date-events">' + eventsHtml + '</div></div>';
+  }
+
+  renderEvent(event, index, totalInGroup) {
+    const icon = Icons[event.event_type] || Icons.info;
+    const relativeTime = this.formatRelativeTime(event.timestamp);
+    const time = this.formatTime(event.timestamp);
+    const isLastInGroup = index === totalInGroup - 1;
+    return '<div class="timeline-item" data-id="' + event.id + '"><div class="timeline-left"><div class="timeline-dot ' + event.event_type + '"></div>' + (isLastInGroup ? '' : '<div class="timeline-line"></div>') + '<div class="timeline-time">' + time + '</div></div><div class="timeline-content"><div class="timeline-card"><div class="timeline-card-header"><div class="timeline-icon">' + icon + '</div><div class="timeline-title">' + this.escapeHtml(event.title) + '</div><div class="timeline-relative-time">' + relativeTime + '</div></div><div class="timeline-description">' + this.escapeHtml(event.description) + '</div>' + this.renderMeta(event) + '</div></div></div>';
+  }
+
+  escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  renderMeta(event) {
+    const metaItems = [];
+    if (event.process_name) {
+      metaItems.push('<div class="timeline-meta-item"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>' + this.escapeHtml(event.process_name) + '</div>');
+    }
+    if (event.result) {
+      metaItems.push('<div class="timeline-meta-item"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>' + this.escapeHtml(event.result) + '</div>');
+    }
+    if (metaItems.length === 0) return '';
+    return '<div class="timeline-meta">' + metaItems.join('') + '</div>';
+  }
+
+  async refresh() {
+    await this.loadEvents();
+    this.render();
+  }
+}
+
+// 初始化
+new TimelineManager();
+
+        })();
+    </script>
+</body>
+</html>

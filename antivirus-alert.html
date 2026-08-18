@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>安全警告</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .alert-window {
+            width: 580px;
+            background: #fff;
+            border-radius: 4px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+            display: flex;
+        }
+
+        .left-bar {
+            width: 36px;
+            background: linear-gradient(180deg, #ff5a5a 0%, #ff4444 100%);
+            flex-shrink: 0;
+        }
+
+        .content-area {
+            flex: 1;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .header {
+            padding: 20px 24px 16px;
+            border-bottom: 1px solid #f0f0f0;
+        }
+
+        .header-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 8px;
+        }
+
+        .alert-title {
+            font-size: 18px;
+            color: #e74c3c;
+            font-weight: 500;
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .feedback-link {
+            font-size: 12px;
+            color: #999;
+            text-decoration: none;
+            cursor: pointer;
+        }
+
+        .feedback-link:hover {
+            color: #4a9eff;
+        }
+
+        .close-btn {
+            width: 16px;
+            height: 16px;
+            cursor: pointer;
+            position: relative;
+            opacity: 0.4;
+            transition: opacity 0.2s;
+        }
+
+        .close-btn:hover {
+            opacity: 0.7;
+        }
+
+        .close-btn::before,
+        .close-btn::after {
+            content: "";
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 14px;
+            height: 1.5px;
+            background: #666;
+            transform-origin: center;
+        }
+
+        .close-btn::before {
+            transform: translate(-50%, -50%) rotate(45deg);
+        }
+
+        .close-btn::after {
+            transform: translate(-50%, -50%) rotate(-45deg);
+        }
+
+        .main-content {
+            padding: 20px 24px;
+            flex: 1;
+        }
+
+        .detail-list {
+            margin-bottom: 16px;
+        }
+
+        .detail-item {
+            display: flex;
+            align-items: flex-start;
+            margin-bottom: 12px;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .detail-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .detail-label {
+            color: #333;
+            font-weight: 500;
+            width: 72px;
+            flex-shrink: 0;
+        }
+
+        .detail-value {
+            color: #e74c3c;
+            word-break: break-all;
+            flex: 1;
+            font-family: "Consolas", "Monaco", monospace;
+        }
+
+        .detail-value.normal {
+            color: #555;
+        }
+
+        .description-box {
+            background: #f8f9fa;
+            border-left: 3px solid #ddd;
+            padding: 14px 16px;
+            font-size: 12px;
+            color: #666;
+            line-height: 1.8;
+        }
+
+        .footer {
+            padding: 14px 24px;
+            background: #fafafa;
+            border-top: 1px solid #f0f0f0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .checkbox-wrapper {
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+        }
+
+        .checkbox-wrapper input[type="checkbox"] {
+            width: 14px;
+            height: 14px;
+            margin-right: 6px;
+            cursor: pointer;
+            accent-color: #4a9eff;
+        }
+
+        .checkbox-label {
+            font-size: 12px;
+            color: #666;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 12px;
+        }
+
+        .btn {
+            padding: 8px 24px;
+            border: none;
+            border-radius: 3px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-family: inherit;
+            min-width: 90px;
+        }
+
+        .btn-allow {
+            background: #fff;
+            color: #555;
+            border: 1px solid #d9d9d9;
+        }
+
+        .btn-allow:hover {
+            border-color: #4a9eff;
+            color: #4a9eff;
+        }
+
+        .btn-block {
+            background: #ff5a5a;
+            color: #fff;
+            border: 1px solid #ff5a5a;
+        }
+
+        .btn-block:hover {
+            background: #e54c4c;
+            border-color: #e54c4c;
+        }
+    </style>
+</head>
+<body>
+    <div class="alert-window">
+        <div class="left-bar"></div>
+        <div class="content-area">
+            <div class="header">
+                <div class="header-top">
+                    <div class="alert-title">有程序试图添加可疑计划任务，建议阻止</div>
+                    <div class="header-actions">
+                        <a class="feedback-link">误报反馈</a>
+                        <div class="close-btn"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="main-content">
+                <div class="detail-list">
+                    <div class="detail-item">
+                        <span class="detail-label">可疑程序</span>
+                        <span class="detail-value">C:\Users\Admin\Desktop\suspicious.exe</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">发起来源</span>
+                        <span class="detail-value normal">C:\Windows\System32\cmd.exe</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">拦截时间</span>
+                        <span class="detail-value normal">2025-07-23 14:32:18</span>
+                    </div>
+                </div>
+                
+                <div class="description-box">
+                    计划任务会被 Windows 系统定时启动，木马经常以此来自动运行。增加可疑计划任务可能会导致电脑感染木马。如果不是您主动修改，请阻止。
+                </div>
+            </div>
+            
+            <div class="footer">
+                <label class="checkbox-wrapper">
+                    <input type="checkbox">
+                    <span class="checkbox-label">不再提醒</span>
+                </label>
+                <div class="action-buttons">
+                    <button class="btn btn-allow">允许</button>
+                    <button class="btn btn-block">阻止</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

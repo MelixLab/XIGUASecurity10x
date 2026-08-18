@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XIGUASecurity - {{ device.device_name }} 行为时间线</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header class="app-bar acrylic">
+        <div class="brand">
+            <div class="logo">X</div>
+            <span>{{ device.device_name }} - 行为时间线</span>
+        </div>
+        <div class="actions">
+            <a href="/device/{{ device.device_name }}" class="btn btn-secondary">返回设备</a>
+            <a href="/device/{{ device.device_name }}/edr" class="btn btn-secondary">EDR 拦截</a>
+            <a href="/" class="btn btn-secondary">设备列表</a>
+            <a href="/logout" class="btn btn-secondary">退出登录</a>
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="card">
+            <h2 class="card-title">行为时间线</h2>
+            <div class="filter-bar">
+                <input type="search" id="keywordFilter" placeholder="搜索关键词" style="max-width: 320px;">
+                <button class="btn btn-primary" onclick="loadTimeline()">刷新</button>
+            </div>
+            <div id="timelineContainer" class="timeline-list">
+                <div class="empty-state">正在加载...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const deviceName = encodeURIComponent('{{ device.device_name }}');
+
+        async function loadTimeline() {
+            const keyword = document.getElementById('keywordFilter').value;
+            const url = new URL('/api/timeline', window.location.origin);
+            url.searchParams.set('device_name', '{{ device.device_name }}');
+            if (keyword) url.searchParams.set('keyword', keyword);
+
+            const res = await fetch(url);
+            const data = await res.json();
+            const container = document.getElementById('timelineContainer');
+            if (!data.logs || data.logs.length === 0) {
+                container.innerHTML = '<div class="empty-state">该设备暂无时间线事件</div>';
+                return;
+            }
+            container.innerHTML = data.logs.map(log => `
+                <div class="timeline-item">
+                    <div class="timeline-dot"></div>
+                    <div class="timeline-content">
+                        <div class="timeline-header">
+                            <span class="timeline-type">${log.function || 'event'}</span>
+                            <span class="timeline-time">${log.timestamp}</span>
+                        </div>
+                        <div class="timeline-title">${log.summary}</div>
+                        ${log.details && log.details.description ? `<div class="timeline-desc">${log.details.description}</div>` : ''}
+                        ${log.details && log.details.process_name ? `<div class="timeline-meta">进程: ${log.details.process_name}</div>` : ''}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        document.getElementById('keywordFilter').addEventListener('keydown', e => {
+            if (e.key === 'Enter') loadTimeline();
+        });
+
+        loadTimeline();
+        setInterval(loadTimeline, 10000);
+    </script>
+</body>
+</html>

@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>安全解除威胁</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: #ffffff;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        .alert-container {
+            width: 100%;
+            height: 100%;
+            padding: 16px 20px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            background: #ffffff;
+            border-radius: 8px;
+            overflow: hidden;
+            position: relative;
+        }
+        .close-btn {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            width: 24px;
+            height: 24px;
+            border: none;
+            background: transparent;
+            border-radius: 4px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #999;
+            transition: background .15s, color .15s;
+            -webkit-app-region: no-drag;
+            z-index: 20;
+        }
+        .close-btn:hover {
+            background: #f0f0f0;
+            color: #333;
+        }
+        .close-btn svg {
+            width: 14px;
+            height: 14px;
+        }
+        .drag-region {
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 32px;
+            -webkit-app-region: drag;
+            app-region: drag;
+            z-index: 10;
+        }
+
+        .alert-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-top: 4px;
+        }
+        .check-circle {
+            width: 36px;
+            height: 36px;
+            flex-shrink: 0;
+            border-radius: 50%;
+            background: #10b981;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .check-circle svg {
+            width: 20px;
+            height: 20px;
+            stroke: white;
+            stroke-width: 2.5;
+            fill: none;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+        .title-block {
+            flex: 1;
+            min-width: 0;
+        }
+        .alert-title {
+            font-size: 15px;
+            font-weight: 600;
+            color: #1a1a1a;
+            line-height: 1.3;
+        }
+        .alert-subtitle {
+            font-size: 11px;
+            color: #666;
+            line-height: 1.4;
+            margin-top: 1px;
+        }
+
+        .alert-body {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            gap: 4px;
+        }
+        .detail-row {
+            display: flex;
+            align-items: baseline;
+            gap: 6px;
+            font-size: 12px;
+            line-height: 1.6;
+        }
+        .detail-label {
+            color: #888;
+            white-space: nowrap;
+            flex-shrink: 0;
+            min-width: 40px;
+        }
+        .detail-value {
+            color: #1a1a1a;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: normal;
+            word-break: break-all;
+            line-height: 1.4;
+            max-height: 60px;
+        }
+        .threat-reason {
+            font-size: 12px;
+            color: #dc2626;
+            font-weight: 500;
+            margin-top: 4px;
+            line-height: 1.4;
+        }
+
+        .alert-actions {
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+            margin-top: 4px;
+        }
+        .btn {
+            padding: 6px 16px;
+            border: none;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all .15s;
+            height: 30px;
+            line-height: 18px;
+        }
+        .btn-primary {
+            background: #005fb8;
+            color: white;
+        }
+        .btn-primary:hover { background: #0066c7; }
+        .btn-secondary {
+            background: #f0f0f0;
+            color: #333;
+            border: 1px solid #d0d0d0;
+        }
+        .btn-secondary:hover { background: #e0e0e0; }
+    </style>
+</head>
+<body>
+    <div class="drag-region"></div>
+    <div class="alert-container">
+        <button class="close-btn" id="btn-close" title="关闭">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+        </button>
+
+        <div class="alert-header">
+            <div class="check-circle">
+                <svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
+            </div>
+            <div class="title-block">
+                <div class="alert-title" data-i18n="edrAlertTitle">安全解除威胁</div>
+                <div class="alert-subtitle" id="subtitle">我们已将进程强制结束</div>
+            </div>
+        </div>
+
+        <div class="alert-body">
+            <div class="detail-row">
+                <span class="detail-label" data-i18n="edrAlertProcess">进程</span>
+                <span class="detail-value" id="detail-process">--</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label" data-i18n="edrAlertPath">路径</span>
+                <span class="detail-value" id="detail-path">--</span>
+            </div>
+            <div class="threat-reason" id="threat-reason">感染了 Driver/EDR.Rule</div>
+            <div class="detail-row" style="margin-top: 6px;">
+                <span class="detail-label" data-i18n="edrAlertDescription">威胁说明</span>
+                <span class="detail-value" id="threat-description">--</span>
+            </div>
+        </div>
+
+        <div class="alert-actions">
+            <button class="btn btn-secondary" id="btn-scan" data-i18n="edrAlertScan">扫描电脑</button>
+            <button class="btn btn-primary" id="btn-chain" data-i18n="edrAlertViewChain">查看行为链</button>
+        </div>
+    </div>
+
+    <script>
+        const translations = {
+            'zh-CN': {
+                edrAlertTitle: '安全解除威胁',
+                edrAlertSubtitle: '我们已将 {process} 强制结束进程',
+                edrAlertProcess: '进程',
+                edrAlertPath: '路径',
+                edrAlertReason: '因为它感染了 {reason}',
+                edrAlertDescription: '威胁说明',
+                edrAlertScan: '扫描电脑',
+                edrAlertViewChain: '查看行为链',
+                unknownProcess: '未知进程'
+            },
+            'zh-TW': {
+                edrAlertTitle: '安全解除威脅',
+                edrAlertSubtitle: '我們已將 {process} 強制結束程序',
+                edrAlertProcess: '程序',
+                edrAlertPath: '路徑',
+                edrAlertReason: '因為它感染了 {reason}',
+                edrAlertDescription: '威脅說明',
+                edrAlertScan: '掃描電腦',
+                edrAlertViewChain: '查看行為鏈',
+                unknownProcess: '未知程序'
+            },
+            'en-US': {
+                edrAlertTitle: 'Threat Safely Removed',
+                edrAlertSubtitle: 'We have forcibly terminated {process}',
+                edrAlertProcess: 'Process',
+                edrAlertPath: 'Path',
+                edrAlertReason: 'Because it is infected with {reason}',
+                edrAlertDescription: 'Threat description',
+                edrAlertScan: 'Scan Computer',
+                edrAlertViewChain: 'View Behavior Chain',
+                unknownProcess: 'Unknown process'
+            }
+        };
+
+        const params = new URLSearchParams(window.location.search);
+        const currentLang = ['zh-CN', 'zh-TW', 'en-US'].includes(params.get('lang')) ? params.get('lang') : 'zh-CN';
+
+        function t(key, replacements) {
+            let text = translations[currentLang]?.[key] ?? translations['zh-CN']?.[key] ?? key;
+            if (replacements) {
+                Object.entries(replacements).forEach(([k, v]) => {
+                    text = text.replace(new RegExp('\\{' + k + '\\}', 'g'), String(v));
+                });
+            }
+            return text;
+        }
+
+        let edrData = null;
+
+        function getFamilyDescription(family) {
+            if (!family || family === 'Driver/EDR.Rule') {
+                return '该进程表现出可疑行为，已自动终止以保障系统安全。';
+            }
+            const f = family.toLowerCase();
+            if (f.includes('silverfox')) {
+                return 'SilverFox 加载器通常通过白加黑方式执行，会释放并运行额外载荷。';
+            }
+            if (f.includes('killav') || (f.includes('xiguasecurity') && f.includes('kill'))) {
+                return '此类软件会尝试终止安全服务进程，以绕过防护，十分危险。';
+            }
+            if (f.includes('hosts')) {
+                return '此类工具会修改系统 hosts 文件，可能用于劫持网络流量或绕过安全检测。';
+            }
+            if (f.includes('sideloader') || f.includes('sideload')) {
+                return '该进程存在 DLL 侧加载行为，常被用于绕过安全检测执行恶意代码。';
+            }
+            if (f.includes('dropper')) {
+                return '释放器类木马会下载或释放其他恶意程序到本地运行。';
+            }
+            if (f.includes('hollowing') || f.includes('processhollowing')) {
+                return '进程镂空会把恶意代码注入合法进程内存中执行，隐蔽性很高。';
+            }
+            if (f.includes('injector') || f.includes('reflectiveinjector')) {
+                return '该进程存在代码注入行为，常用于隐藏恶意载荷或提升权限。';
+            }
+            if (f.includes('powershell') || f.includes('bat.agent') || f.includes('python')) {
+                return '脚本类威胁常通过解释器执行命令，可能用于下载载荷或持久化。';
+            }
+            if (f.includes('ransom') || f.includes('filecrypt')) {
+                return '勒索软件会加密或破坏用户文件，建议立即隔离并排查。';
+            }
+            if (f.includes('backdoor') || f.includes('rat') || f.includes('remcos') || f.includes('asyncrat') || f.includes('nanocore') || f.includes('quasarrat') || f.includes('warzone') || f.includes('cobaltstrike') || f.includes('meterpreter') || f.includes('sliver')) {
+                return '远控/后门程序会接收外部指令，控制受感染设备并窃取数据。';
+            }
+            if (f.includes('rootkit')) {
+                return 'Rootkit 会深度隐藏自身，常用于持久化控制和对抗安全软件。';
+            }
+            if (f.includes('stealer') || f.includes('redline') || f.includes('amadey') || f.includes('agenttesla') || f.includes('formbook') || f.includes('lokibot')) {
+                return '窃密木马会窃取账号、密码、浏览器数据、加密货币钱包等敏感信息。';
+            }
+            if (f.includes('hacktool') || f.includes('mimikatz') || f.includes('rubeus') || f.includes('seatbelt') || f.includes('sharpview')) {
+                return '该工具具有攻击性或破坏性，可能被用于非法访问或控制系统。';
+            }
+            if (f.includes('trojan')) {
+                return '该进程属于木马程序，可能会窃取信息、下载载荷或控制设备。';
+            }
+            return '该进程表现出可疑行为，已自动终止以保障系统安全。';
+        }
+
+        function updateContent(data) {
+            edrData = data;
+            const process = data.process || t('unknownProcess');
+            const path = data.path || '--';
+            const reason = data.reason || 'Driver/EDR.Rule';
+            const description = data.description || getFamilyDescription(reason);
+
+            document.getElementById('detail-process').textContent = process;
+            document.getElementById('detail-path').textContent = path;
+            document.getElementById('subtitle').textContent = t('edrAlertSubtitle', { process });
+            document.getElementById('threat-reason').textContent = t('edrAlertReason', { reason });
+            document.getElementById('threat-description').textContent = description;
+        }
+
+        window.addEventListener('message', function(event) {
+            if (event.data && event.data.type === 'edr-data') {
+                updateContent(event.data);
+            }
+        });
+
+        // 注册 Tauri event listener（替代 eval/postMessage，避免后台线程 dispatch 主线程造成死锁）
+        if (window.__TAURI__ && window.__TAURI__.event) {
+            (async () => {
+                try {
+                    await window.__TAURI__.event.listen('edr-data', (event) => {
+                        updateContent(event.payload);
+                    });
+                    console.log('[EDRAlert] Tauri event listener registered');
+                } catch (e) {
+                    console.warn('[EDRAlert] Failed to register event listener:', e);
+                }
+            })();
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            document.title = t('edrAlertTitle');
+            document.documentElement.lang = currentLang;
+            document.querySelectorAll('[data-i18n]').forEach(el => {
+                const key = el.getAttribute('data-i18n');
+                if (key) el.textContent = t(key);
+            });
+
+            const urlData = {
+                process: decodeURIComponent(params.get('process') || ''),
+                path: decodeURIComponent(params.get('path') || ''),
+                score: params.get('score') || '',
+                code: decodeURIComponent(params.get('code') || ''),
+                pid: params.get('pid') || '',
+                parent: params.get('parent') || '',
+                reason: decodeURIComponent(params.get('family') || params.get('reason') || '')
+            };
+            if (urlData.process) updateContent(urlData);
+
+            document.getElementById('btn-close')?.addEventListener('click', async function() {
+                try {
+                    if (window.__TAURI__ && window.__TAURI__.core) {
+                        await window.__TAURI__.core.invoke('close_edr_alert_window');
+                    } else { window.close(); }
+                } catch(e) { window.close(); }
+            });
+
+            document.getElementById('btn-scan')?.addEventListener('click', async function() {
+                try {
+                    if (window.__TAURI__ && window.__TAURI__.core) {
+                        await window.__TAURI__.core.invoke('close_edr_alert_and_start_scan');
+                    } else { window.close(); }
+                } catch(e) { window.close(); }
+            });
+
+            document.getElementById('btn-chain')?.addEventListener('click', async function() {
+                const data = edrData || urlData;
+                try {
+                    if (window.__TAURI__ && window.__TAURI__.core) {
+                        await window.__TAURI__.core.invoke('show_edr_behavior_chain', {
+                            process: data.process || '',
+                            path: data.path || '',
+                            score: parseInt(data.score || '0'),
+                            pid: parseInt(data.pid || '0'),
+                            parent: parseInt(data.parent || '0'),
+                            code: data.code || ''
+                        });
+                    }
+                } catch(e) {
+                    console.error('[EDRAlert] Failed to open behavior chain:', e);
+                }
+            });
+        });
+    </script>
+</body>
+</html>

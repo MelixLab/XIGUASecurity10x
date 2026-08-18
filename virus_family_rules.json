@@ -1,0 +1,16 @@
+{
+  "version": "1",
+  "behavior_categories": [],
+  "signatures": [
+    {
+      "name": "TEST_RULE_LOADED_OK",
+      "malware_type": "Trojan",
+      "family": "Generic",
+      "behavior_req": {},
+      "unique_strings": ["This program cannot be run"],
+      "packer": null,
+      "compiler": null
+    }
+  ],
+  "heuristics": []
+}

@@ -1,0 +1,68 @@
+warning: in the working copy of 'Driver/Rules/_merged_all.yar', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'antivirus-ui/package.json', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'antivirus-ui/src-tauri/Cargo.lock', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'antivirus-ui/src-tauri/Cargo.toml', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'antivirus-ui/src-tauri/capabilities/default.json', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'antivirus-ui/src-tauri/src/archive_scanner.rs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'antivirus-ui/src-tauri/src/cloud_scan.rs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'antivirus-ui/src-tauri/src/lib.rs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'antivirus-ui/src-tauri/src/scanner.rs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'antivirus-ui/src-tauri/src/whitelist.rs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'antivirus-ui/src-tauri/tauri.conf.json', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'antivirus-ui/src/engines.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'antivirus-ui/src/locales.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'antivirus-ui/src/main.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'antivirus-ui/src/styles.css', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'cloud_hash_server/app.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tools/hash_extractor.py', LF will be replaced by CRLF the next time Git touches it
+Driver/SimpleLauncher.exe
+Melix-New/Melix.Trainer/bin/Release/net10.0/DeepMode.onnx
+Melix-New/Melix.Trainer/bin/Release/net10.0/Melix-Core.zip
+MiniFilter/SimpleLauncher.c
+MiniFilter/SimpleLauncher.exe
+Release/Driver/Melix/DeepMode.onnx
+Release/Driver/SimpleLauncher.exe
+Release/Melix/DeepMode.onnx
+Release/Melix/Melix.Shared.pdb
+Release/Melix/Melix.pdb
+Release/Melix/ZeroEngine.exe
+Release/Melix/onnxruntime.dll
+Release/Melix/onnxruntime.lib
+Release/Melix/onnxruntime_providers_shared.dll
+Release/Melix/onnxruntime_providers_shared.lib
+Release/XIGUASecurity.exe
+Release/defendnot-loader.exe
+SimpleLauncher.c
+antivirus-ui/package.json
+antivirus-ui/src-tauri/Cargo.lock
+antivirus-ui/src-tauri/Cargo.toml
+antivirus-ui/src-tauri/src/cloud_scan.rs
+antivirus-ui/src-tauri/src/lib.rs
+antivirus-ui/src-tauri/src/scanner.rs
+antivirus-ui/src-tauri/src/whitelist.rs
+antivirus-ui/src-tauri/tauri.conf.json
+antivirus-ui/src/engines.ts
+antivirus-ui/src/locales.ts
+antivirus-ui/src/main.ts
+antivirus-ui/src/styles.css
+app.py
+cloud_hash_server/API.md
+cloud_hash_server/app.py
+cloud_hash_server/data/blacklist.json
+cloud_hash_server/data/stats.json
+cloud_hash_server/data/whitelist.json
+cloud_hash_server/requirements.txt
+cloud_hash_server/static/css/fluent.css
+cloud_hash_server/static/css/xigua-style.css
+cloud_hash_server/static/js/fluent.js
+cloud_hash_server/static/js/xigua.js
+cloud_hash_server/templates/base.html
+cloud_hash_server/templates/dashboard.html
+cloud_hash_server/templates/login.html
+cloud_hash_server/templates/manage.html
+cloud_hash_server/templates/stats.html
+cloud_hash_server/templates/upload.html
+pm.yar
+tools/hash_extractor.py
+"tools/test/QV\346\235\200\346\257\222\350\275\257\344\273\266.exe"
+tools/test/memz.exe

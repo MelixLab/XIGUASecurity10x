@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XIGUASecurity Tray Menu</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: #ffffff;
+            width: 280px;
+            overflow: hidden;
+            user-select: none;
+        }
+        
+        /* 顶部区域 */
+        .header {
+            padding: 16px;
+            background: var(--accent-primary, #2196F3);
+            color: white;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .header-icon {
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .header-icon svg {
+            width: 28px;
+            height: 28px;
+            color: white;
+        }
+        
+        .header-info {
+            flex: 1;
+        }
+        
+        .header-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 2px;
+        }
+        
+        .header-subtitle {
+            font-size: 12px;
+            opacity: 0.9;
+        }
+        
+        .header-btn {
+            padding: 6px 12px;
+            background: rgba(255, 255, 255, 0.2);
+            border: none;
+            border-radius: 4px;
+            color: white;
+            font-size: 12px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .header-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+        
+        /* 功能网格 */
+        .features {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1px;
+            background: #f0f0f0;
+        }
+        
+        .feature-item {
+            background: white;
+            padding: 16px 12px;
+            text-align: center;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .feature-item:hover {
+            background: #f8f9fa;
+        }
+        
+        .feature-icon {
+            width: 32px;
+            height: 32px;
+            margin: 0 auto 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #667eea;
+        }
+        
+        .feature-icon svg {
+            width: 24px;
+            height: 24px;
+        }
+        
+        .feature-text {
+            font-size: 13px;
+            color: #333;
+        }
+        
+        /* 底部按钮 */
+        .footer {
+            display: flex;
+            border-top: 1px solid #f0f0f0;
+            background: white;
+        }
+        
+        .footer-btn {
+            flex: 1;
+            padding: 12px;
+            text-align: center;
+            font-size: 13px;
+            color: #666;
+            cursor: pointer;
+            transition: background 0.2s;
+            border: none;
+            background: none;
+        }
+        
+        .footer-btn:hover {
+            background: #f8f9fa;
+            color: #667eea;
+        }
+        
+        .footer-btn + .footer-btn {
+            border-left: 1px solid #f0f0f0;
+        }
+        
+        .footer-btn.exit {
+            color: #dc3545;
+        }
+        
+        .footer-btn.exit:hover {
+            background: #fff5f5;
+        }
+    </style>
+</head>
+<body>
+    <!-- 顶部 -->
+    <div class="header">
+        <div class="header-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+        </div>
+        <div class="header-info">
+            <div class="header-title">XIGUASecurity</div>
+            <div class="header-subtitle">已保护您的计算机 <span id="protected-days">0</span> 天</div>
+        </div>
+        <button class="header-btn" id="btn-enter">进入</button>
+    </div>
+    
+    <!-- 内容区域 -->
+    <div class="content">
+        <!-- 功能网格 - 4个按钮 -->
+        <div class="features">
+            <div class="feature-item" id="btn-quick-scan">
+                <div class="feature-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8"/>
+                        <path d="m21 21-4.35-4.35"/>
+                        <path d="M11 8v6"/>
+                        <path d="M8 11h6"/>
+                    </svg>
+                </div>
+                <div class="feature-text">快速扫描</div>
+            </div>
+            <div class="feature-item" id="btn-custom-scan">
+                <div class="feature-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
+                        <polyline points="14 2 14 8 20 8"/>
+                    </svg>
+                </div>
+                <div class="feature-text">自定义扫描</div>
+            </div>
+            <div class="feature-item" id="btn-timeline">
+                <div class="feature-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/>
+                        <polyline points="12 6 12 12 16 14"/>
+                    </svg>
+                </div>
+                <div class="feature-text">时间线</div>
+            </div>
+            <div class="feature-item" id="btn-quarantine">
+                <div class="feature-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 6h18"/>
+                        <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>
+                        <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+                    </svg>
+                </div>
+                <div class="feature-text">隔离区</div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 底部按钮 -->
+    <div class="footer">
+        <button class="footer-btn" id="btn-settings">设置</button>
+        <button class="footer-btn exit" id="btn-exit">退出</button>
+    </div>
+    
+    <script>
+        // 计算保护天数
+        function updateProtectedDays() {
+            const startDate = localStorage.getItem('installDate');
+            if (startDate) {
+                const days = Math.floor((Date.now() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24));
+                document.getElementById('protected-days').textContent = days;
+            } else {
+                localStorage.setItem('installDate', new Date().toISOString());
+                document.getElementById('protected-days').textContent = '0';
+            }
+        }
+        updateProtectedDays();
+        
+        // 关闭托盘菜单的辅助函数
+        async function closeTrayMenu() {
+            try {
+                await window.__TAURI__.core.invoke('close_tray_menu');
+            } catch (e) {
+                console.error('Failed to close tray menu:', e);
+            }
+        }
+        
+        // 进入主程序
+        document.getElementById('btn-enter').addEventListener('click', async () => {
+            try {
+                await window.__TAURI__.core.invoke('show_main_window');
+            } catch (e) {
+                console.error('Failed to show main window:', e);
+            }
+            await closeTrayMenu();
+        });
+        
+        // 快速扫描
+        document.getElementById('btn-quick-scan').addEventListener('click', async () => {
+            try {
+                await window.__TAURI__.core.invoke('show_main_window', { page: 'quick-scan' });
+            } catch (e) {
+                console.error('Failed to show main window:', e);
+            }
+            await closeTrayMenu();
+        });
+        
+        // 自定义扫描
+        document.getElementById('btn-custom-scan').addEventListener('click', async () => {
+            try {
+                await window.__TAURI__.core.invoke('show_main_window', { page: 'custom-scan' });
+            } catch (e) {
+                console.error('Failed to show main window:', e);
+            }
+            await closeTrayMenu();
+        });
+        
+        // 时间线
+        document.getElementById('btn-timeline').addEventListener('click', async () => {
+            try {
+                await window.__TAURI__.core.invoke('open_timeline_window');
+            } catch (e) {
+                console.error('Failed to open timeline:', e);
+            }
+            await closeTrayMenu();
+        });
+        
+        // 隔离区
+        document.getElementById('btn-quarantine').addEventListener('click', async () => {
+            try {
+                await window.__TAURI__.core.invoke('show_main_window', { page: 'quarantine' });
+            } catch (e) {
+                console.error('Failed to show main window:', e);
+            }
+            await closeTrayMenu();
+        });
+        
+        // 设置 - 跳转到设置页面
+        document.getElementById('btn-settings').addEventListener('click', async () => {
+            try {
+                await window.__TAURI__.core.invoke('show_main_window', { page: 'settings' });
+            } catch (e) {
+                console.error('Failed to show main window:', e);
+            }
+            await closeTrayMenu();
+        });
+        
+        // 退出
+        document.getElementById('btn-exit').addEventListener('click', () => {
+            window.__TAURI__.core.invoke('exit_app');
+        });
+    </script>
+</body>
+</html>

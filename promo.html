@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>XIGUASecurity 10.2.24 - 下一代终端安全防护</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/ScrollTrigger.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700;900&family=Orbitron:wght@400;500;700;900&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            'xigua-dark': '#0a0f1a',
+            'xigua-card': '#111827',
+            'xigua-blue': '#3b82f6',
+            'xigua-cyan': '#06b6d4',
+            'xigua-teal': '#00d4aa',
+            'xigua-red': '#ef4444',
+          },
+          fontFamily: {
+            'display': ['Orbitron', 'Noto Sans SC', 'sans-serif'],
+            'body': ['Noto Sans SC', 'system-ui', 'sans-serif'],
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    :root {
+      --glass-bg: rgba(17, 24, 39, 0.72);
+      --glass-border: rgba(59, 130, 246, 0.18);
+      --glow-blue: 0 0 40px rgba(59, 130, 246, 0.3);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: 'Noto Sans SC', system-ui, sans-serif;
+      background: #0a0f1a;
+      color: #f8fafc;
+      overflow-x: hidden;
+    }
+    .font-display { font-family: 'Orbitron', 'Noto Sans SC', sans-serif; }
+    .bg-mesh {
+      background:
+        radial-gradient(ellipse at 20% 30%, rgba(59, 130, 246, 0.12) 0%, transparent 50%),
+        radial-gradient(ellipse at 80% 70%, rgba(0, 212, 170, 0.08) 0%, transparent 50%),
+        linear-gradient(180deg, #0a0f1a 0%, #0f172a 50%, #0a0f1a 100%);
+    }
+    .glass {
+      background: var(--glass-bg);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--glass-border);
+    }
+    .glass-card {
+      background: rgba(17, 24, 39, 0.6);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid rgba(59, 130, 246, 0.15);
+      transition: all 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    .glass-card:hover {
+      border-color: rgba(59, 130, 246, 0.45);
+      box-shadow: 0 0 40px rgba(59, 130, 246, 0.2);
+      transform: translateY(-6px) scale(1.02);
+    }
+    .grid-bg {
+      background-image:
+        linear-gradient(rgba(59, 130, 246, 0.05) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(59, 130, 246, 0.05) 1px, transparent 1px);
+      background-size: 60px 60px;
+    }
+    .glow-text {
+      text-shadow: 0 0 30px rgba(59, 130, 246, 0.5), 0 0 60px rgba(0, 212, 170, 0.3);
+    }
+    .scan-line {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, #00d4aa, transparent);
+      box-shadow: 0 0 15px #00d4aa;
+      animation: scanMove 3s linear infinite;
+    }
+    @keyframes scanMove {
+      0% { top: 0; opacity: 0; }
+      10% { opacity: 1; }
+      90% { opacity: 1; }
+      100% { top: 100%; opacity: 0; }
+    }
+    .pulse-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #00d4aa;
+      box-shadow: 0 0 0 0 rgba(0, 212, 170, 0.7);
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(0, 212, 170, 0.7); }
+      70% { box-shadow: 0 0 0 10px rgba(0, 212, 170, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(0, 212, 170, 0); }
+    }
+    .typing-cursor::after {
+      content: '|';
+      animation: blink 1s step-end infinite;
+      color: #00d4aa;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+    .feature-icon {
+      width: 48px;
+      height: 48px;
+      stroke: #60a5fa;
+      stroke-width: 1.5;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .section-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 16px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      background: rgba(59, 130, 246, 0.1);
+      border: 1px solid rgba(59, 130, 246, 0.25);
+      color: #60a5fa;
+    }
+    .ui-window {
+      box-shadow: 0 25px 80px -20px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(59, 130, 246, 0.2);
+    }
+    .progress-fill {
+      transition: width 0.3s ease-out;
+    }
+    .engine-status {
+      animation: statusPulse 2s ease-in-out infinite;
+    }
+    @keyframes statusPulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    .breathing-btn {
+      animation: breathe 2.5s ease-in-out infinite;
+    }
+    @keyframes breathe {
+      0%, 100% { box-shadow: 0 0 20px rgba(0, 212, 170, 0.3); }
+      50% { box-shadow: 0 0 40px rgba(0, 212, 170, 0.6); }
+    }
+    .float-particle {
+      position: absolute;
+      border-radius: 50%;
+      background: rgba(59, 130, 246, 0.4);
+      pointer-events: none;
+    }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  </style>
+</head>
+<body class="bg-mesh grid-bg min-h-screen">
+
+  <!-- Navigation -->
+  <nav class="fixed top-0 left-0 right-0 z-50 glass border-b border-white/5">
+    <div class="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-xigua-blue to-xigua-teal flex items-center justify-center font-display font-bold text-sm">X</div>
+        <span class="font-display font-bold text-lg tracking-wide">XIGUASecurity</span>
+        <span class="px-2 py-0.5 rounded text-[10px] font-medium bg-xigua-teal/20 text-xigua-teal border border-xigua-teal/30">10.2.24</span>
+      </div>
+      <div class="hidden md:flex items-center gap-8 text-sm text-slate-300">
+        <a href="#features" class="hover:text-white transition-colors">核心功能</a>
+        <a href="#ui-showcase" class="hover:text-white transition-colors">界面展示</a>
+        <a href="#scan" class="hover:text-white transition-colors">扫描演示</a>
+        <a href="#ai" class="hover:text-white transition-colors">AI 分析</a>
+        <a href="#download" class="px-5 py-2 rounded-lg bg-xigua-blue/80 hover:bg-xigua-blue text-white font-medium transition-all">立即下载</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero Section -->
+  <section id="hero" class="relative min-h-screen flex items-center justify-center overflow-hidden pt-16">
+    <div id="particles" class="absolute inset-0"></div>
+    <div class="relative z-10 text-center px-6 max-w-5xl mx-auto">
+      <div class="hero-badge inline-flex items-center gap-2 px-4 py-2 rounded-full glass border border-xigua-teal/30 text-xigua-teal text-sm mb-8 opacity-0">
+        <span class="pulse-dot"></span>
+        终端安全防护 · 全新 10.2.24 版本
+      </div>
+      <h1 class="hero-title font-display font-black text-6xl md:text-8xl lg:text-9xl tracking-tight mb-6 opacity-0">
+        <span class="glow-text bg-gradient-to-r from-white via-xigua-blue to-xigua-teal bg-clip-text text-transparent">XIGUASecurity</span>
+      </h1>
+      <p class="hero-subtitle text-xl md:text-2xl text-slate-300 mb-4 font-light opacity-0">下一代终端安全防御平台</p>
+      <p class="hero-desc text-slate-400 max-w-2xl mx-auto mb-10 leading-relaxed opacity-0">集成驱动防护、实时进程监控、AI 智能分析、云端查杀与脚本威胁检测，为你的 Windows 终端提供纵深防御。</p>
+      <div class="hero-cta flex flex-wrap items-center justify-center gap-4 opacity-0">
+        <a href="#download" class="px-8 py-4 rounded-xl bg-gradient-to-r from-xigua-blue to-xigua-cyan text-white font-bold text-lg hover:scale-105 transition-transform breathing-btn">免费下载</a>
+        <a href="#ui-showcase" class="px-8 py-4 rounded-xl glass text-white font-medium hover:bg-white/10 transition-colors">查看界面</a>
+      </div>
+    </div>
+    <div class="absolute bottom-10 left-1/2 -translate-x-1/2 text-slate-500 animate-bounce">
+      <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 5v14M19 12l-7 7-7-7"/></svg>
+    </div>
+  </section>
+
+  <!-- UI Showcase -->
+  <section id="ui-showcase" class="py-24 md:py-32 px-6">
+    <div class="max-w-7xl mx-auto">
+      <div class="text-center mb-16">
+        <span class="section-badge mb-4">界面展示</span>
+        <h2 class="text-4xl md:text-5xl font-display font-bold mb-4">复刻真实软件界面</h2>
+        <p class="text-slate-400 max-w-2xl mx-auto">从侧边栏到实时状态卡片，从扫描界面到 AI 分析面板，每一处细节都力求还原真实体验。</p>
+      </div>
+      <div class="ui-window rounded-2xl overflow-hidden bg-xigua-card border border-white/10 max-w-6xl mx-auto opacity-0">
+        <!-- Titlebar -->
+        <div class="h-10 bg-gradient-to-r from-slate-900 to-slate-800 flex items-center px-4 border-b border-white/5">
+          <div class="flex gap-2 mr-4">
+            <div class="w-3 h-3 rounded-full bg-xigua-red"></div>
+            <div class="w-3 h-3 rounded-full bg-yellow-500"></div>
+            <div class="w-3 h-3 rounded-full bg-xigua-teal"></div>
+          </div>
+          <div class="text-xs text-slate-400 font-medium">XIGUASecurity - 主界面</div>
+        </div>
+        <div class="flex" style="min-height: 420px;">
+          <!-- Sidebar -->
+          <div class="w-16 md:w-56 bg-slate-900/80 border-r border-white/5 flex flex-col py-4">
+            <div class="px-4 pb-6 border-b border-white/5">
+              <div class="flex items-center gap-3">
+                <div class="w-8 h-8 rounded bg-gradient-to-br from-xigua-blue to-xigua-teal flex items-center justify-center font-display font-bold text-xs">X</div>
+                <span class="hidden md:block font-display font-bold text-sm">XIGUASecurity</span>
+              </div>
+            </div>
+            <div class="flex-1 py-4 space-y-1">
+              <div class="sidebar-item mx-2 px-3 py-2 rounded-lg bg-xigua-blue/20 text-xigua-blue flex items-center gap-3 text-sm">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+                <span class="hidden md:block">首页</span>
+              </div>
+              <div class="sidebar-item mx-2 px-3 py-2 rounded-lg text-slate-400 hover:bg-white/5 flex items-center gap-3 text-sm transition-colors">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                <span class="hidden md:block">病毒扫描</span>
+              </div>
+              <div class="sidebar-item mx-2 px-3 py-2 rounded-lg text-slate-400 hover:bg-white/5 flex items-center gap-3 text-sm transition-colors">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                <span class="hidden md:block">AI 分析</span>
+              </div>
+              <div class="sidebar-item mx-2 px-3 py-2 rounded-lg text-slate-400 hover:bg-white/5 flex items-center gap-3 text-sm transition-colors">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                <span class="hidden md:block">设置</span>
+              </div>
+            </div>
+          </div>
+          <!-- Main Content -->
+          <div class="flex-1 p-6 overflow-hidden">
+            <div class="flex items-center justify-between mb-6">
+              <div>
+                <h3 class="text-xl font-bold text-white">安全概览</h3>
+                <p class="text-sm text-slate-400">系统处于实时保护中</p>
+              </div>
+              <div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-xigua-teal/10 border border-xigua-teal/30 text-xigua-teal text-sm">
+                <div class="pulse-dot w-2 h-2"></div>
+                受保护
+              </div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+              <div class="stat-card p-4 rounded-xl bg-slate-800/50 border border-white/5">
+                <div class="text-xs text-slate-400 mb-1">实时防护</div>
+                <div class="text-lg font-bold text-xigua-teal">已启用</div>
+                <div class="text-xs text-slate-500 mt-1">驱动层主动防御</div>
+              </div>
+              <div class="stat-card p-4 rounded-xl bg-slate-800/50 border border-white/5">
+                <div class="text-xs text-slate-400 mb-1">文件监控</div>
+                <div class="text-lg font-bold text-xigua-blue">8,432</div>
+                <div class="text-xs text-slate-500 mt-1">今日扫描文件数</div>
+              </div>
+              <div class="stat-card p-4 rounded-xl bg-slate-800/50 border border-white/5">
+                <div class="text-xs text-slate-400 mb-1">威胁拦截</div>
+                <div class="text-lg font-bold text-xigua-red">3</div>
+                <div class="text-xs text-slate-500 mt-1">已隔离处理</div>
+              </div>
+            </div>
+            <div class="p-4 rounded-xl bg-slate-800/30 border border-white/5">
+              <div class="flex items-center justify-between mb-3">
+                <span class="text-sm font-medium text-slate-300">最近威胁活动</span>
+                <span class="text-xs text-slate-500">实时</span>
+              </div>
+              <div class="space-y-2">
+                <div class="flex items-center justify-between text-sm p-2 rounded bg-xigua-red/10 border border-xigua-red/20">
+                  <span class="text-slate-300">C:\Users\...\suspicious.exe</span>
+                  <span class="text-xigua-red text-xs">已拦截</span>
+                </div>
+                <div class="flex items-center justify-between text-sm p-2 rounded bg-slate-900/50">
+                  <span class="text-slate-300">注册表启动项写入</span>
+                  <span class="text-xigua-teal text-xs">已阻止</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section id="features" class="py-24 md:py-32 px-6">
+    <div class="max-w-7xl mx-auto">
+      <div class="text-center mb-16">
+        <span class="section-badge mb-4">核心能力</span>
+        <h2 class="text-4xl md:text-5xl font-display font-bold mb-4">多层纵深防护体系</h2>
+        <p class="text-slate-400 max-w-2xl mx-auto">从系统驱动层到云端情报，从本地特征到 AI 行为分析，构建立体化终端安全防线。</p>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div class="feature-card glass-card rounded-2xl p-6 opacity-0" data-tilt>
+          <div class="w-12 h-12 rounded-xl bg-xigua-blue/10 flex items-center justify-center mb-4">
+            <svg class="feature-icon"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+          </div>
+          <h3 class="text-lg font-bold mb-2">驱动层防护</h3>
+          <p class="text-slate-400 text-sm leading-relaxed">内核级驱动监控进程创建、文件操作与注册表修改，在恶意行为发生前即拦截。</p>
+        </div>
+        <div class="feature-card glass-card rounded-2xl p-6 opacity-0" data-tilt>
+          <div class="w-12 h-12 rounded-xl bg-xigua-cyan/10 flex items-center justify-center mb-4">
+            <svg class="feature-icon"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          </div>
+          <h3 class="text-lg font-bold mb-2">实时行为监控</h3>
+          <p class="text-slate-400 text-sm leading-relaxed">持续跟踪进程行为、网络连接与系统调用，识别异常模式并实时告警。</p>
+        </div>
+        <div class="feature-card glass-card rounded-2xl p-6 opacity-0" data-tilt>
+          <div class="w-12 h-12 rounded-xl bg-xigua-teal/10 flex items-center justify-center mb-4">
+            <svg class="feature-icon"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
+          </div>
+          <h3 class="text-lg font-bold mb-2">AI 智能分析</h3>
+          <p class="text-slate-400 text-sm leading-relaxed">集成大模型对话能力，通过 MCP 工具获取进程、文件信息，辅助判断可疑威胁。</p>
+        </div>
+        <div class="feature-card glass-card rounded-2xl p-6 opacity-0" data-tilt>
+          <div class="w-12 h-12 rounded-xl bg-purple-500/10 flex items-center justify-center mb-4">
+            <svg class="feature-icon" stroke="#a78bfa"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
+          </div>
+          <h3 class="text-lg font-bold mb-2">脚本威胁扫描</h3>
+          <p class="text-slate-400 text-sm leading-relaxed">专门检测 BAT、PowerShell、VBS 等脚本文件中的恶意命令与系统破坏行为。</p>
+        </div>
+        <div class="feature-card glass-card rounded-2xl p-6 opacity-0" data-tilt>
+          <div class="w-12 h-12 rounded-xl bg-xigua-blue/10 flex items-center justify-center mb-4">
+            <svg class="feature-icon"><path d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z"/></svg>
+          </div>
+          <h3 class="text-lg font-bold mb-2">云端查杀引擎</h3>
+          <p class="text-slate-400 leading-relaxed text-sm">云端沙箱与哈希数据库联动，毫秒级获取最新威胁情报与家族分析结果。</p>
+        </div>
+        <div class="feature-card glass-card rounded-2xl p-6 opacity-0" data-tilt>
+          <div class="w-12 h-12 rounded-xl bg-xigua-red/10 flex items-center justify-center mb-4">
+            <svg class="feature-icon" stroke="#f87171"><path d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+          </div>
+          <h3 class="text-lg font-bold mb-2">主动威胁拦截</h3>
+          <p class="text-slate-400 text-sm leading-relaxed">自动隔离恶意文件、终止可疑进程，并记录完整事件时间线用于溯源。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Scan Demo -->
+  <section id="scan" class="py-24 md:py-32 px-6">
+    <div class="max-w-7xl mx-auto">
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
+        <div>
+          <span class="section-badge mb-4">扫描演示</span>
+          <h2 class="text-4xl md:text-5xl font-display font-bold mb-4">全盘快速扫描</h2>
+          <p class="text-slate-400 mb-6 leading-relaxed">多引擎协同扫描，实时显示进度、文件路径与威胁判定。可疑文件会被高亮标记，并自动进入隔离流程。</p>
+          <div class="space-y-4">
+            <div class="flex items-center gap-3">
+              <div class="w-10 h-10 rounded-lg bg-xigua-teal/10 flex items-center justify-center text-xigua-teal">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg>
+              </div>
+              <div>
+                <div class="font-medium">多引擎并行</div>
+                <div class="text-sm text-slate-500">本地 + 云端同步判定</div>
+              </div>
+            </div>
+            <div class="flex items-center gap-3">
+              <div class="w-10 h-10 rounded-lg bg-xigua-teal/10 flex items-center justify-center text-xigua-teal">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+              </div>
+              <div>
+                <div class="font-medium">实时威胁拦截</div>
+                <div class="text-sm text-slate-500">发现恶意文件立即隔离</div>
+              </div>
+            </div>
+            <div class="flex items-center gap-3">
+              <div class="w-10 h-10 rounded-lg bg-xigua-teal/10 flex items-center justify-center text-xigua-teal">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 17v-2a2 2 0 012-2h2a2 2 0 012 2v2M9 17h6M9 17H7a2 2 0 01-2-2V5a2 2 0 012-2h10a2 2 0 012 2v10a2 2 0 01-2 2h-2"/></svg>
+              </div>
+              <div>
+                <div class="font-medium">详细日志记录</div>
+                <div class="text-sm text-slate-500">完整扫描历史与威胁时间线</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="scan-window ui-window rounded-2xl overflow-hidden bg-xigua-card border border-white/10 opacity-0">
+          <div class="h-10 bg-slate-900 flex items-center px-4 border-b border-white/5">
+            <div class="flex gap-2 mr-4">
+              <div class="w-3 h-3 rounded-full bg-xigua-red"></div>
+              <div class="w-3 h-3 rounded-full bg-yellow-500"></div>
+              <div class="w-3 h-3 rounded-full bg-xigua-teal"></div>
+            </div>
+            <div class="text-xs text-slate-400">快速扫描</div>
+          </div>
+          <div class="p-6 relative">
+            <div class="scan-line"></div>
+            <div class="flex items-center justify-between mb-4">
+              <div>
+                <div class="text-sm text-slate-400">扫描进度</div>
+                <div class="text-2xl font-display font-bold text-xigua-teal"><span id="scan-percent">0</span>%</div>
+              </div>
+              <div class="text-right">
+                <div class="text-sm text-slate-400">已扫描文件</div>
+                <div class="text-xl font-bold text-white"><span id="scan-files">0</span></div>
+              </div>
+            </div>
+            <div class="h-2 bg-slate-800 rounded-full overflow-hidden mb-4">
+              <div id="scan-progress" class="progress-fill h-full bg-gradient-to-r from-xigua-blue to-xigua-teal rounded-full" style="width: 0%"></div>
+            </div>
+            <div class="h-40 overflow-hidden relative rounded-lg bg-slate-900/50 border border-white/5 p-3">
+              <div id="scan-log" class="space-y-1 text-xs font-mono">
+                <div class="text-slate-500">等待开始扫描...</div>
+              </div>
+            </div>
+            <div class="mt-4 flex items-center gap-3">
+              <div class="px-3 py-1 rounded bg-xigua-red/10 border border-xigua-red/20 text-xigua-red text-xs">
+                威胁: <span id="scan-threats">0</span>
+              </div>
+              <div class="px-3 py-1 rounded bg-xigua-teal/10 border border-xigua-teal/20 text-xigua-teal text-xs">
+                安全: <span id="scan-safe">0</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- AI Analysis -->
+  <section id="ai" class="py-24 md:py-32 px-6">
+    <div class="max-w-7xl mx-auto">
+      <div class="text-center mb-16">
+        <span class="section-badge mb-4">AI 分析</span>
+        <h2 class="text-4xl md:text-5xl font-display font-bold mb-4">大模型驱动的安全分析</h2>
+        <p class="text-slate-400 max-w-2xl mx-auto">AI 助手可通过 MCP 工具获取系统进程、文件信息，辅助识别可疑行为，降低人工研判门槛。</p>
+      </div>
+      <div class="max-w-4xl mx-auto ai-window ui-window rounded-2xl overflow-hidden bg-xigua-card border border-white/10 opacity-0">
+        <div class="h-10 bg-slate-900 flex items-center px-4 border-b border-white/5">
+          <div class="flex gap-2 mr-4">
+            <div class="w-3 h-3 rounded-full bg-xigua-red"></div>
+            <div class="w-3 h-3 rounded-full bg-yellow-500"></div>
+            <div class="w-3 h-3 rounded-full bg-xigua-teal"></div>
+          </div>
+          <div class="text-xs text-slate-400">XIGUASecurity AI 分析助手</div>
+        </div>
+        <div class="p-6 h-[500px] flex flex-col">
+          <div id="ai-chat" class="flex-1 overflow-y-auto space-y-4 mb-4 no-scrollbar pr-2">
+            <div class="flex items-start gap-3">
+              <div class="w-8 h-8 rounded-full bg-gradient-to-br from-xigua-blue to-xigua-teal flex items-center justify-center text-xs font-bold">AI</div>
+              <div class="glass rounded-xl px-4 py-3 max-w-[80%] text-sm">
+                你好，我是 XIGUASecurity 的安全分析助手。你可以让我查看当前运行的进程、定位可疑文件或分析系统状态。
+              </div>
+            </div>
+          </div>
+          <div class="flex gap-3 pt-4 border-t border-white/5">
+            <div class="flex-1 glass rounded-lg px-4 py-2 text-sm text-slate-400 flex items-center">
+              <span id="ai-input" class="typing-cursor">帮我分析后台有没有可疑进程</span>
+            </div>
+            <div class="px-4 py-2 rounded-lg bg-xigua-blue text-white text-sm font-medium">发送</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Engine Matrix -->
+  <section id="engines" class="py-24 md:py-32 px-6">
+    <div class="max-w-7xl mx-auto">
+      <div class="text-center mb-16">
+        <span class="section-badge mb-4">检测引擎</span>
+        <h2 class="text-4xl md:text-5xl font-display font-bold mb-4">八核检测引擎矩阵</h2>
+        <p class="text-slate-400 max-w-2xl mx-auto">覆盖深度学习、特征码、行为分析、云端情报、脚本扫描与白名单过滤，多维度识别威胁。</p>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div class="engine-card glass-card rounded-xl p-5 opacity-0">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-sm font-bold">Melix 深度学习</span>
+            <div class="pulse-dot"></div>
+          </div>
+          <div class="text-xs text-slate-400 mb-2">基于 ONNX 的恶意文件检测</div>
+          <div class="text-xs text-xigua-teal">v10.2.24</div>
+        </div>
+        <div class="engine-card glass-card rounded-xl p-5 opacity-0">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-sm font-bold">本地特征码</span>
+            <div class="pulse-dot"></div>
+          </div>
+          <div class="text-xs text-slate-400 mb-2">内置规则库匹配</div>
+          <div class="text-xs text-xigua-teal">v10.2.24</div>
+        </div>
+        <div class="engine-card glass-card rounded-xl p-5 opacity-0">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-sm font-bold">病毒家族分析</span>
+            <div class="pulse-dot"></div>
+          </div>
+          <div class="text-xs text-slate-400 mb-2">家族分类与关联</div>
+          <div class="text-xs text-xigua-teal">v10.2.24</div>
+        </div>
+        <div class="engine-card glass-card rounded-xl p-5 opacity-0">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-sm font-bold">行为分析</span>
+            <div class="pulse-dot"></div>
+          </div>
+          <div class="text-xs text-slate-400 mb-2">PE 导入 + 字符串提取</div>
+          <div class="text-xs text-xigua-teal">v10.2.24</div>
+        </div>
+        <div class="engine-card glass-card rounded-xl p-5 opacity-0">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-sm font-bold">云端扫描</span>
+            <div class="pulse-dot"></div>
+          </div>
+          <div class="text-xs text-slate-400 mb-2">云端沙箱 + 哈希</div>
+          <div class="text-xs text-xigua-teal">v10.2.24</div>
+        </div>
+        <div class="engine-card glass-card rounded-xl p-5 opacity-0">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-sm font-bold">云端哈希</span>
+            <div class="pulse-dot"></div>
+          </div>
+          <div class="text-xs text-slate-400 mb-2">MD5 云数据库</div>
+          <div class="text-xs text-xigua-teal">v10.2.24</div>
+        </div>
+        <div class="engine-card glass-card rounded-xl p-5 opacity-0">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-sm font-bold">脚本扫描</span>
+            <div class="pulse-dot"></div>
+          </div>
+          <div class="text-xs text-slate-400 mb-2">BAT / PS / VBS 检测</div>
+          <div class="text-xs text-xigua-teal">v10.2.24</div>
+        </div>
+        <div class="engine-card glass-card rounded-xl p-5 opacity-0">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-sm font-bold">白名单引擎</span>
+            <div class="pulse-dot"></div>
+          </div>
+          <div class="text-xs text-slate-400 mb-2">MD5 白名单过滤</div>
+          <div class="text-xs text-xigua-teal">v10.2.24</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section id="download" class="py-24 md:py-32 px-6 relative">
+    <div class="max-w-4xl mx-auto text-center">
+      <span class="section-badge mb-4">立即体验</span>
+      <h2 class="text-4xl md:text-6xl font-display font-bold mb-6">准备好保护你的终端了吗？</h2>
+      <p class="text-slate-400 text-lg mb-10 max-w-2xl mx-auto">下载 XIGUASecurity 10.2.24，开启驱动级主动防御与 AI 智能分析。Windows 10 / 11 均可运行。</p>
+      <div class="flex flex-wrap items-center justify-center gap-4 mb-12">
+        <a href="#" class="download-btn px-10 py-4 rounded-xl bg-gradient-to-r from-xigua-blue to-xigua-cyan text-white font-bold text-lg hover:scale-105 transition-transform breathing-btn">下载 Windows 版</a>
+        <a href="#" class="px-8 py-4 rounded-xl glass text-white font-medium hover:bg-white/10 transition-colors">查看更新日志</a>
+      </div>
+      <div class="flex flex-wrap items-center justify-center gap-8 text-sm text-slate-500">
+        <span class="flex items-center gap-2"><svg class="w-4 h-4 text-xigua-teal" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg> 完全免费</span>
+        <span class="flex items-center gap-2"><svg class="w-4 h-4 text-xigua-teal" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg> 无需注册</span>
+        <span class="flex items-center gap-2"><svg class="w-4 h-4 text-xigua-teal" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg> 本地优先</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="py-8 px-6 border-t border-white/5">
+    <div class="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4 text-sm text-slate-500">
+      <div class="flex items-center gap-2">
+        <div class="w-6 h-6 rounded bg-gradient-to-br from-xigua-blue to-xigua-teal flex items-center justify-center font-display font-bold text-[10px]">X</div>
+        <span>© 2025 XIGUASecurity. All rights reserved.</span>
+      </div>
+      <div class="flex items-center gap-6">
+        <a href="#" class="hover:text-slate-300 transition-colors">隐私政策</a>
+        <a href="#" class="hover:text-slate-300 transition-colors">使用条款</a>
+        <a href="#" class="hover:text-slate-300 transition-colors">联系我们</a>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    gsap.registerPlugin(ScrollTrigger);
+
+    // Particles
+    const particlesContainer = document.getElementById('particles');
+    for (let i = 0; i < 40; i++) {
+      const p = document.createElement('div');
+      p.className = 'float-particle';
+      const size = Math.random() * 3 + 1;
+      p.style.width = size + 'px';
+      p.style.height = size + 'px';
+      p.style.left = Math.random() * 100 + '%';
+      p.style.top = Math.random() * 100 + '%';
+      p.style.opacity = Math.random() * 0.5 + 0.1;
+      particlesContainer.appendChild(p);
+      gsap.to(p, {
+        y: Math.random() * 200 - 100,
+        x: Math.random() * 200 - 100,
+        opacity: Math.random() * 0.4 + 0.1,
+        duration: Math.random() * 10 + 10,
+        repeat: -1,
+        yoyo: true,
+        ease: 'sine.inOut'
+      });
+    }
+
+    // Hero animation
+    const heroTl = gsap.timeline({ defaults: { ease: 'power3.out' } });
+    heroTl
+      .to('.hero-badge', { opacity: 1, y: 0, duration: 0.8 }, 0.2)
+      .fromTo('.hero-title', { opacity: 0, scale: 1.5, y: 30 }, { opacity: 1, scale: 1, y: 0, duration: 1.2 }, 0.4)
+      .to('.hero-subtitle', { opacity: 1, y: 0, duration: 0.8 }, 1.0)
+      .to('.hero-desc', { opacity: 1, y: 0, duration: 0.8 }, 1.2)
+      .to('.hero-cta', { opacity: 1, y: 0, duration: 0.8 }, 1.4);
+
+    // Scroll reveals
+    gsap.utils.toArray('.feature-card').forEach((card, i) => {
+      gsap.fromTo(card, { opacity: 0, y: 40 }, {
+        opacity: 1, y: 0, duration: 0.6, delay: i * 0.1,
+        scrollTrigger: { trigger: card, start: 'top 85%', toggleActions: 'play none none reverse' }
+      });
+    });
+
+    gsap.utils.toArray('.engine-card').forEach((card, i) => {
+      gsap.fromTo(card, { opacity: 0, scale: 0.9 }, {
+        opacity: 1, scale: 1, duration: 0.5, delay: i * 0.05,
+        scrollTrigger: { trigger: card, start: 'top 90%', toggleActions: 'play none none reverse' }
+      });
+    });
+
+    gsap.fromTo('.ui-window', { opacity: 0, y: 80 }, {
+      opacity: 1, y: 0, duration: 1,
+      scrollTrigger: { trigger: '.ui-window', start: 'top 80%', toggleActions: 'play none none reverse' }
+    });
+
+    gsap.fromTo('.scan-window', { opacity: 0, x: 80 }, {
+      opacity: 1, x: 0, duration: 0.8,
+      scrollTrigger: { trigger: '.scan-window', start: 'top 80%', toggleActions: 'play none none reverse' }
+    });
+
+    gsap.fromTo('.ai-window', { opacity: 0, y: 60 }, {
+      opacity: 1, y: 0, duration: 0.8,
+      scrollTrigger: { trigger: '.ai-window', start: 'top 80%', toggleActions: 'play none none reverse' }
+    });
+
+    // 3D tilt effect on feature cards
+    document.querySelectorAll('[data-tilt]').forEach(card => {
+      card.addEventListener('mousemove', (e) => {
+        const rect = card.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        const cx = x / rect.width - 0.5;
+        const cy = y / rect.height - 0.5;
+        card.style.transform = `perspective(1000px) rotateY(${cx * 10}deg) rotateX(${-cy * 10}deg) translateY(-6px) scale(1.02)`;
+      });
+      card.addEventListener('mouseleave', () => {
+        card.style.transform = '';
+      });
+    });
+
+    // Scan demo
+    const scanFiles = [
+      'C:\\Windows\\System32\\kernel32.dll', 'C:\\Program Files\\Chrome\\chrome.exe',
+      'C:\\Users\\Admin\\Downloads\\setup.exe', 'C:\\Windows\\SysWOW64\\shell32.dll',
+      'C:\\Users\\Admin\\AppData\\Local\\Temp\\svchost.exe', 'C:\\Program Files\\XIGUASecurity\\xigua.exe',
+      'C:\\Users\\Admin\\Downloads\\crack.exe', 'C:\\Windows\\System32\\ntdll.dll',
+      'C:\\Users\\Admin\\Desktop\\invoice.pdf.exe', 'C:\\Program Files\\NodeJS\\node.exe'
+    ];
+    const threats = [
+      'C:\\Users\\Admin\\AppData\\Local\\Temp\\svchost.exe',
+      'C:\\Users\\Admin\\Downloads\\crack.exe',
+      'C:\\Users\\Admin\\Desktop\\invoice.pdf.exe'
+    ];
+    let scanRunning = false;
+    ScrollTrigger.create({
+      trigger: '.scan-window',
+      start: 'top 75%',
+      onEnter: () => {
+        if (scanRunning) return;
+        scanRunning = true;
+        const logEl = document.getElementById('scan-log');
+        const percentEl = document.getElementById('scan-percent');
+        const filesEl = document.getElementById('scan-files');
+        const threatsEl = document.getElementById('scan-threats');
+        const safeEl = document.getElementById('scan-safe');
+        const progressEl = document.getElementById('scan-progress');
+        let percent = 0, files = 0, threatCount = 0, safeCount = 0;
+        logEl.innerHTML = '';
+        const interval = setInterval(() => {
+          percent += Math.floor(Math.random() * 4) + 1;
+          if (percent > 100) percent = 100;
+          percentEl.textContent = percent;
+          progressEl.style.width = percent + '%';
+          
+          const file = scanFiles[files % scanFiles.length];
+          const isThreat = threats.includes(file);
+          files++;
+          filesEl.textContent = files * 124;
+          
+          const row = document.createElement('div');
+          row.className = 'flex items-center justify-between py-1 px-2 rounded ' + (isThreat ? 'bg-xigua-red/10 text-xigua-red' : 'text-slate-400');
+          row.innerHTML = `<span class="truncate max-w-[70%]">${file}</span><span class="text-xs">${isThreat ? '威胁' : '安全'}</span>`;
+          logEl.appendChild(row);
+          if (isThreat) threatCount++; else safeCount++;
+          threatsEl.textContent = threatCount;
+          safeEl.textContent = safeCount;
+          logEl.scrollTop = logEl.scrollHeight;
+          
+          while (logEl.children.length > 8) logEl.removeChild(logEl.firstChild);
+          
+          if (percent >= 100) {
+            clearInterval(interval);
+            const done = document.createElement('div');
+            done.className = 'text-xigua-teal font-medium';
+            done.textContent = '扫描完成，发现 3 个威胁，已自动隔离。';
+            logEl.appendChild(done);
+          }
+        }, 200);
+      }
+    });
+
+    // AI analysis demo
+    const aiMessages = [
+      { type: 'tool', name: 'get_processes', content: '正在获取当前运行进程列表...' },
+      { type: 'ai', content: '我注意到系统中有 3 个可疑进程：' },
+      { type: 'ai', content: '1. svchost.exe 位于 Temp 目录（PID 2842）\n2. chrome.exe 的子进程尝试注入 DLL\n3. 一个无签名程序正在监听网络端口' },
+      { type: 'tool', name: 'get_file_info', content: '正在获取 svchost.exe 文件信息...' },
+      { type: 'ai', content: '该文件没有数字签名，哈希在云黑名单中命中，建议立即隔离并终止进程。' }
+    ];
+    let aiRunning = false;
+    ScrollTrigger.create({
+      trigger: '.ai-window',
+      start: 'top 75%',
+      onEnter: () => {
+        if (aiRunning) return;
+        aiRunning = true;
+        const chatEl = document.getElementById('ai-chat');
+        
+        async function typeMessage(text, container) {
+          return new Promise(resolve => {
+            let i = 0;
+            const span = document.createElement('span');
+            container.appendChild(span);
+            const timer = setInterval(() => {
+              span.textContent += text[i];
+              i++;
+              chatEl.scrollTop = chatEl.scrollHeight;
+              if (i >= text.length) {
+                clearInterval(timer);
+                resolve();
+              }
+            }, 25);
+          });
+        }
+        
+        async function showMessages() {
+          await new Promise(r => setTimeout(r, 1000));
+          for (const msg of aiMessages) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'flex items-start gap-3 opacity-0';
+            if (msg.type === 'tool') {
+              wrapper.innerHTML = `
+                <div class="w-8 h-8 rounded-lg bg-xigua-blue/20 flex items-center justify-center text-xigua-blue text-xs font-bold">T</div>
+                <div class="glass rounded-xl px-4 py-3 max-w-[80%] text-sm border-l-2 border-xigua-blue">
+                  <div class="text-xs text-xigua-blue mb-1">MCP Tool: ${msg.name}</div>
+                  <div class="tool-content"></div>
+                </div>
+              `;
+            } else {
+              wrapper.innerHTML = `
+                <div class="w-8 h-8 rounded-full bg-gradient-to-br from-xigua-blue to-xigua-teal flex items-center justify-center text-xs font-bold">AI</div>
+                <div class="glass rounded-xl px-4 py-3 max-w-[80%] text-sm ai-content"></div>
+              `;
+            }
+            chatEl.appendChild(wrapper);
+            gsap.to(wrapper, { opacity: 1, duration: 0.4 });
+            const contentEl = wrapper.querySelector('.tool-content, .ai-content');
+            if (contentEl) await typeMessage(msg.content, contentEl);
+            await new Promise(r => setTimeout(r, 600));
+          }
+        }
+        showMessages();
+      }
+    });
+
+    // Smooth scroll for nav links
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+      anchor.addEventListener('click', function(e) {
+        e.preventDefault();
+        const target = document.querySelector(this.getAttribute('href'));
+        if (target) {
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      });
+    });
+  </script>
+</body>
+</html>

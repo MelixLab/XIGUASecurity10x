@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XIGUASecurity - 威胁管理</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header class="app-bar acrylic">
+        <div class="brand">
+            <div class="logo">X</div>
+            <span>XIGUASecurity 威胁管理</span>
+        </div>
+        <div class="actions">
+            <a href="/" class="btn btn-secondary">设备列表</a>
+            <a href="/logout" class="btn btn-secondary">退出登录</a>
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="card">
+            <h2 class="card-title">威胁列表</h2>
+            <p style="font-size:13px;color:var(--text-secondary);margin:-8px 0 16px 0;">
+                客户端扫描检测到的威胁，包含文件路径、SHA256、病毒家族等信息，便于云端入库降低误报。
+            </p>
+            <div class="filter-bar">
+                <select id="deviceFilter">
+                    <option value="">全部设备</option>
+                    {% for device in devices %}
+                    <option value="{{ device.device_name }}">{{ device.device_name }}</option>
+                    {% endfor %}
+                </select>
+                <input type="search" id="keywordFilter" placeholder="搜索威胁名称或路径" style="max-width: 320px;">
+                <button class="btn btn-primary" onclick="loadThreats()">刷新</button>
+            </div>
+            <div id="threatContainer" class="log-list">
+                <div class="empty-state">正在加载...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function loadThreats() {
+            const device = document.getElementById('deviceFilter').value;
+            const keyword = document.getElementById('keywordFilter').value;
+            const url = new URL('/api/threats', window.location.origin);
+            if (device) url.searchParams.set('device_name', device);
+            if (keyword) url.searchParams.set('keyword', keyword);
+
+            const res = await fetch(url);
+            const data = await res.json();
+            const container = document.getElementById('threatContainer');
+            if (!data.logs || data.logs.length === 0) {
+                container.innerHTML = '<div class="empty-state">暂无威胁记录</div>';
+                return;
+            }
+            container.innerHTML = data.logs.map(log => {
+                const d = log.details || {};
+                const sha256 = d.sha256 || '';
+                const shaShort = sha256 ? sha256.substring(0, 16) + '...' : '-';
+                const prob = d.probability ? (d.probability * 100).toFixed(1) + '%' : '-';
+                return `<div class="log-item" style="border-left: 3px solid #d13438;">
+                    <div class="log-header">
+                        <span style="font-size:12px;font-weight:600;padding:2px 8px;border-radius:12px;background:rgba(209,52,56,0.1);color:#d13438;">威胁</span>
+                        <span style="font-size:12px;color:var(--text-secondary);">${log.timestamp} · ${log.device_name}</span>
+                    </div>
+                    <div style="font-size:14px;font-weight:600;color:#d13438;margin-bottom:6px;">${d.threat_name || '未知威胁'}</div>
+                    <div style="font-size:13px;color:var(--text-primary);margin-bottom:4px;word-break:break-all;">${d.file_path || log.summary}</div>
+                    <div style="font-size:12px;color:var(--text-secondary);">
+                        SHA256: <code style="background:#f5f5f5;padding:1px 6px;border-radius:3px;font-size:11px;word-break:break-all;">${sha256 || '未获取'}</code>
+                        · 置信度: ${prob}
+                        ${d.virus_family ? '· 家族: ' + d.virus_family : ''}
+                        ${d.family_category ? '· 分类: ' + d.family_category : ''}
+                    </div>
+                    <div style="font-size:11px;color:#999;margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;">
+                        ${sha256 ? `<span class="copy-btn" data-copy="${sha256}" style="cursor:pointer;color:var(--accent-color);">复制 SHA256</span>` : ''}
+                        ${d.file_path ? `<span class="copy-btn" data-copy="${d.file_path}" style="cursor:pointer;color:var(--accent-color);">复制路径</span>` : ''}
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        document.getElementById('keywordFilter').addEventListener('keydown', e => {
+            if (e.key === 'Enter') loadThreats();
+        });
+
+        // 使用事件委托处理复制按钮
+        document.getElementById('threatContainer').addEventListener('click', async (e) => {
+            const btn = e.target.closest('.copy-btn');
+            if (!btn) return;
+            const text = btn.getAttribute('data-copy');
+            if (!text) return;
+            try {
+                await navigator.clipboard.writeText(text);
+                const orig = btn.textContent;
+                btn.textContent = '✓ 已复制';
+                setTimeout(() => btn.textContent = orig, 2000);
+            } catch (err) {
+                // 非安全上下文回退
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.position = 'fixed';
+                ta.style.left = '-9999px';
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+                const orig = btn.textContent;
+                btn.textContent = '✓ 已复制';
+                setTimeout(() => btn.textContent = orig, 2000);
+            }
+        });
+
+        loadThreats();
+        setInterval(loadThreats, 15000);
+    </script>
+</body>
+</html>

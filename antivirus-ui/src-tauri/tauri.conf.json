@@ -1,0 +1,139 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "XIGUASecurity",
+  "version": "10.2.33",
+  "identifier": "com.memz-uac.xiguasecurity",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; img-src 'self' asset: file: data: blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' asset: blob: https://cloudapi.xiguastudio.top/; media-src 'self'; font-src 'self'; frame-src https://scan.xiguastudio.top/;"
+    },
+    "windows": [
+      {
+        "title": "XIGUASecurity",
+        "width": 900,
+        "height": 685,
+        "minWidth": 800,
+        "minHeight": 500,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "center": true,
+        "resizable": true,
+        "visible": false,
+        "url": "index.html"
+      },
+      {
+        "label": "threat-alert",
+        "title": "安全警告",
+        "width": 420,
+        "height": 160,
+        "decorations": false,
+        "transparent": true,
+        "shadow": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "visible": false,
+        "url": "threat-alert.html"
+      },
+      {
+        "label": "intercept-alert",
+        "title": "实时防护拦截",
+        "width": 360,
+        "height": 500,
+        "decorations": false,
+        "transparent": false,
+        "shadow": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "visible": false,
+        "url": "intercept-alert.html"
+      },
+      {
+        "label": "file-protection-alert",
+        "title": "文件防护",
+        "width": 420,
+        "height": 240,
+        "decorations": false,
+        "transparent": true,
+        "shadow": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "visible": false,
+        "url": "file-protection-alert.html"
+      },
+      {
+        "label": "sandbox-progress",
+        "title": "沙箱分析",
+        "width": 360,
+        "height": 380,
+        "decorations": false,
+        "transparent": true,
+        "shadow": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "visible": false,
+        "url": "sandbox-progress.html"
+      },
+      {
+        "label": "secure-confirm",
+        "title": "XIGUASecurity 安全确认",
+        "fullscreen": true,
+        "decorations": false,
+        "transparent": false,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "visible": false,
+        "url": "secure-confirm.html"
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "engines": "engines",
+      "../../Driver": "Driver",
+      "../../AVModel/target/release/AVGuard.exe": "Driver/AVGuard.exe",
+      "../intercept-alert.html": "intercept-alert.html",
+      "../popup-prompt.html": "popup-prompt.html",
+      "../suspicious-intercept.html": "suspicious-intercept.html",
+      "../threat-alert.html": "threat-alert.html",
+      "../tray-menu.html": "tray-menu.html",
+      "../timeline.html": "timeline.html",
+      "../edr-alert.html": "edr-alert.html",
+      "../edr-behavior-chain.html": "edr-behavior-chain.html",
+      "../file-protection-alert.html": "file-protection-alert.html",
+      "../sandbox-progress.html": "sandbox-progress.html",
+      "../secure-confirm.html": "secure-confirm.html",
+      "../../rulers": "rulers",
+      "../../Sandboxie-Plus-x64-v1.18.1.exe": "Sandboxie-Plus-x64-v1.18.1.exe"
+    },
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "installMode": "both",
+        "installerHooks": "installer_exit_codes.nsh"
+      }
+    }
+  }
+}

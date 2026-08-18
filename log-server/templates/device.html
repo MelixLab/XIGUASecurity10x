@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XIGUASecurity - {{ device.device_name }} 日志</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header class="app-bar acrylic">
+        <div class="brand">
+            <div class="logo">X</div>
+            <span>{{ device.device_name }} - 设备详情</span>
+        </div>
+        <div class="actions">
+            <a href="/" class="btn btn-secondary">返回设备列表</a>
+            <a href="/logout" class="btn btn-secondary">退出登录</a>
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="card">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+                <div>
+                    <h2 class="card-title" style="margin:0;">{{ device.device_name }}</h2>
+                    <p style="margin:4px 0 0 0;color:var(--text-secondary);font-size:13px;">
+                        状态：
+                        <span class="status">
+                            <span class="status-dot {% if device.is_online %}online{% else %}offline{% endif %}"></span>
+                            {% if device.is_online %}在线{% else %}离线{% endif %}
+                        </span>
+                        · 最后活跃：{{ device.last_seen }}
+                    </p>
+                </div>
+            </div>
+
+            <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); margin-bottom: 24px;">
+                <a href="/device/{{ device.device_name }}/edr" class="stat-card" style="text-decoration:none; color:inherit;">
+                    <div class="stat-value">{{ edr_count }}</div>
+                    <div class="stat-label">EDR 拦截</div>
+                </a>
+                <a href="/device/{{ device.device_name }}/timeline" class="stat-card" style="text-decoration:none; color:inherit;">
+                    <div class="stat-value">{{ timeline_count }}</div>
+                    <div class="stat-label">行为时间线</div>
+                </a>
+            </div>
+
+            <h3 class="card-title">综合日志</h3>
+            <div class="filter-bar">
+                <select id="categoryFilter">
+                    <option value="">全部类别</option>
+                    {% for cat in categories %}
+                    <option value="{{ cat }}">{{ cat }}</option>
+                    {% endfor %}
+                </select>
+                <input type="search" id="keywordFilter" placeholder="搜索关键词">
+                <button class="btn btn-primary" onclick="applyFilter()">筛选</button>
+            </div>
+
+            <div id="logContainer" class="log-list">
+                {% for log in logs %}
+                <div class="log-item" data-category="{{ log.category or '' }}" data-summary="{{ log.summary or '' }}" data-path="{{ log.file_path or '' }}" data-threat="{{ log.threat_name or '' }}">
+                    <div class="log-header">
+                        <span class="log-category">{{ log.category or '其他' }}</span>
+                        <span class="log-time">{{ log.timestamp }}</span>
+                    </div>
+                    <div class="log-summary">{{ log.summary }}</div>
+                    <div class="log-meta">
+                        {% if log.function %}函数: {{ log.function }} · {% endif %}
+                        {% if log.action %}动作: <span class="badge {% if log.action in ['Blocked', '已拦截'] %}badge-blocked{% elif log.action in ['Detected', '检测到威胁'] %}badge-detected{% else %}badge-success{% endif %}">{{ log.action }}</span> · {% endif %}
+                        {% if log.result %}结果: {{ log.result }} · {% endif %}
+                        {% if log.file_path %}路径: {{ log.file_path }} · {% endif %}
+                        {% if log.threat_name %}威胁: {{ log.threat_name }} · {% endif %}
+                        {% if log.details %}详情: {{ log.details | tojson }}{% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% if not logs %}
+            <div class="empty-state">该设备暂无日志</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <script>
+        function applyFilter() {
+            const category = document.getElementById('categoryFilter').value.toLowerCase();
+            const keyword = document.getElementById('keywordFilter').value.toLowerCase();
+            const items = document.querySelectorAll('.log-item');
+            items.forEach(item => {
+                const catMatch = !category || (item.dataset.category || '').toLowerCase() === category;
+                const text = (item.dataset.summary + ' ' + item.dataset.path + ' ' + item.dataset.threat).toLowerCase();
+                const kwMatch = !keyword || text.includes(keyword);
+                item.style.display = catMatch && kwMatch ? '' : 'none';
+            });
+        }
+
+        document.getElementById('keywordFilter').addEventListener('keydown', e => {
+            if (e.key === 'Enter') applyFilter();
+        });
+    </script>
+</body>
+</html>

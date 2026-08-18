@@ -1,0 +1,139 @@
+Melix License Agreement
+Version 1.0, April 2026
+
+Copyright (c) 2026 MelixLab. All Rights Reserved.
+
+This software and associated documentation files (the "Software") are protected by
+copyright law and international treaties. Unauthorized reproduction or distribution
+of this Software, or any portion of it, may result in severe civil and criminal
+penalties, and will be prosecuted to the maximum extent possible under law.
+
+================================================================================
+                              TERMS AND CONDITIONS
+================================================================================
+
+1. COMMERCIAL USE RESTRICTIONS
+   ----------------------------
+   1.1 The Software may be used for commercial purposes ONLY with explicit prior
+       written permission from the copyright holder (MelixLab).
+
+   1.2 Any commercial use, including but not limited to:
+       - Selling the Software or derivative works
+       - Using the Software in commercial products or services
+       - Bundling the Software with commercial offerings
+       requires a separate commercial license agreement.
+
+   1.3 Unauthorized commercial use is strictly prohibited and constitutes a
+       material breach of this license.
+
+2. SOURCE CODE ATTRIBUTION REQUIREMENTS
+   -------------------------------------
+   2.1 Any software that incorporates, modifies, or distributes any portion of
+       the source code from this Software MUST include prominent attribution in
+       a clearly visible location within the software, such as:
+       - Settings > About menu
+       - Help > Credits section
+       - Splash screen or startup dialog
+       - Documentation or README files
+
+   2.2 The attribution MUST include:
+       - The name of this Software: "Melix" or "XIGUASecurity"
+       - The original author: "MelixLab"
+       - A statement indicating that portions of the code are derived from this
+         Software
+       - A link to the original repository (if applicable)
+
+   2.3 Example attribution text:
+       "Portions of this software use code from Melix/XIGUASecurity by MelixLab.
+        Used under the Melix License."
+
+3. COPYLEFT AND VIRAL LICENSE REQUIREMENTS
+   ----------------------------------------
+   3.1 This license has VIRAL characteristics. Any software that incorporates,
+       modifies, or is derived from any portion of this Software's source code
+       MUST be distributed under the terms of this Melix License.
+
+   3.2 The viral nature of this license applies to:
+       - Direct copies of source code files
+       - Modified versions of source code
+       - Derivative works based on the source code
+       - Any code that links to or incorporates portions of this Software
+
+   3.3 You may NOT distribute derivative works under a different license that
+       would allow recipients to bypass these requirements.
+
+   3.4 If you distribute the Software or any derivative work, you must provide
+       a complete copy of this Melix License Agreement.
+
+4. PERMITTED USES
+   ---------------
+   Subject to the restrictions above, you are permitted to:
+
+   4.1 Use the Software for personal, non-commercial purposes.
+
+   4.2 Study the source code for educational purposes.
+
+   4.3 Modify the source code for personal use.
+
+   4.4 Distribute the Software or derivative works, PROVIDED THAT:
+        - You comply with all attribution requirements in Section 2
+        - You apply this Melix License to all distributed code (Section 3)
+        - You do not engage in unauthorized commercial use (Section 1)
+
+5. PROHIBITED ACTIONS
+   ------------------
+   You are expressly prohibited from:
+
+   5.1 Using the Software for commercial purposes without written authorization.
+
+   5.2 Removing or obscuring any copyright notices, license terms, or
+       attribution requirements.
+
+   5.3 Distributing the Software or derivative works under a license that is
+       incompatible with the viral requirements of Section 3.
+
+   5.4 Sublicensing the Software under terms that would permit others to avoid
+       these license obligations.
+
+   5.5 Using the Software in any way that violates applicable laws or
+       regulations.
+
+6. TERMINATION
+   -----------
+   6.1 This license automatically terminates if you fail to comply with any of
+       its terms and conditions.
+
+   6.2 Upon termination, you must immediately cease all use of the Software
+       and destroy all copies in your possession.
+
+   6.3 Termination does not relieve you of obligations incurred prior to
+       termination, including attribution requirements for any distributed
+       derivative works.
+
+7. DISCLAIMER OF WARRANTY
+   ----------------------
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+   FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+   DEALINGS IN THE SOFTWARE.
+
+8. GOVERNING LAW
+   -------------
+   This license shall be governed by and construed in accordance with the laws
+   of the jurisdiction where the copyright holder resides, without regard to
+   its conflict of law provisions.
+
+================================================================================
+
+By using, copying, modifying, or distributing this Software, you acknowledge
+that you have read and understood this license agreement and agree to be bound
+by its terms.
+
+For commercial licensing inquiries, contact: [Your Contact Information]
+
+================================================================================
+                         END OF MELIX LICENSE AGREEMENT
+================================================================================

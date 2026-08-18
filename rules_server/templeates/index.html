@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>规则库管理 - XIGUASecurity</title>
+<style>
+:root{--primary:#005fb8;--bg:#f3f2f1;--card:#fff;--text:#323130;--border:#e1dfdd;--red:#d13438;--green:#107c10;--orange:#ffc107;--purple:#8764b8}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Segoe UI',sans-serif;background:var(--bg);color:var(--text);line-height:1.5;padding:20px}
+.container{max-width:1100px;margin:0 auto}
+h1{font-size:24px;margin-bottom:16px;display:flex;align-items:center;gap:12px}
+.badge{background:var(--primary);color:#fff;padding:2px 10px;border-radius:12px;font-size:12px}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+.stat-card{background:var(--card);border-radius:8px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.stat-card h3{font-size:28px;margin-bottom:4px}
+.stat-card p{font-size:13px;color:#605e5c}
+.card{background:var(--card);border-radius:8px;padding:20px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.card h2{font-size:16px;margin-bottom:12px}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
+.row-vertical{flex-direction:column;align-items:stretch;gap:8px}
+input,select,textarea{border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:13px;font-family:inherit;outline:none}
+input:focus,select:focus,textarea:focus{border-color:var(--primary)}
+.btn{background:var(--primary);color:#fff;border:none;border-radius:6px;padding:8px 18px;font-size:13px;cursor:pointer}
+.btn:hover{background:#004e92}
+.btn-danger{background:var(--red)}
+.btn-danger:hover{background:#a4262c}
+.btn-success{background:var(--green)}
+.btn-success:hover{background:#0b6e0b}
+.btn-secondary{background:#8a8886}
+.btn-secondary:hover{background:#605e5c}
+table{width:100%;border-collapse:collapse;font-size:13px;margin-top:10px}
+th,td{text-align:left;padding:8px;border-bottom:1px solid var(--border)}
+th{color:#605e5c;font-weight:600}
+.tag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:600}
+.tag-latest{background:#e1f0ff;color:var(--primary)}
+.result{margin-top:10px;padding:10px;border-radius:6px;font-size:13px;display:none}
+.result.ok{background:#dff6dd;color:#0b6e0b}
+.result.err{background:#fde7e9;color:var(--red)}
+textarea{width:100%;min-height:80px;resize:vertical}
+.small{font-size:12px;color:#605e5c;margin-top:4px}
+.file-input{width:260px}
+.version-list td{vertical-align:top}
+.version-list .files{font-size:12px;color:#605e5c;word-break:break-all}
+.latest-banner{background:linear-gradient(90deg,#e1f0ff,#fff);border-left:4px solid var(--primary);padding:12px 16px;border-radius:6px;margin-bottom:16px}
+.latest-banner p{margin:4px 0;font-size:13px}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>规则库管理面板 <span class="badge">XIGUASecurity</span></h1>
+
+<div class="stats">
+  <div class="stat-card"><h3>{{ latest.version or '-' }}</h3><p>当前最新版本</p></div>
+  <div class="stat-card"><h3>{{ versions|length }}</h3><p>历史版本数</p></div>
+  <div class="stat-card"><h3>{{ (latest.files.whitelist.hash[:8] + '...') if latest.files and latest.files.whitelist.hash else '-' }}</h3><p>白名单哈希</p></div>
+  <div class="stat-card"><h3>{{ (latest.files.blacklist.hash[:8] + '...') if latest.files and latest.files.blacklist.hash else '-' }}</h3><p>黑名单哈希</p></div>
+</div>
+
+{% if latest %}
+<div class="latest-banner">
+  <strong>当前最新版本：{{ latest.version }}</strong>
+  <p>更新时间：{{ latest.updated_at }}</p>
+  <p>版本描述：{{ latest.description or '无' }}</p>
+  <div class="row" style="margin-top:8px">
+    <a class="btn" href="/api/rules/download/{{ latest.version }}/whitelist.json{{ '?key=' + admin_key if admin_key else '' }}">下载 whitelist.json</a>
+    <a class="btn" href="/api/rules/download/{{ latest.version }}/blacklist.json{{ '?key=' + admin_key if admin_key else '' }}">下载 blacklist.json</a>
+    <a class="btn" href="/api/rules/download/{{ latest.version }}/virus_families.json{{ '?key=' + admin_key if admin_key else '' }}">下载 virus_families.json</a>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>上传新版本</h2>
+  <div class="row row-vertical">
+    <label class="small">版本编号（如 1.0.1）</label>
+    <input type="text" id="version" placeholder="1.0.1">
+    <label class="small">版本描述</label>
+    <textarea id="description" placeholder="描述本次更新内容..."></textarea>
+    <label class="small">whitelist.json（可选）</label>
+    <input type="file" id="whitelist" accept=".json" class="file-input">
+    <label class="small">blacklist.json（可选）</label>
+    <input type="file" id="blacklist" accept=".json" class="file-input">
+    <label class="small">virus_families.json（可选）</label>
+    <input type="file" id="virus_families" accept=".json" class="file-input">
+    <button class="btn" onclick="uploadVersion()" style="align-self:flex-start">上传并创建版本</button>
+  </div>
+  <div id="upload-result" class="result"></div>
+</div>
+
+<div class="card">
+  <h2>历史版本管理</h2>
+  <table class="version-list">
+    <thead><tr><th>版本</th><th>描述</th><th>更新时间</th><th>文件</th><th>操作</th></tr></thead>
+    <tbody>
+    {% for v in versions %}
+      <tr>
+        <td>
+          {{ v.version }}
+          {% if latest and latest.version == v.version %}<span class="tag tag-latest">最新</span>{% endif %}
+        </td>
+        <td>{{ v.description or '-' }}</td>
+        <td>{{ v.updated_at or '-' }}</td>
+        <td class="files">
+          {% for fname, info in v.files.items() %}
+            {{ fname }} ({{ info.size }} bytes, {{ (info.hash[:10] + '...') if info.hash else '-' }})<br>
+          {% endfor %}
+        </td>
+        <td>
+          <button class="btn btn-secondary" style="padding:2px 8px;font-size:12px" onclick="setLatest('{{ v.version }}')">设为最新</button>
+          <button class="btn btn-danger" style="padding:2px 8px;font-size:12px" onclick="deleteVersion('{{ v.version }}')">删除</button>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5" style="text-align:center;color:#605e5c">暂无历史版本</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+</div>
+
+<script>
+const KEY = new URLSearchParams(location.search).get('key') || '';
+
+function show(id, text, ok){
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.style.display = 'block';
+  el.className = 'result ' + (ok ? 'ok' : 'err');
+}
+
+function apiUrl(path){
+  if(!KEY) return path;
+  return path + (path.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(KEY);
+}
+
+async function uploadVersion(){
+  const version = document.getElementById('version').value.trim();
+  const description = document.getElementById('description').value.trim();
+  if(!version){ show('upload-result','请输入版本编号',false); return; }
+
+  const fd = new FormData();
+  fd.append('version', version);
+  fd.append('description', description);
+  for(const name of ['whitelist','blacklist','virus_families']){
+    const input = document.getElementById(name);
+    if(input.files && input.files[0]){
+      fd.append(name + '.json', input.files[0]);
+    }
+  }
+
+  try{
+    const res = await fetch(apiUrl('/api/rules/upload'), {method:'POST', body:fd});
+    const data = await res.json();
+    show('upload-result', data.msg || JSON.stringify(data), data.code === 200);
+    if(data.code === 200) setTimeout(() => location.reload(), 800);
+  }catch(e){
+    show('upload-result', '上传失败: ' + e.message, false);
+  }
+}
+
+async function setLatest(version){
+  if(!confirm('确定将 ' + version + ' 设为最新版本？')) return;
+  try{
+    const res = await fetch(apiUrl('/api/rules/set_latest?version=' + encodeURIComponent(version)), {method:'POST'});
+    const data = await res.json();
+    alert(data.msg || JSON.stringify(data));
+    if(data.code === 200) location.reload();
+  }catch(e){
+    alert('操作失败: ' + e.message);
+  }
+}
+
+async function deleteVersion(version){
+  if(!confirm('确定删除版本 ' + version + '？此操作不可恢复。')) return;
+  try{
+    const res = await fetch(apiUrl('/api/rules/delete?version=' + encodeURIComponent(version)), {method:'POST'});
+    const data = await res.json();
+    alert(data.msg || JSON.stringify(data));
+    if(data.code === 200) location.reload();
+  }catch(e){
+    alert('删除失败: ' + e.message);
+  }
+}
+</script>
+</body>
+</html>

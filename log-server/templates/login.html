@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XIGUASecurity - 管理后台登录</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="login-page">
+    <div class="login-card">
+        <div class="logo">X</div>
+        <h1>XIGUASecurity</h1>
+        <p class="subtitle">日志管理后台</p>
+        {% if error %}<p class="error">密码错误</p>{% endif %}
+        <form method="post" action="/login">
+            <div class="form-group">
+                <label>管理密码</label>
+                <input type="password" name="password" placeholder="请输入管理密码" required autofocus>
+            </div>
+            <button type="submit" class="btn btn-primary">登录</button>
+        </form>
+    </div>
+</body>
+</html>

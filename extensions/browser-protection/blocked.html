@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>网站已被拦截 - XIGUA 浏览器防护</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI Variable','Segoe UI',system-ui,-apple-system,sans-serif;
+      background: #F0F0F0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .card {
+      background: #FFFFFF;
+      border-radius: 8px;
+      max-width: 640px;
+      width: 92%;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+      padding: 28px 32px;
+      display: flex;
+      align-items: flex-start;
+      gap: 20px;
+    }
+    .icon-area {
+      flex-shrink: 0;
+      width: 48px;
+      height: 48px;
+      background: #D13438;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 24px;
+      font-weight: 700;
+      margin-top: 2px;
+    }
+    .content-area {
+      flex: 1;
+      min-width: 0;
+    }
+    h1 {
+      font-size: 18px;
+      font-weight: 600;
+      color: #1C1C1C;
+      margin-bottom: 4px;
+    }
+    .sub {
+      font-size: 14px;
+      color: #5F5F5F;
+      margin-bottom: 16px;
+    }
+    .url-box {
+      background: #F8F8F8;
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-size: 13px;
+      color: #5F5F5F;
+      word-break: break-all;
+      margin-bottom: 16px;
+      border: 1px solid #EDEDED;
+    }
+    .url-box span {
+      color: #D13438;
+      font-weight: 500;
+    }
+    .desc {
+      font-size: 13px;
+      color: #5F5F5F;
+      line-height: 1.6;
+      margin-bottom: 16px;
+    }
+    .btn {
+      display: inline-block;
+      padding: 6px 20px;
+      background: #005FB8;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      font-size: 14px;
+      font-weight: 400;
+      cursor: pointer;
+      text-decoration: none;
+      font-family: inherit;
+    }
+    .btn:active { background: #004b94; }
+    .footer {
+      margin-top: 14px;
+      font-size: 11px;
+      color: #BBB;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon-area">!</div>
+    <div class="content-area">
+      <h1>此网站已被拦截</h1>
+      <p class="sub">XIGUA 浏览器防护已阻止此恶意网站</p>
+      <div class="url-box">该域名已被列入 XIGUA 恶意域名库，访问已被自动拦截。</div>
+      <div class="desc">
+        该网站已被识别为银狐病毒钓鱼站点，可能试图窃取您的银行账号、密码和验证码。XIGUA Security 已自动拦截此次访问。
+      </div>
+      <button class="btn" onclick="window.history.back()">返回上一页</button>
+      <div class="footer">XIGUA Security Browser Protection</div>
+    </div>
+  </div>
+</body>
+</html>

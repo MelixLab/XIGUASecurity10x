@@ -1,0 +1,117 @@
+{
+  "version": "2",
+  "description": "行为启发式检测规则 - 基于API调用计数的阈值匹配规则",
+  "rules": [
+    {
+      "condition": {"MBR/Disk": 2},
+      "result": {
+        "name": "HEUR:Trojan/KillDisk",
+        "family": "KillDisk",
+        "score": 40,
+        "detail": "启发式: MBR破坏行为"
+      }
+    },
+    {
+      "condition": {"Ransomware/Crypto": 2},
+      "exclusions": ["MBR/Disk"],
+      "result": {
+        "name": "HEUR:Trojan/Ransom",
+        "family": "Generic",
+        "score": 35,
+        "detail": "启发式: 加密行为（至少2个加密API调用）"
+      }
+    },
+    {
+      "condition": {"RAT/Network": 3},
+      "result": {
+        "name": "HEUR:Trojan/RAT",
+        "family": "Generic",
+        "score": 40,
+        "detail": "启发式: 远程控制行为（至少3个网络API调用）"
+      }
+    },
+    {
+      "condition": {"Keylogger": 2},
+      "result": {
+        "name": "HEUR:Trojan/Keylogger",
+        "family": "Generic",
+        "score": 40,
+        "detail": "启发式: 键盘记录行为"
+      }
+    },
+    {
+      "condition": {"Dropper": 3},
+      "result": {
+        "name": "HEUR:Trojan/Dropper",
+        "family": "Generic",
+        "score": 40,
+        "detail": "启发式: 释放器行为"
+      }
+    },
+    {
+      "packer": "Themida",
+      "result": {
+        "name": "Packed/Themida",
+        "family": "KillDisk",
+        "score": 30,
+        "detail": "启发式: Themida加壳"
+      }
+    },
+    {
+      "condition": {"AntiDebug": 2},
+      "result": {
+        "name": "HEUR:Trojan/Agent",
+        "family": "Generic",
+        "score": 30,
+        "detail": "启发式: 反调试行为"
+      }
+    },
+    {
+      "condition_or": {"RAT/Network": 1, "Persistence": 1},
+      "result": {
+        "name": "HEUR:Trojan/Agent",
+        "family": "Generic",
+        "score": 25,
+        "detail": "启发式: 网络通信或持久化行为"
+      }
+    },
+    {
+      "condition": {"ProcessManip": 2, "UAC/Privilege": 1},
+      "exclusions": ["RAT/Network", "MBR/Disk", "Ransomware/Crypto"],
+      "result": {
+        "name": "HEUR:Trojan/AVKill",
+        "family": "Generic",
+        "score": 35,
+        "detail": "启发式: 进程操作+提权行为（排除杀毒软件正常行为）"
+      }
+    },
+    {
+      "condition": {"Injector": 2},
+      "exclusions": ["RAT/Network"],
+      "result": {
+        "name": "HEUR:Trojan/Injector",
+        "family": "Generic",
+        "score": 35,
+        "detail": "启发式: 进程注入行为"
+      }
+    },
+    {
+      "condition": {"RAT/Network": 1, "Persistence": 1, "Registry": 2},
+      "result": {
+        "name": "HEUR:Backdoor/Generic",
+        "family": "Generic",
+        "score": 30,
+        "detail": "启发式: 网络通信+持久化+注册表操作"
+      }
+    },
+    {
+      "condition": {"Cryptominer": 2, "RAT/Network": 1},
+      "result": {
+        "name": "HEUR:Trojan/CoinMiner",
+        "family": "Generic",
+        "score": 35,
+        "detail": "启发式: 加密货币挖矿行为"
+      }
+    }
+  ]
+}

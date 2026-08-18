@@ -1,0 +1,361 @@
+﻿
+************* Preparing the environment for Debugger Extensions Gallery repositories **************
+   ExtensionRepository : Implicit
+   UseExperimentalFeatureForNugetShare : true
+   AllowNugetExeUpdate : true
+   NonInteractiveNuget : true
+   AllowNugetMSCredentialProviderInstall : true
+   AllowParallelInitializationOfLocalRepositories : true
+   EnableRedirectToChakraJsProvider : false
+
+   -- Configuring repositories
+      ----> Repository : LocalInstalled, Enabled: true
+      ----> Repository : UserExtensions, Enabled: true
+
+>>>>>>>>>>>>> Preparing the environment for Debugger Extensions Gallery repositories completed, duration 0.000 seconds
+
+************* Waiting for Debugger Extensions Gallery to Initialize **************
+
+>>>>>>>>>>>>> Waiting for Debugger Extensions Gallery to Initialize completed, duration 0.031 seconds
+   ----> Repository : UserExtensions, Enabled: true, Packages count: 0
+   ----> Repository : LocalInstalled, Enabled: true, Packages count: 30
+
+Microsoft (R) Windows Debugger Version 10.0.28000.2526 AMD64
+Copyright (c) Microsoft Corporation. All rights reserved.
+
+
+Loading Dump File [C:\Windows\Minidump\080126-18125-01.dmp]
+Mini Kernel Dump File: Only registers and stack trace are available
+
+
+************* Path validation summary **************
+Response                         Time (ms)     Location
+Deferred                                       srv*C:\symbols*https://msdl.microsoft.com/download/symbols
+OK                                             C:\Users\MEMZUAC\Desktop\KMDF Driver\XIGUAEndPoint\Build\x64\Debug
+OK                                             C:\Users\MEMZUAC\Desktop\KMDF Driver\XIGUASelfProtect\Build\x64\Debug
+Symbol search path is: srv*C:\symbols*https://msdl.microsoft.com/download/symbols;C:\Users\MEMZUAC\Desktop\KMDF Driver\XIGUAEndPoint\Build\x64\Debug;C:\Users\MEMZUAC\Desktop\KMDF Driver\XIGUASelfProtect\Build\x64\Debug
+Executable search path is: 
+Windows 10 Kernel Version 26100 MP (2 procs) Free x64
+Product: WinNt, suite: TerminalServer SingleUserTS
+Edition build lab: 26100.1.amd64fre.ge_release.240331-1435
+Kernel base = 0xfffff806`c8e00000 PsLoadedModuleList = 0xfffff806`c9cf5350
+Debug session time: Sat Aug  1 13:28:59.301 2026 (UTC + 8:00)
+System Uptime: 0 days 0:02:26.995
+Loading Kernel Symbols
+...............................................................
+................................................................
+................................................................
+...
+Loading User Symbols
+PEB is paged out (Peb.Ldr = 00000035`0d9ea018).  Type ".hh dbgerr001" for details
+Loading unloaded module list
+......
+For analysis of this file, run !analyze -v
+0: kd> cdb: Reading initial command '!analyze -v; kv; q'
+Loading Kernel Symbols
+...............................................................
+................................................................
+................................................................
+...
+Loading User Symbols
+PEB is paged out (Peb.Ldr = 00000035`0d9ea018).  Type ".hh dbgerr001" for details
+Loading unloaded module list
+......
+*******************************************************************************
+*                                                                             *
+*                        Bugcheck Analysis                                    *
+*                                                                             *
+*******************************************************************************
+
+SYSTEM_SERVICE_EXCEPTION (3b)
+An exception happened while executing a system service routine.
+Arguments:
+Arg1: 00000000c0000005, Exception code that caused the BugCheck
+Arg2: fffff8065c3d9b9a, Address of the instruction which caused the BugCheck
+Arg3: fffff50b0b8d6bc0, Address of the context record for the exception that caused the BugCheck
+Arg4: 0000000000000000, zero.
+
+Debugging Details:
+------------------
+
+*** WARNING: Unable to verify timestamp for WdFilter.sys
+
+KEY_VALUES_STRING: 1
+
+    Key  : Analysis.CPU.mSec
+    Value: 1937
+
+    Key  : Analysis.Elapsed.mSec
+    Value: 50093
+
+    Key  : Analysis.IO.Other.Mb
+    Value: 8
+
+    Key  : Analysis.IO.Read.Mb
+    Value: 1
+
+    Key  : Analysis.IO.Write.Mb
+    Value: 12
+
+    Key  : Analysis.Init.CPU.mSec
+    Value: 1015
+
+    Key  : Analysis.Init.Elapsed.mSec
+    Value: 317467
+
+    Key  : Analysis.Memory.CommitPeak.Mb
+    Value: 83
+
+    Key  : Analysis.Version.DbgEng
+    Value: 10.0.28000.2526
+
+    Key  : Analysis.Version.Description
+    Value: 10.2506.23.01 amd64fre
+
+    Key  : Analysis.Version.Ext
+    Value: 1.2506.23.1
+
+    Key  : Bugcheck.Code.LegacyAPI
+    Value: 0x3b
+
+    Key  : Bugcheck.Code.TargetModel
+    Value: 0x3b
+
+    Key  : Failure.Bucket
+    Value: AV_WdFilter!unknown_function
+
+    Key  : Failure.Exception.IP.Address
+    Value: 0xfffff8065c3d9b9a
+
+    Key  : Failure.Exception.IP.Module
+    Value: WdFilter
+
+    Key  : Failure.Exception.IP.Offset
+    Value: 0x9b9a
+
+    Key  : Failure.Hash
+    Value: {2198f8cc-5049-ce5a-ecb0-bf2157f53e1c}
+
+    Key  : Hypervisor.Enlightenments.Value
+    Value: 12576
+
+    Key  : Hypervisor.Enlightenments.ValueHex
+    Value: 0x3120
+
+    Key  : Hypervisor.Flags.AnyHypervisorPresent
+    Value: 1
+
+    Key  : Hypervisor.Flags.ApicEnlightened
+    Value: 0
+
+    Key  : Hypervisor.Flags.ApicVirtualizationAvailable
+    Value: 0
+
+    Key  : Hypervisor.Flags.AsyncMemoryHint
+    Value: 0
+
+    Key  : Hypervisor.Flags.CoreSchedulerRequested
+    Value: 0
+
+    Key  : Hypervisor.Flags.CpuManager
+    Value: 0
+
+    Key  : Hypervisor.Flags.DeprecateAutoEoi
+    Value: 1
+
+    Key  : Hypervisor.Flags.DynamicCpuDisabled
+    Value: 0
+
+    Key  : Hypervisor.Flags.Epf
+    Value: 0
+
+    Key  : Hypervisor.Flags.ExtendedProcessorMasks
+    Value: 0
+
+    Key  : Hypervisor.Flags.HardwareMbecAvailable
+    Value: 0
+
+    Key  : Hypervisor.Flags.MaxBankNumber
+    Value: 0
+
+    Key  : Hypervisor.Flags.MemoryZeroingControl
+    Value: 0
+
+    Key  : Hypervisor.Flags.NoExtendedRangeFlush
+    Value: 1
+
+    Key  : Hypervisor.Flags.NoNonArchCoreSharing
+    Value: 0
+
+    Key  : Hypervisor.Flags.Phase0InitDone
+    Value: 1
+
+    Key  : Hypervisor.Flags.PowerSchedulerQos
+    Value: 0
+
+    Key  : Hypervisor.Flags.RootScheduler
+    Value: 0
+
+    Key  : Hypervisor.Flags.SynicAvailable
+    Value: 1
+
+    Key  : Hypervisor.Flags.UseQpcBias
+    Value: 0
+
+    Key  : Hypervisor.Flags.Value
+    Value: 536632
+
+    Key  : Hypervisor.Flags.ValueHex
+    Value: 0x83038
+
+    Key  : Hypervisor.Flags.VpAssistPage
+    Value: 1
+
+    Key  : Hypervisor.Flags.VsmAvailable
+    Value: 0
+
+    Key  : Hypervisor.RootFlags.AccessStats
+    Value: 0
+
+    Key  : Hypervisor.RootFlags.CrashdumpEnlightened
+    Value: 0
+
+    Key  : Hypervisor.RootFlags.CreateVirtualProcessor
+    Value: 0
+
+    Key  : Hypervisor.RootFlags.DisableHyperthreading
+    Value: 0
+
+    Key  : Hypervisor.RootFlags.HostTimelineSync
+    Value: 0
+
+    Key  : Hypervisor.RootFlags.HypervisorDebuggingEnabled
+    Value: 0
+
+    Key  : Hypervisor.RootFlags.IsHyperV
+    Value: 0
+
+    Key  : Hypervisor.RootFlags.LivedumpEnlightened
+    Value: 0
+
+    Key  : Hypervisor.RootFlags.MapDeviceInterrupt
+    Value: 0
+
+    Key  : Hypervisor.RootFlags.MceEnlightened
+    Value: 0
+
+    Key  : Hypervisor.RootFlags.Nested
+    Value: 0
+
+    Key  : Hypervisor.RootFlags.StartLogicalProcessor
+    Value: 0
+
+    Key  : Hypervisor.RootFlags.Value
+    Value: 0
+
+    Key  : Hypervisor.RootFlags.ValueHex
+    Value: 0x0
+
+    Key  : WER.OS.Branch
+    Value: ge_release
+
+    Key  : WER.OS.Version
+    Value: 10.0.26100.1
+
+    Key  : WER.System.BIOSRevision
+    Value: 255.255.0.0
+
+
+BUGCHECK_CODE:  3b
+
+BUGCHECK_P1: c0000005
+
+BUGCHECK_P2: fffff8065c3d9b9a
+
+BUGCHECK_P3: fffff50b0b8d6bc0
+
+BUGCHECK_P4: 0
+
+FILE_IN_CAB:  080126-18125-01.dmp
+
+FAULTING_THREAD:  ffffaa0f5c720080
+
+CONTEXT:  fffff50b0b8d6bc0 -- (.cxr 0xfffff50b0b8d6bc0)
+rax=fffff8065c3d9b80 rbx=ffffaa0f5ae07998 rcx=ffffaa0f5ae07998
+rdx=fffff50b0b8d7678 rsi=0000000000000000 rdi=ffffaa0f5ae078b0
+rip=fffff8065c3d9b9a rsp=fffff50b0b8d75f0 rbp=ffffaa0f5db814d0
+ r8=0000000000000000  r9=0000000000000000 r10=0000fffff8065c3d
+r11=ffffa9fc30600000 r12=0000021449b27900 r13=0000000000000000
+r14=ffffaa0f5ae07aa8 r15=ffffaa0f5db81950
+iopl=0         nv up ei ng nz na po nc
+cs=0010  ss=0018  ds=002b  es=002b  fs=0053  gs=002b             efl=00050286
+WdFilter+0x9b9a:
+fffff806`5c3d9b9a 498b4828        mov     rcx,qword ptr [r8+28h] ds:002b:00000000`00000028=????????????????
+Resetting default scope
+
+BLACKBOXBSD: 1 (!blackboxbsd)
+
+
+BLACKBOXNTFS: 1 (!blackboxntfs)
+
+
+BLACKBOXWINLOGON: 1 (!blackboxwinlogon)
+
+
+CUSTOMER_CRASH_COUNT:  1
+
+PROCESS_NAME:  MsMpEng.exe
+
+STACK_TEXT:  
+fffff50b`0b8d75f0 00000000`00000000     : ffffaa0f`5c5ac600 ffffe382`3b540180 00000000`00000000 ffffaa0f`5ae07998 : WdFilter+0x9b9a
+
+
+SYMBOL_NAME:  WdFilter+9b9a
+
+MODULE_NAME: WdFilter
+
+IMAGE_NAME:  WdFilter.sys
+
+STACK_COMMAND: .cxr 0xfffff50b0b8d6bc0 ; kb
+
+BUCKET_ID_FUNC_OFFSET:  9b9a
+
+FAILURE_BUCKET_ID:  AV_WdFilter!unknown_function
+
+OS_VERSION:  10.0.26100.1
+
+BUILDLAB_STR:  ge_release
+
+OSPLATFORM_TYPE:  x64
+
+OSNAME:  Windows 10
+
+FAILURE_ID_HASH:  {2198f8cc-5049-ce5a-ecb0-bf2157f53e1c}
+
+Followup:     MachineOwner
+---------
+
+ # Child-SP          RetAddr               : Args to Child                                                           : Call Site
+00 fffff50b`0b8d6278 fffff806`c94bfbe9     : 00000000`0000003b 00000000`c0000005 fffff806`5c3d9b9a fffff50b`0b8d6bc0 : nt!KeBugCheckEx
+01 fffff50b`0b8d6280 fffff806`c94bec3c     : fffff50b`00000001 fffff50b`00000001 fffff806`c96bf1a4 fffff806`c94bebc0 : nt!KiBugCheckDispatch+0x69
+02 fffff50b`0b8d63c0 fffff806`c94b5272     : fffff50b`0b8d6bc0 00000000`00000000 fffff50b`0b8d6490 00000000`00000000 : nt!KiSystemServiceHandler+0x7c
+03 fffff50b`0b8d6400 fffff806`c9031a22     : fffff50b`0b8d6490 fffff806`c8e00000 fffff806`c94bf258 fffff806`c8f17598 : nt!RtlpExecuteHandlerForException+0x12
+04 fffff50b`0b8d6430 fffff806`c91d620f     : fffff50b`0b8d6bc0 fffff50b`0b8d70c0 fffff50b`0b8d6bc0 fffff50b`0b8d7280 : nt!RtlDispatchException+0x2d2
+05 fffff50b`0b8d6b90 fffff806`c94bfd45     : fffff50b`0b8d76d8 fffff806`c9c38d40 ffffaa0f`5c720080 ffffaa0f`5a84f000 : nt!KiDispatchException+0x35f
+06 fffff50b`0b8d7280 fffff806`c94bae82     : 00000000`00000000 7fffffff`fffffffc ffffaa0f`5ae078b0 00000000`00000000 : nt!KiExceptionDispatch+0x145
+07 fffff50b`0b8d7460 fffff806`5c3d9b9a     : 00000000`00000000 ffffaa0f`5c5ac600 ffffe382`3b540180 00000000`00000000 : nt!KiPageFault+0x442 (TrapFrame @ fffff50b`0b8d7460)
+08 fffff50b`0b8d75f0 00000000`00000000     : ffffaa0f`5c5ac600 ffffe382`3b540180 00000000`00000000 ffffaa0f`5ae07998 : WdFilter+0x9b9a
+quit:
+NatVis script unloaded from 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\Visualizers\atlmfc.natvis'
+NatVis script unloaded from 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\Visualizers\concurrency.natvis'
+NatVis script unloaded from 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\Visualizers\cpp_rest.natvis'
+NatVis script unloaded from 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\Visualizers\Kernel.natvis'
+NatVis script unloaded from 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\Visualizers\ObjectiveC.natvis'
+NatVis script unloaded from 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\Visualizers\stl.natvis'
+NatVis script unloaded from 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\Visualizers\Usb4Kd.natvis'
+NatVis script unloaded from 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\Visualizers\Windows.Data.Json.natvis'
+NatVis script unloaded from 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\Visualizers\Windows.Devices.Geolocation.natvis'
+NatVis script unloaded from 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\Visualizers\Windows.Devices.Sensors.natvis'
+NatVis script unloaded from 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\Visualizers\Windows.Media.natvis'
+NatVis script unloaded from 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\Visualizers\windows.natvis'
+NatVis script unloaded from 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\Visualizers\winrt.natvis'

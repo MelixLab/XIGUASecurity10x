@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>可疑文件检测</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --accent: #0078D4;
+            --bg: #ffffff;
+            --bg-secondary: #f5f5f5;
+            --text-primary: #1a1a1a;
+            --text-secondary: #616161;
+            --text-tertiary: #9e9e9e;
+            --border: #e0e0e0;
+            --danger: #D13438;
+            --warning: #CA8A04;
+            --success: #10b981;
+        }
+
+        body {
+            font-family: "Segoe UI Variable", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg);
+            overflow: hidden;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        .intercept-container {
+            width: 520px;
+            height: 320px;
+            display: flex;
+            flex-direction: column;
+            background: var(--bg);
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
+            border: 1px solid var(--border);
+            position: relative;
+        }
+
+        .brand {
+            position: absolute;
+            top: 12px;
+            left: 16px;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--accent);
+            letter-spacing: 0.5px;
+            z-index: 10;
+        }
+
+        .content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 16px 32px 10px;
+            gap: 6px;
+        }
+
+        .icon-area {
+            width: 68px;
+            height: 68px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .icon-area svg {
+            width: 68px;
+            height: 68px;
+        }
+
+        .title-area { text-align: center; }
+
+        .main-title {
+            font-size: 18px;
+            font-weight: 400;
+            color: var(--text-primary);
+            margin-bottom: 6px;
+            line-height: 1.3;
+        }
+
+        .sub-title {
+            font-size: 12.5px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+            max-width: 380px;
+        }
+
+        .file-info {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 14px;
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            max-width: 420px;
+            width: 100%;
+        }
+
+        .file-icon { width: 16px; height: 16px; flex-shrink: 0; color: var(--text-tertiary); }
+
+        .file-name {
+            font-size: 12px;
+            color: var(--text-secondary);
+            font-family: "Cascadia Code", "Consolas", monospace;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            flex: 1;
+        }
+
+        .progress-container {
+            width: 100%;
+            max-width: 420px;
+            height: 4px;
+            background: var(--bg-secondary);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .progress-bar {
+            height: 100%;
+            width: 30%;
+            background: linear-gradient(90deg, var(--accent), #4BA3E3, var(--accent));
+            background-size: 200% 100%;
+            border-radius: 2px;
+            animation: slideProgress 2s ease-in-out infinite;
+        }
+
+        @keyframes slideProgress {
+            0% { transform: translateX(-100%); }
+            50% { transform: translateX(233%); }
+            100% { transform: translateX(-100%); }
+        }
+
+        .status-text {
+            font-size: 11px;
+            color: var(--text-tertiary);
+            min-height: 16px;
+        }
+
+        .countdown {
+            font-size: 11px;
+            color: var(--accent);
+            font-weight: 500;
+        }
+
+        .footer {
+            position: absolute;
+            bottom: 45px;
+            left: 0;
+            right: 0;
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            padding: 0 20px;
+            flex-shrink: 0;
+            z-index: 5;
+        }
+
+        .tech-support {
+            position: absolute;
+            bottom: 8px;
+            right: 14px;
+            font-size: 11px;
+            color: var(--text-tertiary);
+            z-index: 10;
+            opacity: 0.7;
+        }
+
+        .version-info {
+            position: absolute;
+            bottom: 8px;
+            left: 14px;
+            font-size: 11px;
+            color: var(--text-tertiary);
+            z-index: 10;
+            opacity: 0.7;
+        }
+
+        .btn {
+            height: 34px;
+            padding: 0 20px;
+            border-radius: 6px;
+            border: none;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            transition: all 0.15s;
+            font-family: inherit;
+        }
+
+        .btn-primary { background: var(--accent); color: white; min-width: 100px; }
+        .btn-primary:hover { background: #106EBE; }
+        .btn-primary:active { background: #005A9E; transform: scale(0.98); }
+        .btn-primary:disabled { background: #B0D4F1; cursor: not-allowed; transform: none; }
+
+        .btn-secondary {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+            min-width: 100px;
+        }
+        .btn-secondary:hover { background: rgba(0, 0, 0, 0.03); border-color: #bdbdbd; }
+
+        .btn-danger { background: var(--danger); color: white; min-width: 100px; }
+        .btn-danger:hover { background: #B71C1C; }
+
+        .btn-success { background: var(--success); color: white; min-width: 100px; }
+        .btn-success:hover { background: #059669; }
+
+        .result-safe .main-title { color: var(--success); }
+        .result-danger .main-title { color: var(--danger); }
+
+        @keyframes scaleIn {
+            0% { transform: scale(0); opacity: 0; }
+            60% { transform: scale(1.1); }
+            100% { transform: scale(1); opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div class="intercept-container">
+        <div class="brand">PeAntivirusSoftware</div>
+
+        <div class="content" id="content">
+            <div class="icon-area" id="icon-area">
+                <svg width="72" height="72" viewBox="0 0 48 48" fill="none" overflow="hidden">
+                  <defs>
+                    <linearGradient id="trail-up" x1="0" y1="1" x2="0" y2="0">
+                      <stop offset="0%" stop-color="#0078D4" stop-opacity="0.35"/>
+                      <stop offset="100%" stop-color="#0078D4" stop-opacity="0"/>
+                    </linearGradient>
+                    <linearGradient id="trail-down" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#0078D4" stop-opacity="0.35"/>
+                      <stop offset="100%" stop-color="#0078D4" stop-opacity="0"/>
+                    </linearGradient>
+                  </defs>
+                  <rect x="10" y="6" width="28" height="36" rx="4" stroke="#0078D4" stroke-width="1.8" fill="#E8F4FD" opacity="0.5"/>
+                  <path d="M28 6v8h8" stroke="#0078D4" stroke-width="1.5" fill="none" opacity="0.4"/>
+                  <rect x="16" y="18" width="16" height="2.5" rx="1" fill="#0078D4" opacity="0.3"/>
+                  <rect x="16" y="24" width="12" height="2.5" rx="1" fill="#0078D4" opacity="0.2"/>
+                  <rect x="16" y="30" width="14" height="2.5" rx="1" fill="#0078D4" opacity="0.25"/>
+                  <rect x="4" y="-20" width="40" height="12" rx="1.5" fill="url(#trail-up)">
+                    <animate attributeName="y" values="-6;26;-6" keyTimes="0;0.5;1" calcMode="spline" keySplines="0.33 0 0.67 1;0.33 0 0.67 1" dur="1.8s" repeatCount="indefinite"/>
+                    <animate attributeName="opacity" values="1;1;0;0;1" keyTimes="0;0.30;0.50;0.70;1" calcMode="spline" keySplines="0 0 1 1;0.33 0 0.67 1;0 0 1 1;0.33 0 0.67 1" dur="1.8s" repeatCount="indefinite"/>
+                  </rect>
+                  <rect x="4" y="50" width="40" height="12" rx="1.5" fill="url(#trail-down)">
+                    <animate attributeName="y" values="8;40;8" keyTimes="0;0.5;1" calcMode="spline" keySplines="0.33 0 0.67 1;0.33 0 0.67 1" dur="1.8s" repeatCount="indefinite"/>
+                    <animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.30;0.50;0.70;1" calcMode="spline" keySplines="0 0 1 1;0.33 0 0.67 1;0 0 1 1;0.33 0 0.67 1" dur="1.8s" repeatCount="indefinite"/>
+                  </rect>
+                  <rect x="4" y="6" width="40" height="2.5" rx="1.25" fill="#0078D4" opacity="0.75">
+                    <animate attributeName="y" values="6;38;6" keyTimes="0;0.5;1" calcMode="spline" keySplines="0.33 0 0.67 1;0.33 0 0.67 1" dur="1.8s" repeatCount="indefinite"/>
+                  </rect>
+                  <rect x="4" width="40" height="1" rx="0.5" fill="#fff" opacity="0.6">
+                    <animate attributeName="y" values="7;39;7" keyTimes="0;0.5;1" calcMode="spline" keySplines="0.33 0 0.67 1;0.33 0 0.67 1" dur="1.8s" repeatCount="indefinite"/>
+                  </rect>
+                </svg>
+            </div>
+
+            <div class="title-area" id="title-area">
+                <div class="main-title" id="main-title">我们需要确保此文件是否安全</div>
+                <div class="sub-title" id="sub-title">为了确保此文件对您的计算机是否有害，我们已将其发送至病毒实验室进行检测</div>
+            </div>
+
+            <div class="file-info" id="file-info">
+                <svg class="file-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                    <polyline points="14 2 14 8 20 8"/>
+                </svg>
+                <span class="file-name" id="file-name">loading...</span>
+            </div>
+
+            <div class="progress-container" id="progress-container">
+                <div class="progress-bar" id="progress-bar"></div>
+            </div>
+
+            <div class="status-text" id="status-text">
+                <span id="countdown" class="countdown"></span>
+            </div>
+        </div>
+
+        <div class="footer" id="footer" style="display:none;"></div>
+        <div class="version-info">西瓜杀毒沙箱分析组件v1.1</div>
+        <div class="tech-support">由西瓜杀毒提供技术支持</div>
+    </div>
+
+    <script>
+        async function tauriInvoke(cmd, args) {
+            if (window.__TAURI__ && window.__TAURI__.core) {
+                return window.__TAURI__.core.invoke(cmd, args);
+            }
+            const mod = await import('https://cdn.jsdelivr.net/npm/@tauri-apps/api@2/core.js');
+            return mod.invoke(cmd, args);
+        }
+
+        async function closeWindow() {
+            try {
+                if (window.__TAURI__ && window.__TAURI__.window) {
+                    await window.__TAURI__.window.getCurrentWindow().close();
+                } else { window.close(); }
+            } catch (_) { window.close(); }
+        }
+
+        const params = new URLSearchParams(window.location.search);
+        const fileName = params.get('name') || '未知文件';
+        const filePath = params.get('path') || '';
+        const pid = params.get('pid') || '0';
+        const confidence = params.get('confidence') || '0';
+
+        const mainTitle = document.getElementById('main-title');
+        const subTitle = document.getElementById('sub-title');
+        const fileNameEl = document.getElementById('file-name');
+        const progressContainer = document.getElementById('progress-container');
+        const progressBar = document.getElementById('progress-bar');
+        const statusText = document.getElementById('status-text');
+        const countdownEl = document.getElementById('countdown');
+        const content = document.getElementById('content');
+        const footer = document.getElementById('footer');
+        const iconArea = document.getElementById('icon-area');
+
+        fileNameEl.textContent = fileName;
+
+        // 倒计时（预计120秒）
+        let remainingSeconds = 120;
+        const countdownTimer = setInterval(() => {
+            remainingSeconds--;
+            if (remainingSeconds > 0) {
+                countdownEl.textContent = `预计等待 ${remainingSeconds} 秒`;
+            } else {
+                countdownEl.textContent = '正在获取结果...';
+            }
+        }, 1000);
+        countdownEl.textContent = `预计等待 ${remainingSeconds} 秒`;
+
+        // 立即开始分析
+        (async () => {
+            try {
+                const result = await tauriInvoke('suspicious_analyze_file', {
+                    filePath: filePath,
+                    pid: parseInt(pid),
+                });
+
+                clearInterval(countdownTimer);
+                iconArea.style.display = 'none';
+                progressBar.style.animation = 'none';
+                progressBar.style.transform = 'translateX(0)';
+                progressBar.style.width = '100%';
+                progressBar.style.background = 'var(--success)';
+                progressContainer.style.opacity = '0';
+                countdownEl.textContent = '';
+
+                const verdict = result.verdict || 'unknown';
+                const threatScore = result.threat_score || 0;
+
+                // 显示操作按钮
+                footer.style.display = '';
+
+                if (verdict === 'safe' || threatScore < 20) {
+                    content.classList.add('result-safe');
+                    iconArea.style.display = '';
+                    iconArea.style.animation = 'scaleIn 0.5s ease';
+                    iconArea.innerHTML = `<svg width="68" height="68" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="1.5" style="animation: scaleIn 0.5s ease">
+                       <circle cx="12" cy="12" r="10"/>
+                       <path d="M9 12l2 2 4-4"/>
+                     </svg>`;
+                    progressBar.style.background = 'var(--success)';
+                    mainTitle.textContent = '很好，文件正常';
+                    subTitle.textContent = '云端沙箱分析确认此文件安全，可以放心运行';
+                    footer.innerHTML = '<button class="btn btn-success" id="btn-allow-safe">允许运行</button>';
+                    document.getElementById('btn-allow-safe').addEventListener('click', async () => {
+                        await tauriInvoke('send_suspicious_decision', { decision: 'allow', pid: parseInt(pid) });
+                        closeWindow();
+                    });
+                } else if (verdict === 'malicious' || threatScore > 70) {
+                    content.classList.add('result-danger');
+                    iconArea.style.display = '';
+                    iconArea.style.animation = 'scaleIn 0.5s ease';
+                    iconArea.innerHTML = `<svg width="68" height="68" viewBox="0 0 24 24" fill="none" style="animation: scaleIn 0.5s ease">
+                       <circle cx="12" cy="12" r="10" stroke="#D13438" stroke-width="1.5" fill="#D1343810"/>
+                       <path d="M8 8l8 8M16 8l-8 8" stroke="#D13438" stroke-width="1.8" stroke-linecap="round"/>
+                     </svg>`;
+                    mainTitle.textContent = '文件危险';
+                    subTitle.textContent = `云端分析检测到此文件为恶意软件（威胁评分: ${threatScore}），已自动拦截`;
+                    progressBar.style.background = 'var(--danger)';
+                    footer.innerHTML = '<button class="btn btn-danger" id="btn-block-confirm">确认拦截</button>';
+                    document.getElementById('btn-block-confirm').addEventListener('click', async () => {
+                        await tauriInvoke('send_suspicious_decision', { decision: 'block', pid: parseInt(pid) });
+                        closeWindow();
+                    });
+                } else {
+                    content.classList.add('result-safe');
+                    iconArea.style.display = '';
+                    iconArea.style.animation = 'scaleIn 0.5s ease';
+                    iconArea.innerHTML = `<svg width="68" height="68" viewBox="0 0 24 24" fill="none" style="animation: scaleIn 0.5s ease">
+                       <circle cx="12" cy="12" r="10" stroke="#CA8A04" stroke-width="1.5" fill="#CA8A0410"/>
+                       <path d="M12 7v6M12 16v0.5" stroke="#CA8A04" stroke-width="1.8" stroke-linecap="round"/>
+                     </svg>`;
+                    mainTitle.textContent = '检测结果：可疑';
+                    subTitle.textContent = `云端分析评估威胁评分为 ${threatScore}，建议拦截此文件`;
+                    progressBar.style.background = 'var(--warning)';
+                    footer.innerHTML = `
+                        <button class="btn btn-danger" id="btn-block">拦截</button>
+                        <button class="btn btn-secondary" id="btn-allow-anyway">仍然允许</button>
+                    `;
+                    document.getElementById('btn-block').addEventListener('click', async () => {
+                        await tauriInvoke('send_suspicious_decision', { decision: 'block', pid: parseInt(pid) });
+                        closeWindow();
+                    });
+                    document.getElementById('btn-allow-anyway').addEventListener('click', async () => {
+                        await tauriInvoke('send_suspicious_decision', { decision: 'allow', pid: parseInt(pid) });
+                        closeWindow();
+                    });
+                }
+            } catch (err) {
+                clearInterval(countdownTimer);
+                iconArea.style.display = 'none';
+                progressBar.style.animation = 'none';
+                mainTitle.textContent = '分析失败';
+                subTitle.textContent = `无法完成云端分析: ${err}`;
+                countdownEl.textContent = '';
+                footer.style.display = '';
+                footer.innerHTML = `
+                    <button class="btn btn-secondary" id="btn-allow-fail">允许运行</button>
+                    <button class="btn btn-danger" id="btn-block-fail">拦截</button>
+                `;
+                document.getElementById('btn-allow-fail').addEventListener('click', async () => {
+                    await tauriInvoke('send_suspicious_decision', { decision: 'allow', pid: parseInt(pid) });
+                    closeWindow();
+                });
+                document.getElementById('btn-block-fail').addEventListener('click', async () => {
+                    await tauriInvoke('send_suspicious_decision', { decision: 'block', pid: parseInt(pid) });
+                    closeWindow();
+                });
+            }
+        })();
+    </script>
+</body>
+</html>
