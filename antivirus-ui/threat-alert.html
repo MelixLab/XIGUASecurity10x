@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>安全警告</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: #ffffff;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        
+        .alert-container {
+            width: 100%;
+            height: 100%;
+            padding: 16px 20px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            background: #ffffff;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        
+        .alert-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 8px;
+            min-height: 24px;
+        }
+        
+        .alert-icon {
+            width: 24px;
+            height: 24px;
+            background: linear-gradient(135deg, #ff6b6b 0%, #ee5a5a 100%);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 14px;
+            font-weight: bold;
+            flex-shrink: 0;
+        }
+        
+        .alert-icon svg {
+            width: 16px;
+            height: 16px;
+        }
+        
+        .alert-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #1a1a1a;
+            line-height: 1.4;
+            white-space: nowrap;
+            flex: 1;
+        }
+        
+        .alert-body {
+            font-size: 12px;
+            color: #666;
+            line-height: 1.5;
+            margin-bottom: 12px;
+            flex: 1;
+            overflow: hidden;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+        }
+        
+        .alert-actions {
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+            min-height: 32px;
+        }
+        
+        .btn {
+            padding: 6px 16px;
+            border: none;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            outline: none;
+            height: 32px;
+            line-height: 20px;
+        }
+        
+        .btn-ignore {
+            background: #f0f0f0;
+            color: #333;
+            border: 1px solid #d0d0d0;
+        }
+        
+        .btn-ignore:hover {
+            background: #e0e0e0;
+        }
+        
+        .btn-kill {
+            background: #dc3545;
+            color: white;
+        }
+        
+        .btn-kill:hover {
+            background: #c82333;
+        }
+        
+        /* 拖拽区域 */
+        .drag-region {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 32px;
+            -webkit-app-region: drag;
+            app-region: drag;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+    <div class="drag-region"></div>
+    <div class="alert-container">
+        <div class="alert-header">
+            <div class="alert-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 8v5"/>
+                    <circle cx="12" cy="17" r="1.5" fill="currentColor" stroke="none"/>
+                </svg>
+            </div>
+            <div class="alert-title" id="alert-title">检测到可疑活动</div>
+        </div>
+        <div class="alert-body" id="alert-body">
+            进程连续触发多次敏感操作，可能包含恶意软件
+        </div>
+        <div class="alert-actions">
+            <button class="btn btn-ignore" id="btn-ignore" data-i18n="threatAlertIgnore">忽略</button>
+            <button class="btn btn-kill" id="btn-kill" data-i18n="threatAlertKill">终止进程</button>
+        </div>
+    </div>
+    
+    <script>
+        const translations = {
+            'zh-CN': {
+                threatAlertTitle: '检测到可疑活动 - {family}',
+                threatAlertBody: '进程 {process} 连续触发多次敏感操作，可能包含恶意软件：{family}',
+                threatAlertIgnore: '忽略',
+                threatAlertKill: '终止进程',
+                unknownProcess: '未知进程'
+            },
+            'zh-TW': {
+                threatAlertTitle: '檢測到可疑活動 - {family}',
+                threatAlertBody: '程序 {process} 連續觸發多次敏感操作，可能包含惡意軟體：{family}',
+                threatAlertIgnore: '忽略',
+                threatAlertKill: '終止程序',
+                unknownProcess: '未知程序'
+            },
+            'en-US': {
+                threatAlertTitle: 'Suspicious Activity Detected - {family}',
+                threatAlertBody: 'Process {process} continuously triggered multiple sensitive operations, possibly containing malware: {family}',
+                threatAlertIgnore: 'Ignore',
+                threatAlertKill: 'Kill Process',
+                unknownProcess: 'Unknown process'
+            }
+        };
+
+        const params = new URLSearchParams(window.location.search);
+        const currentLang = ['zh-CN', 'zh-TW', 'en-US'].includes(params.get('lang')) ? params.get('lang') : 'zh-CN';
+
+        function t(key, replacements) {
+            let text = translations[currentLang]?.[key] ?? translations['zh-CN']?.[key] ?? key;
+            if (replacements) {
+                Object.entries(replacements).forEach(([k, v]) => {
+                    text = text.replace(new RegExp('\\{' + k + '\\}', 'g'), String(v));
+                });
+            }
+            return text;
+        }
+
+        // 存储进程信息
+        let processName = t('unknownProcess');
+        let virusFamily = 'Trojan.Win32';
+        
+        // 更新显示内容的函数
+        function updateContent(procName, family) {
+            processName = procName || t('unknownProcess');
+            virusFamily = family || 'Trojan.Win32';
+            
+            console.log('[ThreatAlert] Updating content - Process:', processName, 'Family:', virusFamily);
+            
+            const titleEl = document.getElementById('alert-title');
+            const bodyEl = document.getElementById('alert-body');
+            
+            if (titleEl) {
+                titleEl.textContent = t('threatAlertTitle', { family: virusFamily });
+            }
+            if (bodyEl) {
+                bodyEl.textContent = t('threatAlertBody', { process: processName, family: virusFamily });
+            }
+        }
+        
+        // 监听来自主窗口的消息（兼容旧方式）
+        window.addEventListener('message', function(event) {
+            console.log('[ThreatAlert] Received message:', event.data);
+            if (event.data && event.data.type === 'threat-data') {
+                updateContent(event.data.process, event.data.family);
+            }
+        });
+
+        // 注册 Tauri event listener（替代 eval/postMessage，避免后台线程 dispatch 主线程造成死锁）
+        // 通过 emit 接收数据是线程安全的，不阻塞主线程事件循环
+        if (window.__TAURI__ && window.__TAURI__.event) {
+            (async () => {
+                try {
+                    await window.__TAURI__.event.listen('threat-data', (event) => {
+                        updateContent(event.payload.process, event.payload.family);
+                    });
+                    console.log('[ThreatAlert] Tauri event listener registered');
+                } catch (e) {
+                    console.warn('[ThreatAlert] Failed to register event listener:', e);
+                }
+            })();
+        }
+        
+        // 等待 DOM 加载完成
+        document.addEventListener('DOMContentLoaded', function() {
+            document.title = t('threatAlertTitle', { family: virusFamily });
+            document.documentElement.lang = currentLang;
+            document.querySelectorAll('[data-i18n]').forEach(el => {
+                const key = el.getAttribute('data-i18n');
+                if (key) el.textContent = t(key);
+            });
+
+            // 尝试从 URL 参数获取（兼容旧方式）
+            const urlProcessName = decodeURIComponent(params.get('process') || '');
+            const urlVirusFamily = decodeURIComponent(params.get('family') || '');
+            
+            if (urlProcessName && urlVirusFamily) {
+                updateContent(urlProcessName, urlVirusFamily);
+            } else {
+                updateContent(processName, virusFamily);
+            }
+            
+            // 绑定按钮事件
+            const ignoreBtn = document.getElementById('btn-ignore');
+            const killBtn = document.getElementById('btn-kill');
+            
+            if (ignoreBtn) {
+                ignoreBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    console.log('[ThreatAlert] User chose to ignore:', processName);
+                    // 使用 invoke 命令关闭窗口
+                    closeWindow();
+                });
+            }
+            
+        // 关闭窗口
+        async function closeWindow() {
+            console.log('[ThreatAlert] Closing window');
+            try {
+                // 首先尝试使用 invoke 命令关闭窗口
+                if (window.__TAURI__ && window.__TAURI__.core) {
+                    await window.__TAURI__.core.invoke('close_threat_window');
+                    return;
+                }
+                
+                // 备选方案：直接使用 window API
+                if (window.__TAURI__ && window.__TAURI__.window) {
+                    await window.__TAURI__.window.getCurrentWindow().close();
+                    return;
+                }
+                
+                // 最后的备选
+                window.close();
+            } catch (e) {
+                console.error('[ThreatAlert] Failed to close window:', e);
+                window.close();
+            }
+        }
+            
+            if (killBtn) {
+                killBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    console.log('[ThreatAlert] User chose to kill:', processName);
+                    killProcess(processName);
+                });
+            }
+            
+            // 自动关闭（30秒后）
+            setTimeout(() => {
+                if (typeof window.__TAURI__ !== 'undefined' && window.__TAURI__.window) {
+                    window.__TAURI__.window.getCurrentWindow().close();
+                } else {
+                    window.close();
+                }
+            }, 30000);
+        });
+        
+        // 终止进程
+        async function killProcess(processName) {
+            try {
+                // 使用 Tauri 事件系统通知主窗口
+                if (typeof window.__TAURI__ !== 'undefined' && window.__TAURI__.event) {
+                    const { emit } = window.__TAURI__.event;
+                    await emit('threat-alert-kill', { processName: processName });
+                    console.log('[ThreatAlert] Kill event emitted for:', processName);
+                } else if (typeof window.__TAURI_INTERNALS__ !== 'undefined' && window.__TAURI_INTERNALS__.invoke) {
+                    // 尝试使用内部 API
+                    await window.__TAURI_INTERNALS__.invoke('kill_process_from_alert', { processName: processName });
+                    console.log('[ThreatAlert] Process killed via internals');
+                } else {
+                    console.error('[ThreatAlert] Tauri API not available');
+                    // 尝试通过 URL scheme 通知主程序
+                    window.location.href = `xiguasecurity://threat/kill/${encodeURIComponent(processName)}`;
+                    return;
+                }
+                // 关闭窗口
+                if (typeof window.__TAURI__ !== 'undefined' && window.__TAURI__.window) {
+                    window.__TAURI__.window.getCurrentWindow().close();
+                } else {
+                    window.close();
+                }
+            } catch (e) {
+                console.error('[ThreatAlert] Failed to kill process:', e);
+                // 备用方案：使用 URL scheme
+                window.location.href = `xiguasecurity://threat/kill/${encodeURIComponent(processName)}`;
+            }
+        }
+    </script>
+</body>
+</html>

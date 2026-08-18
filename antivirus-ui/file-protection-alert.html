@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>文件防护</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: #ffffff;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        .alert-container {
+            width: 100%;
+            height: 100%;
+            padding: 16px 20px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            background: #ffffff;
+            border-radius: 8px;
+            overflow: hidden;
+            position: relative;
+        }
+        .close-btn {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            width: 24px;
+            height: 24px;
+            border: none;
+            background: transparent;
+            border-radius: 4px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #999;
+            transition: background .15s, color .15s;
+            -webkit-app-region: no-drag;
+            z-index: 20;
+        }
+        .close-btn:hover {
+            background: #f0f0f0;
+            color: #333;
+        }
+        .close-btn svg {
+            width: 14px;
+            height: 14px;
+        }
+        .drag-region {
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 32px;
+            -webkit-app-region: drag;
+            app-region: drag;
+            z-index: 10;
+        }
+
+        .alert-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-top: 4px;
+        }
+        .check-circle {
+            width: 36px;
+            height: 36px;
+            flex-shrink: 0;
+            border-radius: 50%;
+            background: #10b981;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .check-circle svg {
+            width: 20px;
+            height: 20px;
+            stroke: white;
+            stroke-width: 2.5;
+            fill: none;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+        .title-block {
+            flex: 1;
+            min-width: 0;
+        }
+        .alert-title {
+            font-size: 15px;
+            font-weight: 600;
+            color: #1a1a1a;
+            line-height: 1.3;
+        }
+        .file-name {
+            font-size: 11px;
+            color: #666;
+            line-height: 1.4;
+            margin-top: 1px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .alert-body {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            gap: 4px;
+        }
+        .detail-row {
+            display: flex;
+            align-items: baseline;
+            gap: 6px;
+            font-size: 12px;
+            line-height: 1.6;
+        }
+        .detail-label {
+            color: #888;
+            white-space: nowrap;
+            flex-shrink: 0;
+            min-width: 48px;
+        }
+        .detail-value {
+            color: #1a1a1a;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .infection-type {
+            font-size: 12px;
+            color: #dc2626;
+            font-weight: 500;
+            margin-top: 4px;
+            line-height: 1.4;
+        }
+
+        .alert-actions {
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+            margin-top: 4px;
+        }
+        .btn {
+            padding: 6px 16px;
+            border: none;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all .15s;
+            height: 30px;
+            line-height: 18px;
+        }
+        .btn-primary {
+            background: #005fb8;
+            color: white;
+        }
+        .btn-primary:hover { background: #0066c7; }
+        .btn-secondary {
+            background: #f0f0f0;
+            color: #333;
+            border: 1px solid #d0d0d0;
+        }
+        .btn-secondary:hover { background: #e0e0e0; }
+    </style>
+</head>
+<body>
+    <div class="drag-region"></div>
+    <div class="alert-container">
+        <button class="close-btn" id="btn-close" title="关闭">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+        </button>
+
+        <div class="alert-header">
+            <div class="check-circle">
+                <svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
+            </div>
+            <div class="title-block">
+                <div class="alert-title" data-i18n="fileProtectionAlertMessage">为了确保设备安全，已隔离木马文件</div>
+                <div class="file-name" id="file-name">--</div>
+            </div>
+        </div>
+
+        <div class="alert-body">
+            <div class="detail-row">
+                <span class="detail-label" data-i18n="fileProtectionFileName">文件名</span>
+                <span class="detail-value" id="detail-file-name">--</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label" data-i18n="fileProtectionPath">路径</span>
+                <span class="detail-value" id="detail-path">--</span>
+            </div>
+            <div class="infection-type" id="infection-type">--</div>
+        </div>
+
+        <div class="alert-actions">
+            <button class="btn btn-secondary" id="btn-quarantine" data-i18n="fileProtectionQuarantine">查看隔离区</button>
+            <button class="btn btn-primary" id="btn-trust" data-i18n="fileProtectionTrust">信任文件</button>
+        </div>
+    </div>
+
+    <script>
+        const translations = {
+            'zh-CN': {
+                fileProtectionAlertTitle: '文件防护',
+                fileProtectionAlertMessage: '为了确保设备安全，已隔离木马文件',
+                fileProtectionFileName: '文件名',
+                fileProtectionPath: '路径',
+                fileProtectionInfected: '感染了 {family}',
+                fileProtectionQuarantine: '查看隔离区',
+                fileProtectionTrust: '信任文件'
+            },
+            'zh-TW': {
+                fileProtectionAlertTitle: '檔案防護',
+                fileProtectionAlertMessage: '為了確保裝置安全，已隔離木馬檔案',
+                fileProtectionFileName: '檔案名',
+                fileProtectionPath: '路徑',
+                fileProtectionInfected: '感染了 {family}',
+                fileProtectionQuarantine: '查看隔離區',
+                fileProtectionTrust: '信任檔案'
+            },
+            'en-US': {
+                fileProtectionAlertTitle: 'File Protection',
+                fileProtectionAlertMessage: 'A Trojan file has been quarantined to keep your device safe',
+                fileProtectionFileName: 'File Name',
+                fileProtectionPath: 'Path',
+                fileProtectionInfected: 'Infected with {family}',
+                fileProtectionQuarantine: 'View Quarantine',
+                fileProtectionTrust: 'Trust File'
+            }
+        };
+
+        const params = new URLSearchParams(window.location.search);
+
+        // 安全解码：URLSearchParams.get() 已自动解码一次，若再 decodeURIComponent
+        // 会对含 % 的路径二次解码并抛 URIError，导致后续 updateContent/按钮绑定全部中断。
+        // 这里直接用 get() 的原始值，并捕获异常保证页面永远可用。
+        function safeGet(key) {
+            try {
+                return params.get(key) || '';
+            } catch (e) {
+                return '';
+            }
+        }
+
+        const currentLang = ['zh-CN', 'zh-TW', 'en-US'].includes(safeGet('lang')) ? safeGet('lang') : 'zh-CN';
+
+        function t(key, replacements) {
+            let text = translations[currentLang]?.[key] ?? translations['zh-CN']?.[key] ?? key;
+            if (replacements) {
+                Object.entries(replacements).forEach(([k, v]) => {
+                    text = text.replace(new RegExp('\\{' + k + '\\}', 'g'), String(v));
+                });
+            }
+            return text;
+        }
+
+        let fpData = null;
+
+        // Windows 路径统一显示为反斜杠，避免偶发正斜杠显示问题
+        function normalizeWinPath(p) {
+            return typeof p === 'string' ? p.replace(/\//g, '\\') : p;
+        }
+
+        function updateContent(data) {
+            fpData = data;
+            const rawPath = data.filePath || '--';
+            const filePath = normalizeWinPath(rawPath);
+            const fileName = data.fileName
+                ? normalizeWinPath(data.fileName)
+                : (typeof filePath === 'string' ? filePath.split(/[\\/]/).pop() || filePath : '--');
+            const virusFamily = data.virusFamily || '--';
+
+            document.getElementById('file-name').textContent = fileName;
+            document.getElementById('detail-file-name').textContent = fileName;
+            document.getElementById('detail-path').textContent = filePath;
+            document.getElementById('infection-type').textContent = virusFamily !== '--' ? t('fileProtectionInfected', { family: virusFamily }) : '--';
+        }
+
+        window.addEventListener('message', function(event) {
+            if (event.data && event.data.type === 'file-protection-data') {
+                updateContent(event.data);
+            }
+        });
+
+        document.addEventListener('DOMContentLoaded', function() {
+            document.title = t('fileProtectionAlertTitle');
+            document.documentElement.lang = currentLang;
+            document.querySelectorAll('[data-i18n]').forEach(el => {
+                const key = el.getAttribute('data-i18n');
+                if (key) el.textContent = t(key);
+            });
+
+            // 注册 Tauri event listener（替代 eval/postMessage，避免异步运行时线程阻塞）
+            // 通过 emit 接收数据是线程安全的，不会 dispatch 到主线程造成死锁
+            if (window.__TAURI__ && window.__TAURI__.event) {
+                (async () => {
+                    try {
+                        await window.__TAURI__.event.listen('file-protection-data', (event) => {
+                            updateContent(event.payload);
+                        });
+                        console.log('[FileProtectionAlert] Tauri event listener registered');
+                    } catch (e) {
+                        console.warn('[FileProtectionAlert] Failed to register event listener:', e);
+                    }
+                })();
+            }
+
+            // 从 URL 参数读取初始数据（注意：safeGet 已解码，不要再 decodeURIComponent）
+            let urlData = null;
+            try {
+                const fp = safeGet('filePath');
+                const fn = safeGet('fileName');
+                const vf = safeGet('virusFamily');
+                if (fp) {
+                    urlData = {
+                        filePath: fp,
+                        fileName: fn || undefined,
+                        virusFamily: vf || undefined
+                    };
+                    updateContent(urlData);
+                }
+            } catch (e) {
+                console.error('[FileProtectionAlert] Failed to parse URL data:', e);
+            }
+
+            // 兜底：若 URL 无参数且 Tauri 事件监听未成功注册，主动拉取最近一次待显示数据
+            if (!urlData && window.__TAURI__ && window.__TAURI__.core) {
+                (async () => {
+                    try {
+                        const pending = await window.__TAURI__.core.invoke('get_pending_file_protection_data');
+                        if (pending && (pending.filePath || pending.fileName)) {
+                            console.log('[FileProtectionAlert] Loaded pending data:', pending);
+                            updateContent(pending);
+                        }
+                    } catch (e) {
+                        console.warn('[FileProtectionAlert] No pending data:', e);
+                    }
+                })();
+            }
+
+            // ★窗口重新显示时兜底拉取最近一次数据★
+            // 预创建窗口在启动时已加载页面，若首个告警发生在页面加载完成/监听器注册
+            // 之前，emit 事件会丢失。窗口被 Win32 ShowWindow 显示时会触发
+            // visibilitychange/focus，此时拉取后端缓存的最近数据，保证告警内容不丢失。
+            function refetchPendingData() {
+                if (!window.__TAURI__ || !window.__TAURI__.core) return;
+                window.__TAURI__.core.invoke('get_pending_file_protection_data')
+                    .then((pending) => {
+                        if (pending && (pending.filePath || pending.fileName)) {
+                            console.log('[FileProtectionAlert] Refetched pending data on show:', pending);
+                            updateContent(pending);
+                        }
+                    })
+                    .catch(() => {});
+            }
+            document.addEventListener('visibilitychange', function() {
+                if (!document.hidden) refetchPendingData();
+            });
+            window.addEventListener('focus', refetchPendingData);
+
+            document.getElementById('btn-close')?.addEventListener('click', async function() {
+                try {
+                    if (window.__TAURI__ && window.__TAURI__.core) {
+                        await window.__TAURI__.core.invoke('close_file_protection_alert_window');
+                    } else { window.close(); }
+                } catch(e) { window.close(); }
+            });
+
+            document.getElementById('btn-quarantine')?.addEventListener('click', async function() {
+                try {
+                    if (window.__TAURI__ && window.__TAURI__.core) {
+                        await window.__TAURI__.core.invoke('open_quarantine_window');
+                    }
+                } catch(e) {
+                    console.error('[FileProtectionAlert] Failed to open quarantine:', e);
+                }
+            });
+
+            document.getElementById('btn-trust')?.addEventListener('click', async function() {
+                const data = fpData || urlData;
+                try {
+                    if (window.__TAURI__ && window.__TAURI__.core) {
+                        await window.__TAURI__.core.invoke('trust_file_protection_alert', {
+                            filePath: data.filePath || ''
+                        });
+                    }
+                } catch(e) {
+                    console.error('[FileProtectionAlert] Failed to trust file:', e);
+                }
+            });
+        });
+    </script>
+</body>
+</html>

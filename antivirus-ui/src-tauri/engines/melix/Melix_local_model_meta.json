@@ -1,0 +1,68 @@
+{
+  "class_names": [
+    "Benign",
+    "Ransom",
+    "Backdoor.RAT",
+    "Stealer",
+    "Loader",
+    "Miner",
+    "Worm",
+    "Spyware",
+    "HackTool",
+    "Trojan.Generic"
+  ],
+  "ndim": 2568,
+  "n_classes": 10,
+  "best_iteration": 1200,
+  "train_samples": 4411302,
+  "num_leaves": 127,
+  "learning_rate": 0.02,
+  "device": "cuda",
+  "truncation_eval": {
+    "400": {
+      "auc": 0.9978758283688859,
+      "tpr@fpr0.001": 0.8922521300157631,
+      "thr@fpr0.001": 0.8434522963373032,
+      "tpr@fpr0.005": 0.947732306403017,
+      "thr@fpr0.005": 0.5579492217976072,
+      "tpr@fpr0.01": 0.9636350938803201,
+      "thr@fpr0.01": 0.39424462801593907
+    },
+    "800": {
+      "auc": 0.9984686768150868,
+      "tpr@fpr0.001": 0.9160863579224614,
+      "thr@fpr0.001": 0.8372081741075785,
+      "tpr@fpr0.005": 0.9588762296226829,
+      "thr@fpr0.005": 0.5426754140838717,
+      "tpr@fpr0.01": 0.9734920286529521,
+      "thr@fpr0.01": 0.34746984670187187
+    },
+    "1000": {
+      "auc": 0.99858078382894,
+      "tpr@fpr0.001": 0.9176826226629686,
+      "thr@fpr0.001": 0.8488063830852869,
+      "tpr@fpr0.005": 0.9616896462278269,
+      "thr@fpr0.005": 0.5385023413745764,
+      "tpr@fpr0.01": 0.9753776163776763,
+      "thr@fpr0.01": 0.3356950748390971
+    },
+    "1200": {
+      "auc": 0.9986428083685616,
+      "tpr@fpr0.001": 0.9196081170062055,
+      "thr@fpr0.001": 0.8575006579490847,
+      "tpr@fpr0.005": 0.9633158409322186,
+      "thr@fpr0.005": 0.5362575744550071,
+      "tpr@fpr0.01": 0.9767244647524792,
+      "thr@fpr0.01": 0.32296650953217
+    }
+  },
+  "benign_merged": true,
+  "trained_at": "2026-07-20T06:11:00.946544+00:00",
+  "full_data": true,
+  "export_note": "推荐部署 heysafe_lgb_1000.txt；阈值建议见 truncation_eval",
+  "deploy_recommend": {
+    "file": "heysafe_lgb_1000.txt",
+    "hard_block_threshold": 0.97,
+    "soft_review_threshold": 0.85
+  }
+}

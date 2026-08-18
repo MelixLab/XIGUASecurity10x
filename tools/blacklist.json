@@ -1,0 +1,21 @@
+{
+  "version": "1.0.0",
+  "updated_at": "2026-07-16 16:30:09",
+  "description": "Black hashes generated from C:/Users/MEMZ-UAC/Downloads/新建文件夹 (10)",
+  "type": "blacklist",
+  "entries": [
+    {
+      "hash": "6186b1c29f1161d734fd41a34aa556fd5a6ac8163f284ef7bf9153ec29b848ac",
+      "family": "Trojan/LocalScan.hashdb",
+      "file_name": "SteamJWTScanner.exe",
+      "file_path": "C:/Users/MEMZ-UAC/Downloads/新建文件夹 (10)\\SteamJWTScanner.exe"
+    },
+    {
+      "hash": "451bf3949afbf80e1f3c46f5a8530e538e5c20a74b647fcdbd00f4f4174ff660",
+      "family": "Trojan/LocalScan.hashdb",
+      "file_name": "HeySafe-X-setup.exe",
+      "file_path": "C:/Users/MEMZ-UAC/Downloads/新建文件夹 (10)\\HeySafe-X-setup.exe"
+    }
+  ],
+  "total_count": 2
+}

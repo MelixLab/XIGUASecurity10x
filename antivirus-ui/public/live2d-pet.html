@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>桌宠</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body {
+            width: 100%; height: 100%;
+            overflow: hidden;
+            background: transparent !important;
+            user-select: none;
+            font-family: "Segoe UI", -apple-system, sans-serif;
+        }
+
+        .pet-container {
+            position: fixed; left: 0; top: 0;
+            width: 280px; height: 360px; z-index: 10;
+        }
+
+        #live2d {
+            width: 280px; height: 310px;
+            position: absolute; bottom: 0; left: 0; z-index: 2;
+        }
+
+        #status-text {
+            position: absolute; bottom: 2px; left: 0; right: 0;
+            text-align: center; font-size: 10px;
+            color: rgba(102,204,255,0.35);
+            z-index: 1; pointer-events: none;
+        }
+
+        .message {
+            opacity: 0;
+            width: 260px; padding: 8px 12px;
+            position: absolute; top: 34px; left: 10px; z-index: 3;
+            text-align: center;
+            border: 1px solid rgba(102,204,255,0.4);
+            border-radius: 12px;
+            background: rgba(102,204,255,0.12);
+            backdrop-filter: blur(8px);
+            font-size: 13px; color: #d0d0d0;
+            transition: opacity 0.3s;
+            pointer-events: none;
+        }
+
+        .pet-controls {
+            position: fixed; top: 2px; right: 4px; z-index: 200;
+            opacity: 0; transition: opacity 0.3s;
+        }
+        .pet-container:hover ~ .pet-controls,
+        .pet-controls:hover { opacity: 1; }
+
+        .pet-btn {
+            width: 24px; height: 24px; border-radius: 50%;
+            border: none; cursor: pointer;
+            background: rgba(0,0,0,0.45); color: white;
+            font-size: 12px; display: flex; align-items: center; justify-content: center;
+            transition: all 0.2s;
+        }
+        .pet-btn:hover { background: rgba(0,0,0,0.7); }
+        .pet-btn-close:hover { background: #D13438; }
+    </style>
+</head>
+<body>
+    <div class="pet-container" id="pet-container">
+        <div class="message" id="pet-message"></div>
+        <canvas id="live2d" width="280" height="310"></canvas>
+        <div id="status-text">洛天依 · by XIGUA Security</div>
+    </div>
+    <div class="pet-controls">
+        <button class="pet-btn pet-btn-close" id="btn-close" title="关闭">✕</button>
+    </div>
+
+    <script>
+    // ===== PATCH: Fix crossOrigin for local asset loading =====
+    (function() {
+        var OrigImg = window.Image;
+        function PatchedImage(w, h) {
+            var img = new OrigImg(w, h);
+            Object.defineProperty(img, 'crossOrigin', {
+                get: function() { return null; },
+                set: function(v) {
+                    if (v && v.toLowerCase() === 'anonymous') return;
+                    try { this.setAttribute('crossorigin', v); } catch(e) {}
+                },
+                configurable: true, enumerable: true
+            });
+            return img;
+        }
+        PatchedImage.prototype = OrigImg.prototype;
+        window.Image = PatchedImage;
+    })();
+    </script>
+
+    <script>
+    function showMessage(text, timeout) {
+        var el = document.getElementById('pet-message');
+        if (Array.isArray(text)) text = text[Math.floor(Math.random() * text.length)];
+        el.textContent = text;
+        el.style.opacity = '1';
+        if (!timeout) timeout = 5000;
+        clearTimeout(el._timer);
+        el._timer = setTimeout(function() { el.style.opacity = '0'; }, timeout);
+    }
+
+    function getGreeting() {
+        var h = new Date().getHours();
+        if (h >= 23 || h < 5) return '夜猫子呀？还不睡觉~';
+        if (h < 7) return '早上好！新的一天开始了！';
+        if (h < 11) return '上午好！工作顺利吗？';
+        if (h < 14) return '中午了，该吃饭啦！';
+        if (h < 17) return '午后容易犯困呢~';
+        if (h < 19) return '傍晚了！夕阳真美~~';
+        if (h < 21) return '晚上好呀~';
+        return '早点休息吧，晚安~~';
+    }
+
+    document.getElementById('btn-close').addEventListener('click', function() {
+        try {
+            if (window.__TAURI__ && window.__TAURI__.window) {
+                window.__TAURI__.window.getCurrentWindow().close();
+            } else {
+                document.getElementById('pet-container').style.display = 'none';
+            }
+        } catch(e) { document.getElementById('pet-container').style.display = 'none'; }
+    });
+
+    // ===== Click handler & Drag (threshold-based) =====
+    var live2dCanvas = document.getElementById('live2d');
+    live2dCanvas.addEventListener('mousedown', function(e) {
+        if (e.button !== 0) return;
+        var startX = e.screenX;
+        var startY = e.screenY;
+        var moved = false;
+
+        var onMove = function(ev) {
+            var dx = ev.screenX - startX;
+            var dy = ev.screenY - startY;
+            if (!moved && (Math.abs(dx) > 3 || Math.abs(dy) > 3)) {
+                moved = true;
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+                // Start native window drag via Tauri command
+                try {
+                    if (window.__TAURI__ && window.__TAURI__.core) {
+                        window.__TAURI__.core.invoke('start_drag');
+                    }
+                } catch(e) {}
+            }
+        };
+        var onUp = function() {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            if (!moved) {
+                // It was a click without drag - show reaction
+                showMessage(['不要动手动脚！','Hentai！','再摸报警了！','不理你了~'][Math.floor(Math.random()*4)], 3000);
+            }
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    });
+
+    // ===== Init =====
+    window.addEventListener('load', function() {
+        setTimeout(function() { showMessage('嗨~ 来陪我玩吧！', 4000); }, 500);
+        setTimeout(function() { showMessage(getGreeting(), 5000); }, 3500);
+        setInterval(function() {
+            var msgs = ['要和我聊聊天吗？','今天天气不错呢~','工作累了吧？','一直看着你呢！',getGreeting()];
+            showMessage(msgs[Math.floor(Math.random()*msgs.length)], 5000);
+        }, 45000);
+
+        // Load Live2D
+        if (typeof window.loadlive2d === 'function') {
+            try {
+                window.loadlive2d('live2d', window.location.origin + '/live2d/model/tianyi/model.json');
+                document.getElementById('status-text').textContent = '洛天依 · 已加载';
+            } catch(e) {
+                document.getElementById('status-text').textContent = '洛天依 · 加载失败';
+            }
+        }
+    });
+    </script>
+    <script src="live2d/js/live2d.js"></script>
+</body>
+</html>

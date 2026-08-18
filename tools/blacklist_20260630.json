@@ -1,0 +1,159 @@
+{
+  "version": "1.0.0",
+  "updated_at": "2026-06-30 19:21:54",
+  "description": "Black hashes generated from D:/xdows ai/机器学习/Melix-New/Melix.CNNTrainer/infected2026063001.zip/infected2026063001",
+  "type": "blacklist",
+  "entries": [
+    {
+      "hash": "3954c7d6ab1ee100640e820772fb51da4c7a5e07669e521c838e487ca3c0e842",
+      "family": "Trojan/ShellLoad",
+      "file_name": "85.239.149.16.ps1",
+      "file_path": "D:/xdows ai/机器学习/Melix-New/Melix.CNNTrainer/infected2026063001.zip/infected2026063001\\85.239.149.16.ps1"
+    },
+    {
+      "hash": "5fbade54aee7ffbee59872dc6fe494ef653630f110f025fb1cb4748cfa7d2616",
+      "family": "Trojan/ShellLoad",
+      "file_name": "BvCPpznZO6547X47.ps1",
+      "file_path": "D:/xdows ai/机器学习/Melix-New/Melix.CNNTrainer/infected2026063001.zip/infected2026063001\\BvCPpznZO6547X47.ps1"
+    },
+    {
+      "hash": "acaf1a1a7fc21d9b2dbb26bc995dd68a555b35c2bacdf8cc432edd1f04e8b467",
+      "family": "Trojan/ShellLoad",
+      "file_name": "COMPANY PROFILE  AUDREY SMITH KPAK PACKAGING COMPANY TEXAS USA(1).exe",
+      "file_path": "D:/xdows ai/机器学习/Melix-New/Melix.CNNTrainer/infected2026063001.zip/infected2026063001\\COMPANY PROFILE  AUDREY SMITH KPAK PACKAGING COMPANY TEXAS USA(1).exe"
+    },
+    {
+      "hash": "3c7d9bc681e97b85adc3b943510b57927708b81d9996587ee3c1f07b8f33f14d",
+      "family": "Trojan/ShellLoad",
+      "file_name": "1sssssthppy.js",
+      "file_path": "D:/xdows ai/机器学习/Melix-New/Melix.CNNTrainer/infected2026063001.zip/infected2026063001\\1sssssthppy.js"
+    },
+    {
+      "hash": "2271d88227772b5b7f34958e611b74397fac5ee8c77e48aa2068fff2e1a69a0f",
+      "family": "Trojan/ShellLoad",
+      "file_name": "2345看图王安装包_1.2.19_x63.exe",
+      "file_path": "D:/xdows ai/机器学习/Melix-New/Melix.CNNTrainer/infected2026063001.zip/infected2026063001\\2345看图王安装包_1.2.19_x63.exe"
+    },
+    {
+      "hash": "1457e5a3b288fc4fc160a732472d591147ca44a4567f9bba41ae83dd60cab399",
+      "family": "Trojan/ShellLoad",
+      "file_name": "e-dekont_html.vbs",
+      "file_path": "D:/xdows ai/机器学习/Melix-New/Melix.CNNTrainer/infected2026063001.zip/infected2026063001\\e-dekont_html.vbs"
+    },
+    {
+      "hash": "8e7d55b3d8d454d1b7aa2a99d052ee6bf43658f769c6e5166c0ad42c0eb846d7",
+      "family": "Trojan/ShellLoad",
+      "file_name": "AtomicAn3.msi",
+      "file_path": "D:/xdows ai/机器学习/Melix-New/Melix.CNNTrainer/infected2026063001.zip/infected2026063001\\AtomicAn3.msi"
+    },
+    {
+      "hash": "f1ab17a8f48fa24208daf237e9ec6ba0c39787234408362ec5d35d122f6d5e1a",
+      "family": "Trojan/ShellLoad",
+      "file_name": "GEI REF 2177700XXX26.js",
+      "file_path": "D:/xdows ai/机器学习/Melix-New/Melix.CNNTrainer/infected2026063001.zip/infected2026063001\\GEI REF 2177700XXX26.js"
+    },
+    {
+      "hash": "06410a762ca56fdad24ff4891d66536d9e0071d73276deece7aa76517939f80e",
+      "family": "Trojan/ShellLoad",
+      "file_name": "OrderList84839PRODUCT.exe",
+      "file_path": "D:/xdows ai/机器学习/Melix-New/Melix.CNNTrainer/infected2026063001.zip/infected2026063001\\OrderList84839PRODUCT.exe"
+    },
+    {
+      "hash": "dcf7ed2060ce90a77769f58b443ae6a446c7142265f7518f0e825d4978ee5b59",
+      "family": "Trojan/ShellLoad",
+      "file_name": "FATTURA_3637872.JS",
+      "file_path": "D:/xdows ai/机器学习/Melix-New/Melix.CNNTrainer/infected2026063001.zip/infected2026063001\\FATTURA_3637872.JS"
+    },
+    {
+      "hash": "24df5181c0875b598fbb04b6845be8bd5ab4cde3e5eb39233cefd3daf9083b36",
+      "family": "Trojan/ShellLoad",
+      "file_name": "Mv_Meritius_Requisition_Form.js",
+      "file_path": "D:/xdows ai/机器学习/Melix-New/Melix.CNNTrainer/infected2026063001.zip/infected2026063001\\Mv_Meritius_Requisition_Form.js"
+    },
+    {
+      "hash": "f3ef543a68a04bce592c8d88ce663d499a79048487cc3bdb8f4a14aee452d7ea",
+      "family": "Trojan/ShellLoad",
+      "file_name": "outputConfirmation Required – Ref BIBAA1896223.008.001.js",
+      "file_path": "D:/xdows ai/机器学习/Melix-New/Melix.CNNTrainer/infected2026063001.zip/infected2026063001\\outputConfirmation Required – Ref BIBAA1896223.008.001.js"
+    },
+    {
+      "hash": "2f7164097dcf3ab6b0d8f28092b54fc9746290aa0d705b1c14e018c6fedb38af",
+      "family": "Trojan/ShellLoad",
+      "file_name": "PS0002881 - Request for quotation of laser welding machine.js",
+      "file_path": "D:/xdows ai/机器学习/Melix-New/Melix.CNNTrainer/infected2026063001.zip/infected2026063001\\PS0002881 - Request for quotation of laser welding machine.js"
+    },
+    {
+      "hash": "95ff4f9a3dfb0fea47f507c61bd51d255ed076d89aaa0cf66189bc4afd5b6b02",
+      "family": "Trojan/ShellLoad",
+      "file_name": "sexsa.exe",
+      "file_path": "D:/xdows ai/机器学习/Melix-New/Melix.CNNTrainer/infected2026063001.zip/infected2026063001\\sexsa.exe"
+    },
+    {
+      "hash": "3a17a6319eee29074692218670b1bb1791cba23c747d33afe433aa587b417ed9",
+      "family": "Trojan/ShellLoad",
+      "file_name": "tmp747A.tmp.ps1",
+      "file_path": "D:/xdows ai/机器学习/Melix-New/Melix.CNNTrainer/infected2026063001.zip/infected2026063001\\tmp747A.tmp.ps1"
+    },
+    {
+      "hash": "06eef7caa73bc6677c9a094d37ac8cacd46d7fb6c47045fb6d2e5608b5f70a80",
+      "family": "Trojan/ShellLoad",
+      "file_name": "PURCHASE ORDER.js",
+      "file_path": "D:/xdows ai/机器学习/Melix-New/Melix.CNNTrainer/infected2026063001.zip/infected2026063001\\PURCHASE ORDER.js"
+    },
+    {
+      "hash": "5e1bc0c513824834b48ccd088bf1b9e112a0c650f930fe042a582f6aab1ab421",
+      "family": "Trojan/ShellLoad",
+      "file_name": "六月份账单.exe",
+      "file_path": "D:/xdows ai/机器学习/Melix-New/Melix.CNNTrainer/infected2026063001.zip/infected2026063001\\六月份账单.exe"
+    },
+    {
+      "hash": "144678a7f9867dd528337af8363a81c7805c299ff234c14ca4def102d0af166e",
+      "family": "Trojan/ShellLoad",
+      "file_name": "国外打粉通道~.exe",
+      "file_path": "D:/xdows ai/机器学习/Melix-New/Melix.CNNTrainer/infected2026063001.zip/infected2026063001\\国外打粉通道~.exe"
+    },
+    {
+      "hash": "fea60494ad318eefdd71d6652fb1f8a3b113b6eb4903af1439dc681d2b568037",
+      "family": "Trojan/ShellLoad",
+      "file_name": "QUOTATION REQUEST.JS.js",
+      "file_path": "D:/xdows ai/机器学习/Melix-New/Melix.CNNTrainer/infected2026063001.zip/infected2026063001\\QUOTATION REQUEST.JS.js"
+    },
+    {
+      "hash": "65668f7a2703ec132bfc0e5f3ea577b024478e24e2b9acfb3cdec64731bf2b14",
+      "family": "Trojan/ShellLoad",
+      "file_name": "IMG00329_0032900 DE0003 Rechnung -R003020.vbs",
+      "file_path": "D:/xdows ai/机器学习/Melix-New/Melix.CNNTrainer/infected2026063001.zip/infected2026063001\\IMG00329_0032900 DE0003 Rechnung -R003020.vbs"
+    },
+    {
+      "hash": "7d1f7c47c75e49e0aa4f759acc4fca6857df7e0415dfec7daab69ef4623bf951",
+      "family": "Trojan/ShellLoad",
+      "file_name": "文函.exe",
+      "file_path": "D:/xdows ai/机器学习/Melix-New/Melix.CNNTrainer/infected2026063001.zip/infected2026063001\\文函.exe"
+    },
+    {
+      "hash": "383d31b2f45850ee3efa41459fa48aff5e88b8d8bbf68900b7a4e9e322f9457c",
+      "family": "Trojan/ShellLoad",
+      "file_name": "文函1.exe",
+      "file_path": "D:/xdows ai/机器学习/Melix-New/Melix.CNNTrainer/infected2026063001.zip/infected2026063001\\文函1.exe"
+    },
+    {
+      "hash": "4d7800a3be568df4c44d375e24434b000e724f689af92ccfedadf9986138b601",
+      "family": "Trojan/ShellLoad",
+      "file_name": "紧急通知_WIFI故障.exe",
+      "file_path": "D:/xdows ai/机器学习/Melix-New/Melix.CNNTrainer/infected2026063001.zip/infected2026063001\\紧急通知_WIFI故障.exe"
+    },
+    {
+      "hash": "4c00b92ef3df4a61ebcb324afd3ea2ea42de162f5aaac2de84bd4bf73eef3982",
+      "family": "Trojan/ShellLoad",
+      "file_name": "目录.exe",
+      "file_path": "D:/xdows ai/机器学习/Melix-New/Melix.CNNTrainer/infected2026063001.zip/infected2026063001\\目录.exe"
+    },
+    {
+      "hash": "a70319a6a51dcb7f86b38aa247bcf32588521676abd5b7f61da401d866ad7ba7",
+      "family": "Trojan/ShellLoad",
+      "file_name": "wps_x86_2.exe",
+      "file_path": "D:/xdows ai/机器学习/Melix-New/Melix.CNNTrainer/infected2026063001.zip/infected2026063001\\wps_x86_2.exe"
+    }
+  ],
+  "total_count": 25
+}

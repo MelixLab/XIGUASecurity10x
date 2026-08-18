@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>EDR 行为链</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --bg: #ffffff;
+            --surface: #ffffff;
+            --border: #e5e7eb;
+            --text: #111827;
+            --text-sec: #6b7280;
+            --high: #dc2626;
+            --med: #d97706;
+            --low: #2563eb;
+            --ok: #16a34a;
+            --line: #d1d5db;
+        }
+        html, body {
+            height: 100%; width: 100%; overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: var(--bg); color: var(--text);
+        }
+        #loading, #error {
+            position: fixed; inset: 0; z-index: 100;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            background: var(--bg); color: var(--text-sec); font-size: 14px; text-align: center; padding: 40px;
+        }
+        #error { display: none; color: var(--high); }
+        #error .err-detail { color: var(--text-sec); font-size: 12px; margin-top: 10px; max-width: 600px; word-break: break-all; }
+
+        .header {
+            position: fixed; top: 0; left: 0; right: 0; height: 56px;
+            background: var(--surface); border-bottom: 1px solid var(--border);
+            display: flex; align-items: center; justify-content: space-between; padding: 0 16px;
+            z-index: 30;
+        }
+        .header-title { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 600; color: var(--text); }
+        .header-title svg { width: 20px; height: 20px; color: var(--high); }
+        .header-toolbar { display: flex; gap: 6px; }
+        .tb-btn {
+            width: 34px; height: 34px; border: 1px solid var(--border); border-radius: 6px;
+            background: var(--surface); color: var(--text-sec); display: flex; align-items: center; justify-content: center;
+            cursor: pointer; transition: background .15s, color .15s;
+        }
+        .tb-btn:hover { background: #f3f4f6; color: var(--text); }
+
+        .viewport {
+            position: absolute; top: 56px; left: 0; right: 0; bottom: 0; overflow: hidden; cursor: grab;
+        }
+        .viewport:active { cursor: grabbing; }
+        .world { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+        .links { position: absolute; top: 0; left: 0; width: 10000px; height: 10000px; pointer-events: none; overflow: visible; }
+        .links path { fill: none; stroke: var(--line); stroke-width: 1px; opacity: 0.7; }
+        .links path.high { stroke: var(--high); }
+        .links path.med { stroke: var(--med); }
+        .links path.low { stroke: var(--low); }
+
+        .node {
+            position: absolute; transform: translate(-50%, -50%);
+            background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+            padding: 9px 12px; width: 170px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04); cursor: default;
+            transition: border-color .15s, box-shadow .15s; user-select: none; z-index: 2;
+        }
+        .node:hover { border-color: #9ca3af; box-shadow: 0 4px 12px rgba(0,0,0,0.08); z-index: 10; }
+        .node .row { display: flex; align-items: center; gap: 9px; }
+        .node .icon {
+            width: 28px; height: 28px; border-radius: 6px; display: flex; align-items: center; justify-content: center;
+            flex-shrink: 0; background: #f3f4f6; color: var(--text-sec);
+        }
+        .node .icon svg { width: 16px; height: 16px; }
+        .node .title { font-size: 13px; font-weight: 600; color: var(--text); line-height: 1.2; }
+        .node .meta { font-size: 10px; color: var(--text-sec); margin-top: 2px; line-height: 1.3; }
+
+        .node.root .icon { background: #dcfce7; color: var(--ok); }
+        .node.end .icon { background: #fee2e2; color: var(--high); }
+        .node.end .title { color: var(--high); }
+        .node.high { border-left: 3px solid var(--high); }
+        .node.high .icon { color: var(--high); background: #fef2f2; }
+        .node.med { border-left: 3px solid var(--med); }
+        .node.med .icon { color: var(--med); background: #fffbeb; }
+        .node.low { border-left: 3px solid var(--low); }
+        .node.low .icon { color: var(--low); background: #eff6ff; }
+
+        .tooltip {
+            position: fixed; display: none; background: rgba(30,30,35,0.95); color: #fff;
+            padding: 10px 12px; border-radius: 8px; font-size: 12px; line-height: 1.5;
+            max-width: 360px; word-break: break-all; z-index: 50;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.2); pointer-events: none;
+        }
+        .tooltip .time { color: #9ca3af; margin-bottom: 4px; font-size: 11px; }
+        .tooltip .code { display: inline-block; margin-top: 6px; padding: 1px 6px; border-radius: 6px; background: rgba(255,255,255,0.15); }
+
+        .legend {
+            position: fixed; top: 70px; right: 14px; width: 120px;
+            background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+            padding: 12px; font-size: 12px; z-index: 20;
+        }
+        .legend-row { display: flex; align-items: center; gap: 8px; margin: 5px 0; }
+        .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+        .info-card {
+            position: fixed; bottom: 14px; left: 14px; width: 320px;
+            background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+            padding: 14px; z-index: 20;
+        }
+        .info-card .title { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+        .info-card .desc { font-size: 12px; color: var(--text-sec); line-height: 1.5; }
+        .info-card .desc strong { color: var(--high); font-weight: 600; }
+        .info-card .meta { font-size: 11px; color: #9ca3af; margin-top: 8px; }
+    </style>
+</head>
+<body>
+    <div id="loading">加载行为链数据...</div>
+    <div id="error">
+        <div id="err-msg">加载失败</div>
+        <div class="err-detail" id="err-detail"></div>
+    </div>
+
+    <div class="header" id="header" style="display:none">
+        <div class="header-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            EDR 行为链拓扑
+        </div>
+        <div class="header-toolbar">
+            <button class="tb-btn" id="btn-plus" title="放大">+</button>
+            <button class="tb-btn" id="btn-minus" title="缩小">−</button>
+            <button class="tb-btn" id="btn-fit" title="适配">⟲</button>
+        </div>
+    </div>
+
+    <div class="legend" id="legend" style="display:none">
+        <div class="legend-row"><span class="legend-dot" style="background:#dc2626"></span> 高危行为</div>
+        <div class="legend-row"><span class="legend-dot" style="background:#d97706"></span> 中危行为</div>
+        <div class="legend-row"><span class="legend-dot" style="background:#2563eb"></span> 低危/文件</div>
+        <div class="legend-row"><span class="legend-dot" style="background:#16a34a"></span> 启动</div>
+        <div class="legend-row"><span class="legend-dot" style="background:#dc2626"></span> 终止</div>
+    </div>
+
+    <div class="info-card" id="info-card" style="display:none">
+        <div class="title" id="info-title">进程行为链</div>
+        <div class="desc"><strong>EDR 防护已检测到威胁行为</strong>，该进程已被驱动终止。</div>
+        <div class="meta" id="info-meta"></div>
+    </div>
+
+    <div class="viewport" id="viewport">
+        <div class="world" id="world">
+            <svg class="links" id="links"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#d1d5db"/></marker></defs></svg>
+            <div class="nodes" id="nodes"></div>
+        </div>
+    </div>
+    <div class="tooltip" id="tooltip"></div>
+
+    <script>
+        const icons = {
+            start: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>',
+            end: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/></svg>',
+            file: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>',
+            cmd: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
+            registry: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10H12V2z"/><path d="M12 12 2.1 10.5"/><path d="M12 12v10"/></svg>',
+            inject: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>',
+            memory: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 8h8v8H8z"/></svg>',
+            thread: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>',
+            image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>',
+            process: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
+            unknown: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'
+        };
+
+        const typeMap = {
+            '进程创建': { cls: 'low', label: '进程创建', icon: icons.process },
+            '创建子进程': { cls: 'low', label: '子进程创建', icon: icons.process },
+            'Process Creation': { cls: 'low', label: '进程创建', icon: icons.process },
+            'CreateProcess': { cls: 'low', label: '子进程创建', icon: icons.process },
+            '创建进程': { cls: 'low', label: '进程创建', icon: icons.process },
+            '文件写入': { cls: 'low', label: '文件写入', icon: icons.file },
+            'FileWrite': { cls: 'low', label: '文件写入', icon: icons.file },
+            '文件删除': { cls: 'high', label: '文件删除', icon: icons.file },
+            'FileDelete': { cls: 'high', label: '文件删除', icon: icons.file },
+            '注册表修改': { cls: 'med', label: '注册表修改', icon: icons.registry },
+            'Registry': { cls: 'med', label: '注册表修改', icon: icons.registry },
+            '代码注入': { cls: 'high', label: '代码注入', icon: icons.inject },
+            'ProcessInjection': { cls: 'high', label: '代码注入', icon: icons.inject },
+            '可疑命令': { cls: 'med', label: '可疑命令', icon: icons.cmd },
+            'SuspiciousCmd': { cls: 'med', label: '可疑命令', icon: icons.cmd },
+            '内存RWX': { cls: 'high', label: '内存RWX', icon: icons.memory },
+            'MemoryRWX': { cls: 'high', label: '内存RWX', icon: icons.memory },
+            '远程线程': { cls: 'high', label: '远程线程', icon: icons.thread },
+            'RemoteThread': { cls: 'high', label: '远程线程', icon: icons.thread },
+            '映像加载': { cls: 'med', label: '映像加载', icon: icons.image },
+            'ImageLoad': { cls: 'med', label: '映像加载', icon: icons.image }
+        };
+
+        const NODE_HALF_W = 85;
+        let scale = 1, offsetX = 0, offsetY = 0;
+        let isDragging = false, startX, startY, startOX, startOY;
+        let nodeData = [], linkData = [];
+
+        function getTypeInfo(typeCn, typeEn) {
+            return typeMap[typeCn] || typeMap[typeEn] || { cls: 'med', label: typeCn || typeEn || '行为', icon: icons.unknown };
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        }
+
+        function formatDetail(detail) {
+            if (!detail) return '';
+            let s = String(detail).trim();
+            if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) s = s.slice(1, -1);
+            return s;
+        }
+
+        // 从 detail 中提取子进程 PID，支持两种格式：
+        // 旧格式 RunChild:\??\path(PID:46420)
+        // 新格式 ChildPID:3816,\SystemRoot\System32\Conhost.exe
+        function extractChildPid(detail) {
+            const s = String(detail || '');
+            const m1 = s.match(/RunChild:.*\(PID[:\s]*(\d+)\)/i);
+            if (m1) return parseInt(m1[1], 10);
+            const m2 = s.match(/ChildPID[:\s]*(\d+)/i);
+            if (m2) return parseInt(m2[1], 10);
+            return null;
+        }
+
+        // 从子进程创建 detail 中提取路径
+        function extractChildPath(detail) {
+            let s = String(detail || '');
+            if (s.toLowerCase().startsWith('childpid:')) {
+                const parts = s.split(',');
+                if (parts.length > 1) return parts.slice(1).join(',').trim();
+                return s.replace(/ChildPID[:\s]*\d+/i, '').trim();
+            }
+            s = s.replace(/^RunChild:/i, '').trim();
+            const m = s.match(/\(PID[:\s]*\d+\)/i);
+            if (m) s = s.replace(m[0], '').replace(/[()]/g, '').trim();
+            return s;
+        }
+
+        // 从完整路径中提取文件名
+        function basename(path) {
+            if (!path) return '';
+            return String(path).replace(/\\/g, '/').split('/').pop() || '';
+        }
+
+        function buildTopology(data) {
+            nodeData = []; linkData = [];
+            const rawEvents = data.timeline || [];
+
+            // 去重：同一时刻、同一命令，既有 ChildPID 版本又有无 ChildPID 版本时，保留带 ChildPID 的
+            const events = [];
+            const seen = new Map(); // key: "relative_sec|coreCommand" -> { hasPid: boolean, index: number }
+            rawEvents.forEach((ev, idx) => {
+                const info = getTypeInfo(ev.type_cn, ev.type_en);
+                if (info.label !== '可疑命令') {
+                    events.push(ev);
+                    return;
+                }
+                const sec = String(ev.relative_sec || '0');
+                const core = formatDetail(ev.detail).replace(/^ChildPID:\d+\|/i, '').trim();
+                const key = `${sec}|${core}`;
+                const hasPid = /^ChildPID:\d+\|/i.test(String(ev.detail || ''));
+                if (seen.has(key)) {
+                    const prev = seen.get(key);
+                    if (hasPid && !prev.hasPid) {
+                        // 用带 PID 的版本替换之前的
+                        events[prev.index] = ev;
+                        prev.hasPid = true;
+                    }
+                    // 否则丢弃当前这个无 PID 的重复项
+                } else {
+                    seen.set(key, { hasPid, index: events.length });
+                    events.push(ev);
+                }
+            });
+
+            const LEVEL_GAP_X = 240;   // 树层级横向间距
+            const ROOT_X = 0;
+            const ROOT_Y = 0;
+
+            // 根节点：父进程（如果 parent_path 存在），否则当前进程
+            const hasParent = data.parent_path && data.parent_path !== 'N/A';
+            const parentName = hasParent ? basename(data.parent_path) : (data.process_name || '进程');
+            const rootNode = {
+                id: 'root', x: ROOT_X, y: ROOT_Y,
+                cls: 'root', icon: icons.start,
+                title: escapeHtml(parentName || '进程'),
+                meta: hasParent ? `父进程 PID ${data.parent_pid || 0}` : '进程启动',
+                detail: escapeHtml(data.parent_path && data.parent_path !== 'N/A' ? data.parent_path : (data.command_line || '命令行未记录')),
+                code: ''
+            };
+            nodeData.push(rootNode);
+
+            // 当前进程节点
+            const currentNode = {
+                id: 'current',
+                parentId: 'root',
+                x: 0, y: 0,
+                cls: 'low',
+                icon: icons.process,
+                title: escapeHtml(data.process_name || '当前进程'),
+                meta: `PID ${data.pid || 0}`,
+                detail: escapeHtml(data.command_line && data.command_line !== 'N/A' ? data.command_line : '命令行未记录'),
+                code: '',
+                children: []
+            };
+            nodeData.push(currentNode);
+            linkData.push({ from: 'root', to: 'current', cls: 'low' });
+
+            // 收集子进程创建事件（包含"进程创建"、"创建子进程"、CreateProcess 等）
+            const childProcMap = {}; // pid -> child node
+            let lastChildPid = null; // 最近创建的子进程 PID，用于匹配后续行为
+            events.forEach((ev, idx) => {
+                const info = getTypeInfo(ev.type_cn, ev.type_en);
+                const pid = extractChildPid(ev.detail);
+                const isChildCreate = info.label === '子进程创建' || info.label === '进程创建' || ev.type_en === 'CreateProcess';
+                if (isChildCreate && pid && pid !== data.pid) {
+                    if (!childProcMap[pid]) {
+                        const pathText = extractChildPath(ev.detail);
+                        const fname = basename(pathText) || '子进程';
+                        const childNode = {
+                            id: `child_${pid}`,
+                            parentId: 'current',
+                            x: 0, y: 0,
+                            cls: info.cls,
+                            icon: icons.process,
+                            title: escapeHtml(fname),
+                            meta: `子进程 PID ${pid}`,
+                            detail: escapeHtml(pathText || ev.detail || ''),
+                            code: escapeHtml(ev.code || ''),
+                            time: escapeHtml(ev.datetime || ''),
+                            childPid: pid,
+                            fname: fname.toLowerCase(),
+                            children: []
+                        };
+                        childProcMap[pid] = childNode;
+                        nodeData.push(childNode);
+                        linkData.push({ from: 'current', to: childNode.id, cls: childNode.cls });
+                        currentNode.children.push(childNode);
+                        lastChildPid = pid;
+                    }
+                }
+            });
+
+            // 其他行为按（进程 + 类型）分组挂到当前进程或对应子进程下
+            const groupList = [];
+            const groupMap = new Map(); // key: "parentId|type_label" -> group
+            events.forEach((ev, idx) => {
+                const info = getTypeInfo(ev.type_cn, ev.type_en);
+                const pid = extractChildPid(ev.detail);
+
+                // 子进程创建事件已经处理过，跳过
+                if (info.label === '子进程创建' || info.label === '进程创建' || ev.type_en === 'CreateProcess') return;
+
+                let parentId = 'current';
+                let parentNode = currentNode;
+
+                if (pid && childProcMap[pid]) {
+                    // detail 里明确带 ChildPID，直接归属
+                    parentId = `child_${pid}`;
+                    parentNode = childProcMap[pid];
+                } else if (lastChildPid && info.label === '可疑命令') {
+                    // 对于没有 ChildPID 的可疑命令，如果内容匹配最近创建的子进程文件名，则归属到该子进程
+                    const detailText = formatDetail(ev.detail).toLowerCase();
+                    const lastChild = childProcMap[lastChildPid];
+                    if (lastChild && lastChild.fname && detailText.includes(lastChild.fname.replace('.exe', ''))) {
+                        parentId = `child_${lastChildPid}`;
+                        parentNode = lastChild;
+                    }
+                }
+
+                const key = `${parentId}|${info.label}`;
+                if (!groupMap.has(key)) {
+                    const group = {
+                        key,
+                        count: 0,
+                        firstIdx: idx,
+                        details: [],
+                        typeInfo: info,
+                        parentId,
+                        parentNode,
+                        time: ev.datetime
+                    };
+                    groupMap.set(key, group);
+                    groupList.push(group);
+                }
+                const group = groupMap.get(key);
+                group.count += 1;
+                group.details.push(formatDetail(ev.detail) || '无详细描述');
+                group.time = ev.datetime || group.time;
+            });
+
+            groupList.forEach((group, gidx) => {
+                const info = group.typeInfo;
+                const detailParts = group.details.slice(0, 30);
+                if (group.details.length > 30) {
+                    detailParts.push(`... 还有 ${group.details.length - 30} 项 ...`);
+                }
+                const node = {
+                    id: `group_${gidx}`,
+                    parentId: group.parentId,
+                    x: 0, y: 0,
+                    cls: info.cls,
+                    icon: info.icon,
+                    title: escapeHtml(info.label),
+                    meta: group.count > 1 ? `+${group.count}` : '',
+                    detail: escapeHtml(detailParts.join('\n')),
+                    code: '',
+                    time: escapeHtml(group.time || ''),
+                    children: []
+                };
+                nodeData.push(node);
+                linkData.push({ from: group.parentId, to: node.id, cls: node.cls });
+                group.parentNode.children.push(node);
+            });
+
+            // 节点间距按分组后的数量自适应，而不是原始事件数
+            const NODE_GAP_Y = Math.min(110, Math.max(60, 60 + Math.ceil((groupList.length - 5) / 5) * 16));
+
+            // 终止节点
+            const endNode = {
+                id: 'end',
+                x: 0, y: 0,
+                cls: 'end', icon: icons.end, title: '进程已终止',
+                meta: 'EDR 已拦截威胁',
+                detail: `威胁评分 ${data.total_score || 0} / 100，驱动已自动终止该进程`,
+                code: ''
+            };
+            nodeData.push(endNode);
+
+            // 所有叶子节点连到终止节点
+            const leafNodes = nodeData.filter(n => n.id !== 'root' && n.id !== 'end' && (!n.children || n.children.length === 0));
+            if (leafNodes.length === 0) {
+                linkData.push({ from: 'current', to: 'end', cls: 'end' });
+            } else {
+                leafNodes.forEach(leaf => {
+                    linkData.push({ from: leaf.id, to: 'end', cls: 'end' });
+                });
+            }
+
+            // 递归树形布局
+            function layoutTree(parentNode, depth) {
+                const children = nodeData.filter(n => n.parentId === parentNode.id);
+                children.sort((a, b) => String(a.id).localeCompare(String(b.id)));
+
+                const totalHeight = (children.length - 1) * NODE_GAP_Y;
+                let startY = parentNode.y - totalHeight / 2;
+                children.forEach((child, i) => {
+                    child.y = startY + i * NODE_GAP_Y;
+                    child.x = ROOT_X + (depth + 1) * LEVEL_GAP_X;
+                    layoutTree(child, depth + 1);
+                });
+            }
+
+            layoutTree(rootNode, 0);
+
+            // 防重叠检测：同一列节点 y 差小于 55 时，将下方节点及其子树整体下移
+            function getDescendants(nodeId) {
+                const result = [];
+                nodeData.filter(n => n.parentId === nodeId).forEach(child => {
+                    result.push(child);
+                    result.push(...getDescendants(child.id));
+                });
+                return result;
+            }
+
+            function resolveOverlaps() {
+                const nonEndNodes = nodeData.filter(n => n.id !== 'end');
+                const colThreshold = 10;
+                const overlapThreshold = 55;
+                const minGap = 60;
+                let changed = true;
+                while (changed) {
+                    changed = false;
+                    for (let i = 0; i < nonEndNodes.length; i++) {
+                        for (let j = 0; j < nonEndNodes.length; j++) {
+                            if (i === j) continue;
+                            const a = nonEndNodes[i], b = nonEndNodes[j];
+                            if (Math.abs(a.x - b.x) > colThreshold) continue;
+                            if (b.y > a.y && b.y - a.y < overlapThreshold) {
+                                const delta = minGap - (b.y - a.y);
+                                b.y += delta;
+                                getDescendants(b.id).forEach(d => d.y += delta);
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            resolveOverlaps();
+
+            // 终止节点放在最后一层，y 取所有叶子 y 的中位数，避免被密集侧拉偏
+            endNode.x = ROOT_X + 4 * LEVEL_GAP_X;
+            if (leafNodes.length > 0) {
+                const ys = leafNodes.map(n => n.y).sort((a, b) => a - b);
+                endNode.y = ys[Math.floor(ys.length / 2)];
+            } else {
+                endNode.y = ROOT_Y;
+            }
+
+            // 事件很少时居中
+            if (events.length <= 2) {
+                rootNode.y = 0;
+                currentNode.y = 0;
+                endNode.y = 0;
+            }
+        }
+
+        function renderNodes() {
+            const container = document.getElementById('nodes');
+            container.innerHTML = '';
+            nodeData.forEach(node => {
+                const el = document.createElement('div');
+                el.className = `node ${node.cls}`;
+                el.id = 'node-' + node.id;
+                el.style.left = node.x + 'px';
+                el.style.top = node.y + 'px';
+                el.innerHTML = `
+                    <div class="row">
+                        <div class="icon">${node.icon}</div>
+                        <div>
+                            <div class="title">${node.title}</div>
+                            <div class="meta">${node.meta}</div>
+                        </div>
+                    </div>
+                `;
+                el.addEventListener('mouseenter', e => showTooltip(e, node));
+                el.addEventListener('mouseleave', () => hideTooltip());
+                el.addEventListener('mousemove', e => moveTooltip(e));
+                container.appendChild(el);
+            });
+        }
+
+        function showTooltip(e, node) {
+            const tooltip = document.getElementById('tooltip');
+            const time = node.time ? `<div class="time">${node.time}</div>` : '';
+            const code = node.code ? `<div class="code">${node.code}</div>` : '';
+            tooltip.innerHTML = `${time}<div style="white-space: pre-wrap; max-height: 360px; overflow-y: auto;">${escapeHtml(node.detail || '')}</div>${code}`;
+            tooltip.style.display = 'block';
+            moveTooltip(e);
+        }
+
+        function moveTooltip(e) {
+            const tooltip = document.getElementById('tooltip');
+            const pad = 12;
+            let x = e.clientX + pad, y = e.clientY + pad;
+            const vw = window.innerWidth, vh = window.innerHeight;
+            if (x + tooltip.offsetWidth > vw) x = e.clientX - tooltip.offsetWidth - pad;
+            if (y + tooltip.offsetHeight > vh) y = e.clientY - tooltip.offsetHeight - pad;
+            tooltip.style.left = x + 'px';
+            tooltip.style.top = y + 'px';
+        }
+
+        function hideTooltip() {
+            document.getElementById('tooltip').style.display = 'none';
+        }
+
+        function renderLinks() {
+            const svg = document.getElementById('links');
+            console.log('[Tree] nodes=', nodeData.length, 'links=', linkData.length);
+            svg.innerHTML = `
+                <defs>
+                    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#d1d5db"/></marker>
+                    <marker id="arrow-high" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#dc2626"/></marker>
+                    <marker id="arrow-med" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#d97706"/></marker>
+                    <marker id="arrow-low" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"/></marker>
+                </defs>
+            `;
+
+            const nodeMap = {};
+            nodeData.forEach(n => nodeMap[n.id] = n);
+
+            let rendered = 0;
+            linkData.forEach(link => {
+                const from = nodeMap[link.from];
+                const to = nodeMap[link.to];
+                if (!from || !to) {
+                    console.log('[Tree] skip link, missing node:', link);
+                    return;
+                }
+
+                const x1 = from.x + 85; // 节点右边缘
+                const y1 = from.y;
+                const x2 = to.x - 85;   // 节点左边缘
+                const y2 = to.y;
+                const c1x = x1 + (x2 - x1) * 0.5;
+                const c2x = x2 - (x2 - x1) * 0.5;
+
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                path.setAttribute('d', `M ${x1} ${y1} C ${c1x} ${y1}, ${c2x} ${y2}, ${x2} ${y2}`);
+                path.setAttribute('class', link.cls || '');
+                path.setAttribute('stroke', link.cls === 'high' ? '#dc2626' : link.cls === 'med' ? '#d97706' : link.cls === 'low' ? '#2563eb' : '#9ca3af');
+                path.setAttribute('stroke-width', '2');
+                path.setAttribute('fill', 'none');
+                path.setAttribute('marker-end', `url(#arrow${link.cls && link.cls !== 'end' && link.cls !== 'root' ? '-' + link.cls : ''})`);
+                svg.appendChild(path);
+                rendered++;
+                console.log('[Tree] link', link.from, '->', link.to, 'x1=', x1, 'y1=', y1, 'x2=', x2, 'y2=', y2);
+            });
+            console.log('[Tree] rendered paths:', rendered);
+        }
+
+        function updateWorld() {
+            document.getElementById('world').style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
+        }
+
+        function fitTopology() {
+            const viewport = document.getElementById('viewport');
+            const vw = viewport.clientWidth, vh = viewport.clientHeight;
+            const minX = Math.min(...nodeData.map(n => n.x - NODE_HALF_W));
+            const maxX = Math.max(...nodeData.map(n => n.x + NODE_HALF_W));
+            const minY = Math.min(...nodeData.map(n => n.y - 40));
+            const maxY = Math.max(...nodeData.map(n => n.y + 40));
+            const contentW = Math.max(maxX - minX, 400);
+            const contentH = Math.max(maxY - minY, 300);
+            scale = Math.min(1, (vw - 120) / contentW, (vh - 120) / contentH);
+            offsetX = (vw - (minX + maxX) * scale) / 2;
+            offsetY = (vh - (minY + maxY) * scale) / 2;
+            updateWorld();
+        }
+
+        function initEvents() {
+            const viewport = document.getElementById('viewport');
+            viewport.addEventListener('mousedown', e => {
+                if (e.target.closest('.node') || e.target.closest('.tooltip')) return;
+                isDragging = true; startX = e.clientX; startY = e.clientY; startOX = offsetX; startOY = offsetY;
+            });
+            window.addEventListener('mousemove', e => {
+                if (!isDragging) return;
+                offsetX = startOX + (e.clientX - startX);
+                offsetY = startOY + (e.clientY - startY);
+                updateWorld();
+            });
+            window.addEventListener('mouseup', () => isDragging = false);
+            viewport.addEventListener('wheel', e => {
+                e.preventDefault();
+                const rect = viewport.getBoundingClientRect();
+                const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+                const factor = e.deltaY > 0 ? 0.9 : 1.1;
+                const ns = Math.max(0.3, Math.min(2.5, scale * factor));
+                offsetX = mx - (mx - offsetX) * (ns / scale);
+                offsetY = my - (my - offsetY) * (ns / scale);
+                scale = ns; updateWorld();
+            }, { passive: false });
+
+            document.getElementById('btn-plus').addEventListener('click', () => zoom(1.2));
+            document.getElementById('btn-minus').addEventListener('click', () => zoom(0.8));
+            document.getElementById('btn-fit').addEventListener('click', () => fitTopology());
+        }
+
+        function zoom(factor) {
+            const viewport = document.getElementById('viewport');
+            const mx = viewport.clientWidth / 2, my = viewport.clientHeight / 2;
+            const ns = Math.max(0.3, Math.min(2.5, scale * factor));
+            offsetX = mx - (mx - offsetX) * (ns / scale);
+            offsetY = my - (my - offsetY) * (ns / scale);
+            scale = ns; updateWorld();
+        }
+
+        async function loadData() {
+            const params = new URLSearchParams(window.location.search);
+            const process = decodeURIComponent(params.get('process') || '');
+            const pid = parseInt(params.get('pid') || '0');
+            const code = decodeURIComponent(params.get('code') || '');
+
+            if (!process || !pid) { showError('缺少进程参数', `process=${process}, pid=${pid}`); return; }
+            if (!window.__TAURI__ || !window.__TAURI__.core) { showError('非 Tauri 环境'); return; }
+
+            try {
+                const jsonStr = await window.__TAURI__.core.invoke('get_edr_report_data', { process, pid, code });
+                const data = JSON.parse(jsonStr);
+                if (!data.timeline || data.timeline.length === 0) {
+                    showError('报告数据中没有行为时间线', `process=${process}, pid=${pid}, code=${code}`); return;
+                }
+
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('header').style.display = 'flex';
+                document.getElementById('legend').style.display = 'block';
+                document.getElementById('info-card').style.display = 'block';
+
+                document.getElementById('info-title').textContent = (data.process_name || '进程') + ' 行为链拓扑';
+                document.getElementById('info-meta').textContent = `PID: ${data.pid || 0} · 报告编号: ${data.report_code || ''} · 威胁评分: ${data.total_score || 0}`;
+
+                buildTopology(data);
+                renderNodes();
+                renderLinks();
+                fitTopology();
+            } catch (e) { showError('加载报告数据失败', String(e)); }
+        }
+
+        function showError(msg, detail) {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('error').style.display = 'flex';
+            document.getElementById('err-msg').textContent = msg;
+            document.getElementById('err-detail').textContent = detail || '';
+        }
+
+        document.addEventListener('DOMContentLoaded', () => { initEvents(); loadData(); });
+    </script>
+</body>
+</html>

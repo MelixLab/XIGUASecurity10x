@@ -1,0 +1,27 @@
+{
+  "version": "1.0.0",
+  "updated_at": "2026-05-02 21:06:38",
+  "description": "Black hashes generated from C:/Users/MEMZ-UAC/Desktop/XIGUASecurity10x/tools/test",
+  "type": "blacklist",
+  "entries": [
+    {
+      "hash": "A3D5715A81F2FBEB5F76C88C9C21EEEE87142909716472F911FF6950C790C24D",
+      "family": "Trojan.Win32.PUA",
+      "file_name": "memz.exe",
+      "file_path": "C:/Users/MEMZ-UAC/Desktop/XIGUASecurity10x/tools/test\\memz.exe"
+    },
+    {
+      "hash": "0A166E97181ED7181D8A8D1FE5D4E5808364E9581FD8A470E43CF9C1EA0BD810",
+      "family": "Trojan.Win32.PUA",
+      "file_name": "QV杀毒软件.exe",
+      "file_path": "C:/Users/MEMZ-UAC/Desktop/XIGUASecurity10x/tools/test\\QV杀毒软件.exe"
+    },
+    {
+      "hash": "D061562BE3BC0A25EC0408E366A19E4CEBEFE766527F68CFB7D8C886818CE00F",
+      "family": "Trojan.Win32.PUA",
+      "file_name": "infected_test_20260501_142614.exe",
+      "file_path": "C:/Users/MEMZ-UAC/Desktop/XIGUASecurity10x/tools/test\\infected_test_20260501_142614.exe"
+    }
+  ],
+  "total_count": 3
+}

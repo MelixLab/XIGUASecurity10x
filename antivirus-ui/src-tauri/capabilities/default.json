@@ -1,0 +1,22 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability for the main window",
+  "windows": ["main", "threat-alert", "intercept-alert", "tray-menu", "timeline", "popup-prompt", "sandbox-progress"],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "opener:allow-open-path",
+    "fs:allow-read-dir",
+    "fs:allow-home-read",
+    "fs:allow-desktop-read",
+    "fs:allow-document-read",
+    "fs:allow-download-read",
+    "fs:allow-read",
+    "fs:allow-read-file",
+    "dialog:allow-open",
+    "core:event:allow-emit",
+    "core:event:allow-listen",
+    "core:window:allow-close"
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "rules": [
+    {
+      "name": "HEUR:Test/BroadMatch",
+      "malware_type": "HEUR",
+      "family": "Generic",
+      "behavior_req": {},
+      "unique_strings": [
+        "CreateRemoteThread"
+      ],
+      "packer": null,
+      "compiler": null
+    },
+    {
+      "name": "PUP:Win32/CrackedSoftware",
+      "malware_type": "PUP",
+      "family": "Generic",
+      "behavior_req": {},
+      "unique_strings": [
+        "keygen"
+      ],
+      "packer": null,
+      "compiler": null
+    }
+  ]
+}

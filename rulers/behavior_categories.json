@@ -1,0 +1,75 @@
+{
+  "version": "2",
+  "categories": [
+    {
+      "name": "MBR/Disk",
+      "high": ["PhysicalDrive", "DeviceIoControl", "NtRaiseHardError"],
+      "medium": ["WriteFile", "ReadFile"]
+    },
+    {
+      "name": "Ransomware/Crypto",
+      "high": ["CryptEncrypt", "CryptDecrypt", "CryptGenKey", "CryptReleaseContext"],
+      "medium": ["CryptAcquireContext", "CryptCreateHash", "CryptHashData"]
+    },
+    {
+      "name": "RAT/Network",
+      "high": ["socket", "connect", "listen", "bind", "accept", "recv", "send", "WSASocket", "WSAStartup"],
+      "medium": ["InternetOpen", "InternetConnect", "HttpSendRequest", "URLDownloadToFile", "gethostbyname", "sendto", "recvfrom"]
+    },
+    {
+      "name": "Keylogger",
+      "high": ["SetWindowsHookEx", "GetAsyncKeyState"],
+      "medium": ["GetForegroundWindow", "GetKeyboardState", "GetKeyState"]
+    },
+    {
+      "name": "Persistence",
+      "high": ["CurrentVersion\\Run", "CreateService"],
+      "medium": ["RegCreateKey", "RegSetValue", "RegOpenKey"]
+    },
+    {
+      "name": "AntiDebug",
+      "high": ["IsDebuggerPresent", "CheckRemoteDebuggerPresent", "NtQueryInformationProcess", "ZwQueryInformationProcess"],
+      "medium": ["VirtualProtect", "WriteProcessMemory", "ReadProcessMemory"]
+    },
+    {
+      "name": "ProcessManip",
+      "high": ["CreateRemoteThread", "Toolhelp32Snapshot"],
+      "medium": ["OpenProcess", "TerminateProcess", "Process32Next", "Module32Next"]
+    },
+    {
+      "name": "Dropper",
+      "high": ["FindResource", "SizeofResource", "LoadResource", "LockResource"],
+      "medium": ["CreateFile", "WriteFile", "MoveFile", "CopyFile", "DeleteFile"]
+    },
+    {
+      "name": "UAC/Privilege",
+      "high": ["AdjustTokenPrivileges", "LookupPrivilegeValue", "SeShutdownPrivilege", "SeDebugPrivilege", "SeTakeOwnershipPrivilege"],
+      "medium": ["ZwQuerySystemInformation", "NtQuerySystemInformation"]
+    },
+    {
+      "name": "Wallpaper/Lock",
+      "high": ["BlockInput", "LockWorkStation"],
+      "medium": ["SystemParametersInfo"]
+    },
+    {
+      "name": "Registry",
+      "high": [],
+      "medium": ["RegDeleteKey", "RegEnumKey", "RegQueryValue"]
+    },
+    {
+      "name": "FileScan",
+      "high": [],
+      "medium": ["FindFirstFile", "FindNextFile", "GetFileAttributes", "SetFileAttributes"]
+    },
+    {
+      "name": "Injector",
+      "high": ["NtUnmapViewOfSection", "NtCreateThreadEx", "QueueUserAPC"],
+      "medium": ["VirtualAllocEx", "SetThreadContext", "ResumeThread"]
+    },
+    {
+      "name": "Cryptominer",
+      "high": [],
+      "medium": ["CryptEnumProviders", "CryptGetProvParam", "BCryptOpenAlgorithmProvider", "BCryptGenerateSymmetricKey"]
+    }
+  ]
+}

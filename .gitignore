@@ -1,0 +1,113 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+target/
+dist/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# Tools build outputs
+tools/dist/
+tools/build/
+tools/*.spec
+
+# Sandbox runtime data (sandboxed VM disk images, program copies)
+Sandbox/
+
+# .NET build artifacts
+Melix-New/**/bin/
+Melix-New/**/obj/
+Melix-New/**/publish/
+
+# ML training data & checkpoints (too large for source control)
+Melix-New/**/blackData/
+Melix-New/**/Dataset.db
+Melix-New/**/Epoch_*/
+Melix-New/**/checkpoint.pth
+Melix-New/*.zip
+Melix-New/**/*.zip
+
+# Malware sample archives
+infected2026063001.zip
+**/infected*.zip
+
+# Model files (large binaries)
+*.onnx
+
+# Driver/engine build artifacts
+Driver/*.exe
+Driver/*.sys
+Driver/*.dll
+Driver/*.lib
+Driver/*.pdb
+
+# Release packages & binaries (published via GitHub Releases, not source)
+Release/
+
+# VS / KMDF driver build outputs
+KMDF Driver/**/Build/
+KMDF Driver/**/x64/
+**/obj/
+**/bin/
+**/.vs/
+**/*.tlog/
+**/*.lastbuildstate
+**/*.recipe
+**/*.ilk
+**/*.idb
+
+# Driver binaries & code-signing certificates (never commit certificates)
+Driver/
+
+# Root-level archives & third-party installers
+Driver.zip
+KMDF Driver.zip
+Sandboxie-Plus-x64-v1.18.1.exe
+StackScan.exe
+Qwen_html_*.html
+antivirus-ui/*.zip
+
+# Malware sample unpacked directories
+Melix-New/**/infected*/
+
+# Malware test samples (do NOT upload to public repositories)
+tools/infected_*
+tools/test/
+tools/*.exe
+
+# Windows / IDE junk
+*.db-shm
+*.db-wal
+*.suo
+*.user
+
+# Unrelated / debug / generated files at repo root (not part of the project)
+/.dbg/
+/.trae/
+/.trae-html-share-packages/
+/heysafe-model-cli/
+/xigua-av-evaluation/
+/fix_features.py
+/h_server
+/lab_ui.pyc_Decompiled.py
+/lib.rs
+/new.png
+/promo.html
+/query
+/virus_family_rules.json
+/上下文.txt
+/antivirus-alert.html

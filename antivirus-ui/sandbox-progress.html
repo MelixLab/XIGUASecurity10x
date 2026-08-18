@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>沙箱分析</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", -apple-system, BlinkMacSystemFont, sans-serif;
+            background: #f9fafb;
+            width: 100%;
+            height: 100vh;
+            overflow: hidden;
+            border-radius: 8px;
+            user-select: none;
+        }
+
+        .sandbox-container {
+            width: 100%;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            background: #f9fafb;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 0 0.5px rgba(0, 0, 0, 0.13), 0 8px 16px rgba(0, 0, 0, 0.14);
+        }
+
+        /* 顶部标题栏 */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 20px;
+            background: #f9fafb;
+            flex-shrink: 0;
+        }
+
+        .header-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #1a1a1a;
+        }
+
+        .close-btn {
+            width: 28px;
+            height: 28px;
+            background: transparent;
+            border: none;
+            color: #5c5c5c;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            transition: all 0.1s cubic-bezier(0.4, 0.0, 0.2, 1);
+        }
+
+        .close-btn:hover {
+            background: #e5e5e5;
+            color: #1a1a1a;
+        }
+
+        .close-btn svg {
+            width: 14px;
+            height: 14px;
+        }
+
+        /* 中间内容区域 */
+        .content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 4px 20px 12px;
+            overflow: hidden;
+        }
+
+        /* 主标题 */
+        .main-title {
+            font-size: 17px;
+            font-weight: 600;
+            color: #0f2b46;
+            margin-bottom: 10px;
+        }
+
+        /* 描述区域 */
+        .description {
+            background: #fff4e6;
+            border-left: 3px solid #ffa726;
+            border-radius: 0 6px 6px 0;
+            padding: 10px 12px;
+            margin-bottom: 12px;
+        }
+
+        .description-text {
+            font-size: 12.5px;
+            color: #5c4030;
+            line-height: 1.6;
+        }
+
+        /* 文件信息卡片 */
+        .info-card {
+            width: 100%;
+            background: #f0f3f6;
+            border-radius: 8px;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .info-item {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .info-label {
+            font-size: 11px;
+            color: #8a9ba8;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+
+        .info-value {
+            font-size: 13px;
+            color: #1a1a1a;
+            word-break: break-all;
+            line-height: 1.4;
+            font-weight: 500;
+        }
+
+        /* 步骤区域 */
+        .steps {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            margin-bottom: 12px;
+        }
+
+        .step {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 3px 0;
+            transition: all 0.2s cubic-bezier(0.4, 0.0, 0.2, 1);
+        }
+
+        .step-icon {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            transition: all 0.2s cubic-bezier(0.4, 0.0, 0.2, 1);
+        }
+
+        /* pending: 小圆点 */
+        .step.pending .step-icon::after {
+            content: '';
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #c0c6cf;
+        }
+
+        /* active: 脉动圆点 */
+        .step.active .step-icon::after {
+            content: '';
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #0078D4;
+            animation: pulse-dot 1.5s ease-in-out infinite;
+        }
+
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        /* done: 绿色对勾 */
+        .step.done .step-icon svg {
+            width: 16px;
+            height: 16px;
+            fill: none;
+            stroke: #107C10;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        /* error: 红色叉 */
+        .step.error .step-icon svg {
+            width: 16px;
+            height: 16px;
+            fill: none;
+            stroke: #D13438;
+            stroke-width: 2;
+            stroke-linecap: round;
+        }
+
+        .step-content {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+
+        .step-text {
+            font-size: 13px;
+            color: #5c5c5c;
+            transition: color 0.2s cubic-bezier(0.4, 0.0, 0.2, 1);
+        }
+
+        .step.active .step-text {
+            color: #0078D4;
+        }
+
+        .step.done .step-text {
+            color: #107C10;
+        }
+
+        .step.error .step-text {
+            color: #D13438;
+        }
+
+        /* 每步用时 */
+        .step-time {
+            font-size: 11px;
+            color: #9ca3af;
+            font-variant-numeric: tabular-nums;
+            flex-shrink: 0;
+        }
+
+        .step.done .step-time {
+            color: #107C10;
+        }
+
+        .step.error .step-time {
+            color: #D13438;
+        }
+
+        /* Fluent 风格进度条：细轨道 + 品牌色填充 */
+        .progress-bar-container {
+            height: 2px;
+            background: #e2e5ea;
+            border-radius: 1px;
+            overflow: hidden;
+            margin-top: auto;
+            margin-bottom: 0;
+            position: relative;
+        }
+
+        .progress-bar {
+            height: 100%;
+            background: #0078D4;
+            border-radius: 1px;
+            transition: width 0.4s cubic-bezier(0.4, 0.0, 0.2, 1);
+            width: 0%;
+        }
+
+        .progress-bar.complete {
+            background: #107C10;
+        }
+
+        .progress-bar.error {
+            background: #D13438;
+        }
+
+        /* 恶意软件信息 */
+        .family-info {
+            display: none;
+            background: #fdf2f2;
+            border-left: 3px solid #D13438;
+            border-radius: 0 6px 6px 0;
+            padding: 10px 12px;
+            margin-bottom: 8px;
+        }
+
+        .family-info.visible {
+            display: block;
+        }
+
+        .family-info .family-name {
+            font-size: 13px;
+            font-weight: 600;
+            color: #D13438;
+            margin-bottom: 2px;
+        }
+
+        .family-info .family-desc {
+            font-size: 12px;
+            color: #7a3030;
+            line-height: 1.5;
+        }
+
+        /* 底部状态栏 */
+        .footer {
+            padding: 8px 20px 10px;
+            background: #f0f3f6;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-top: 1px solid #e8ebee;
+            flex-shrink: 0;
+        }
+
+        .timer {
+            font-size: 12px;
+            color: #8a9ba8;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .result-badge {
+            display: none;
+            padding: 3px 12px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .result-badge.safe {
+            display: inline-block;
+            background: #e6f4ea;
+            color: #107C10;
+        }
+
+        .result-badge.malicious {
+            display: inline-block;
+            background: #fdf2f2;
+            color: #D13438;
+        }
+
+        .result-badge.suspicious {
+            display: inline-block;
+            background: #fff8e6;
+            color: #b07b00;
+        }
+    </style>
+</head>
+<body>
+    <div class="sandbox-container">
+        <!-- 顶部标题栏 -->
+        <div class="header">
+            <div class="header-title">XIGUASecurity</div>
+            <button class="close-btn" id="close-btn">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M2.146 2.146a.5.5 0 0 1 .708 0L8 7.293l5.146-5.147a.5.5 0 0 1 .708.708L8.707 8l5.147 5.146a.5.5 0 0 1-.708.708L8 8.707l-5.146 5.147a.5.5 0 0 1-.708-.708L7.293 8 2.146 2.854a.5.5 0 0 1 0-.708z" fill="currentColor"/>
+                </svg>
+            </button>
+        </div>
+
+        <!-- 中间内容区域 -->
+        <div class="content">
+            <!-- 主标题 -->
+            <div class="main-title" id="main-title">沙箱分析进行中</div>
+
+            <!-- 描述区域 -->
+            <div class="description" id="description">
+                <div class="description-text" id="description-text">我们怀疑此程序可能包含病毒，已将该文件送入沙箱进行安全分析。</div>
+            </div>
+
+            <!-- 文件信息卡片 -->
+            <div class="info-card">
+                <div class="info-item">
+                    <div class="info-label">分析文件</div>
+                    <div class="info-value" id="filename">未知文件</div>
+                </div>
+            </div>
+
+            <!-- 步骤区域 -->
+            <div class="steps">
+                <div class="step active" id="step-1">
+                    <div class="step-icon">
+                        <div class="spinner"></div>
+                    </div>
+                    <div class="step-content">
+                        <div class="step-text">正在启动沙箱环境</div>
+                        <div class="step-time" id="time-1">--</div>
+                    </div>
+                </div>
+                <div class="step pending" id="step-2">
+                    <div class="step-icon"></div>
+                    <div class="step-content">
+                        <div class="step-text">等待程序执行行为</div>
+                        <div class="step-time" id="time-2">--</div>
+                    </div>
+                </div>
+                <div class="step pending" id="step-3">
+                    <div class="step-icon"></div>
+                    <div class="step-content">
+                        <div class="step-text">正在分析行为数据</div>
+                        <div class="step-time" id="time-3">--</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 恶意软件信息（结果出来后显示） -->
+            <div class="family-info" id="family-info">
+                <div class="family-name" id="family-name"></div>
+                <div class="family-desc" id="family-desc"></div>
+            </div>
+
+            <!-- 进度条 -->
+            <div class="progress-bar-container">
+                <div class="progress-bar" id="progress-bar"></div>
+            </div>
+        </div>
+
+        <!-- 底部状态栏 -->
+        <div class="footer">
+            <span class="timer" id="timer">00:00</span>
+            <span class="result-badge" id="result-badge"></span>
+        </div>
+    </div>
+
+    <script>
+        const { listen } = window.__TAURI__.event;
+
+        let startTime = Date.now();
+        let timerInterval = null;
+        let hideTimer = null; // ★分析完成后的自动隐藏定时器（必须在新分析开始时清除）★
+        let resultReceived = window.__sandboxResultReceived || false;
+        let currentStep = 1;
+
+        // 每步开始时间
+        let stepStartTimes = { 1: Date.now(), 2: null, 3: null };
+        let stepDurations = { 1: null, 2: null, 3: null };
+
+        // 预期时长（秒）
+        const STEP1_EXPECTED = 15;  // 启动沙箱环境约15秒
+        const STEP2_EXPECTED = 60;  // 程序行为执行60秒
+
+        function fmtTime(ms) {
+            const s = Math.floor(ms / 1000);
+            if (s < 60) return s + 's';
+            return Math.floor(s / 60) + 'm' + (s % 60) + 's';
+        }
+
+        function startTimer() {
+            timerInterval = setInterval(() => {
+                if (resultReceived) return;
+
+                const elapsed = Math.floor((Date.now() - startTime) / 1000);
+                const mins = String(Math.floor(elapsed / 60)).padStart(2, '0');
+                const secs = String(elapsed % 60).padStart(2, '0');
+                document.getElementById('timer').textContent = `${mins}:${secs}`;
+
+                // 基于阶段的进度计算
+                // 阶段1: 启动沙箱环境 (预计15秒) → 0% ~ 20%
+                // 阶段2: 程序行为执行 (预计60秒) → 20% ~ 95%
+                // 阶段3: 分析行为数据 → 95% (等待结果)
+                let progress;
+                if (currentStep === 1) {
+                    progress = Math.min((elapsed / STEP1_EXPECTED) * 20, 20);
+                } else if (currentStep === 2) {
+                    const step2Elapsed = (Date.now() - stepStartTimes[2]) / 1000;
+                    progress = 20 + Math.min((step2Elapsed / STEP2_EXPECTED) * 75, 75);
+                } else {
+                    progress = 95;
+                }
+                document.getElementById('progress-bar').style.width = Math.min(progress, 95) + '%';
+
+                // 更新当前步骤的用时
+                for (let i = 1; i <= 3; i++) {
+                    const el = document.getElementById('step-' + i);
+                    const timeEl = document.getElementById('time-' + i);
+                    if (el.classList.contains('active') && stepStartTimes[i]) {
+                        timeEl.textContent = fmtTime(Date.now() - stepStartTimes[i]);
+                    }
+                }
+            }, 500);
+        }
+
+        function stopTimer() {
+            if (timerInterval) {
+                clearInterval(timerInterval);
+                timerInterval = null;
+            }
+
+            // ★清除上次分析的自动隐藏定时器★
+            // 历史 bug（分析窗口"消失"）：第一次分析完成后的 8 秒隐藏定时器
+            // 未被取消，第二次分析立即开始时把新窗口隐藏了。
+            if (hideTimer) {
+                clearTimeout(hideTimer);
+                hideTimer = null;
+            }
+        }
+
+        const checkSvg = '<svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg>';
+        const crossSvg = '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M6 18L18 6"/></svg>';
+
+        function setStep(stepNum) {
+            currentStep = stepNum;
+
+            // 记录上一步的用时
+            if (stepNum > 1 && stepStartTimes[stepNum - 1] && stepDurations[stepNum - 1] === null) {
+                stepDurations[stepNum - 1] = Date.now() - stepStartTimes[stepNum - 1];
+                const timeEl = document.getElementById('time-' + (stepNum - 1));
+                if (timeEl) timeEl.textContent = fmtTime(stepDurations[stepNum - 1]);
+            }
+
+            // 记录当前步的开始时间
+            stepStartTimes[stepNum] = Date.now();
+
+            for (let i = 1; i <= 3; i++) {
+                const el = document.getElementById('step-' + i);
+                const icon = el.querySelector('.step-icon');
+
+                if (i < stepNum) {
+                    el.className = 'step done';
+                    icon.innerHTML = checkSvg;
+                } else if (i === stepNum) {
+                    el.className = 'step active';
+                    icon.innerHTML = '';
+                } else {
+                    el.className = 'step pending';
+                    icon.innerHTML = '';
+                }
+            }
+        }
+
+        listen('sandbox-progress', (event) => {
+            if (resultReceived) return;
+            const data = event.payload;
+            if (data.filename) {
+                document.getElementById('filename').textContent = data.filename;
+            }
+            if (data.step) {
+                setStep(data.step);
+            }
+            if (data.status_text) {
+                const el = document.getElementById('step-' + data.step);
+                const text = el.querySelector('.step-text');
+                if (text) text.textContent = data.status_text;
+            }
+        });
+
+        listen('sandbox-result', (event) => {
+            if (resultReceived) return;
+            resultReceived = true;
+            window.__sandboxResultReceived = true;
+
+            const data = event.payload;
+            stopTimer();
+
+            // 记录最后一步用时
+            if (stepStartTimes[3] && stepDurations[3] === null) {
+                stepDurations[3] = Date.now() - stepStartTimes[3];
+                const timeEl = document.getElementById('time-3');
+                if (timeEl) timeEl.textContent = fmtTime(stepDurations[3]);
+            } else if (stepStartTimes[2] && stepDurations[2] === null) {
+                stepDurations[2] = Date.now() - stepStartTimes[2];
+                const timeEl = document.getElementById('time-2');
+                if (timeEl) timeEl.textContent = fmtTime(stepDurations[2]);
+            }
+
+            setStep(3);
+            const step3 = document.getElementById('step-3');
+            step3.className = 'step done';
+            const icon3 = step3.querySelector('.step-icon');
+            icon3.innerHTML = checkSvg;
+
+            document.getElementById('progress-bar').style.width = '100%';
+
+            const badge = document.getElementById('result-badge');
+            const title = document.getElementById('main-title');
+            const desc = document.getElementById('description');
+            const descText = document.getElementById('description-text');
+
+            const progressBar = document.getElementById('progress-bar');
+
+            if (data.verdict === 'safe') {
+                badge.className = 'result-badge safe';
+                badge.textContent = '安全';
+                title.textContent = '分析完成 - 文件安全';
+                desc.style.background = '#e6f4ea';
+                desc.style.borderLeftColor = '#107C10';
+                descText.style.color = '#1a5e1a';
+                descText.textContent = '沙箱分析完成，未检测到恶意行为。该文件可以安全运行。';
+                progressBar.className = 'progress-bar complete';
+            } else if (data.verdict === 'malicious') {
+                badge.className = 'result-badge malicious';
+                badge.textContent = '恶意';
+                title.textContent = '分析完成 - 检测到恶意软件';
+                desc.style.background = '#fdf2f2';
+                desc.style.borderLeftColor = '#D13438';
+                descText.style.color = '#7a3030';
+                descText.textContent = '沙箱分析检测到恶意行为，建议立即删除该文件。';
+                progressBar.className = 'progress-bar error';
+
+                if (data.family_name) {
+                    const familyInfo = document.getElementById('family-info');
+                    familyInfo.className = 'family-info visible';
+                    document.getElementById('family-name').textContent = data.family_name;
+                    document.getElementById('family-desc').textContent = data.description || '';
+                }
+
+                step3.className = 'step error';
+                icon3.innerHTML = crossSvg;
+            } else if (data.verdict === 'suspicious') {
+                badge.className = 'result-badge suspicious';
+                badge.textContent = '可疑';
+                title.textContent = '分析完成 - 文件可疑';
+                desc.style.background = '#fff8e6';
+                desc.style.borderLeftColor = '#FFB900';
+                descText.style.color = '#6b5500';
+                descText.textContent = '沙箱分析检测到部分可疑行为，建议谨慎处理。';
+
+                if (data.family_name) {
+                    const familyInfo = document.getElementById('family-info');
+                    familyInfo.className = 'family-info visible';
+                    document.getElementById('family-name').textContent = data.family_name;
+                    document.getElementById('family-desc').textContent = data.description || '';
+                }
+            } else if (data.verdict === 'launch_failed') {
+                badge.className = 'result-badge suspicious';
+                badge.textContent = '警告';
+                title.textContent = '分析完成 - 启动失败';
+                desc.style.background = '#fff8e6';
+                desc.style.borderLeftColor = '#FFB900';
+                descText.style.color = '#6b5500';
+                descText.textContent = '文件分析结果为安全，但重新启动时失败。请手动运行该文件。';
+                progressBar.className = 'progress-bar complete';
+
+                const familyInfo = document.getElementById('family-info');
+                familyInfo.className = 'family-info visible';
+                document.getElementById('family-name').textContent = '启动失败';
+                document.getElementById('family-desc').textContent = data.error || '未知错误';
+            }
+
+            hideTimer = setTimeout(() => {
+                // ★不能用 close()，那会销毁窗口导致第二次分析弹不出来
+                // 改用 invoke 调用 Rust 端的 Win32 ShowWindow(SW_HIDE) 仅隐藏窗口
+                if (window.__TAURI__ && window.__TAURI__.core) {
+                    window.__TAURI__.core.invoke('hide_sandbox_progress_window');
+                }
+            }, 8000);
+        });
+
+        // 关闭按钮
+        document.getElementById('close-btn').addEventListener('click', () => {
+            // ★不能用 close()，那会销毁窗口导致第二次分析弹不出来
+            if (window.__TAURI__ && window.__TAURI__.core) {
+                window.__TAURI__.core.invoke('hide_sandbox_progress_window');
+            }
+        });
+
+        // 窗口重用时的状态重置（由 Rust 端调用）
+        window.__resetSandboxProgress = function() {
+            startTime = Date.now();
+            currentStep = 1;
+            resultReceived = false;
+            window.__sandboxResultReceived = false;
+            stepStartTimes = { 1: Date.now(), 2: null, 3: null };
+            stepDurations = { 1: null, 2: null, 3: null };
+
+            document.getElementById('main-title').textContent = '沙箱分析进行中';
+            document.getElementById('description-text').textContent = '我们怀疑此程序可能包含病毒，已将该文件送入沙箱进行安全分析。';
+            document.getElementById('filename').textContent = '未知文件';
+            const pb = document.getElementById('progress-bar');
+            pb.style.width = '0%';
+            pb.className = 'progress-bar';
+            document.getElementById('timer').textContent = '00:00';
+            const badge = document.getElementById('result-badge');
+            badge.className = 'result-badge';
+            badge.textContent = '';
+            document.getElementById('family-info').className = 'family-info';
+            const desc = document.getElementById('description');
+            desc.style.background = '#fff4e6';
+            desc.style.borderLeftColor = '#ffa726';
+            desc.querySelector('.description-text').style.color = '#5c4030';
+
+            const step1 = document.getElementById('step-1');
+            step1.className = 'step active';
+            step1.querySelector('.step-icon').innerHTML = '';
+            step1.querySelector('.step-text').textContent = '正在启动沙箱环境';
+            document.getElementById('time-1').textContent = '--';
+
+            const step2 = document.getElementById('step-2');
+            step2.className = 'step pending';
+            step2.querySelector('.step-icon').innerHTML = '';
+            step2.querySelector('.step-text').textContent = '等待程序执行行为';
+            document.getElementById('time-2').textContent = '--';
+
+            const step3 = document.getElementById('step-3');
+            step3.className = 'step pending';
+            step3.querySelector('.step-icon').innerHTML = '';
+            step3.querySelector('.step-text').textContent = '正在分析行为数据';
+            document.getElementById('time-3').textContent = '--';
+
+            if (timerInterval) {
+                clearInterval(timerInterval);
+                timerInterval = null;
+            }
+
+            // ★清除上次分析的自动隐藏定时器★
+            // 历史 bug（分析窗口"消失"）：第一次分析完成后的 8 秒隐藏定时器
+            // 未被取消，第二次分析立即开始时把新窗口隐藏了。
+            if (hideTimer) {
+                clearTimeout(hideTimer);
+                hideTimer = null;
+            }
+            startTimer();
+        };
+
+        startTimer();
+    </script>
+</body>
+</html>

@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XIGUASecurity 安全确认</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            user-select: none;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #000000;
+            font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", -apple-system, BlinkMacSystemFont, sans-serif;
+        }
+
+        /* 全屏安全桌面遮罩：默认渐变（无壁纸时），有壁纸时由 JS 覆盖为真实桌面壁纸 */
+        .secure-desktop {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(160deg, rgba(15, 23, 42, 0.92), rgba(2, 6, 23, 0.96));
+            background-size: cover;
+            background-position: center;
+            overflow: hidden;
+        }
+
+        /* 壁纸暗化层：极淡，让用户壁纸清晰可见，仅保证卡片文字可读 */
+        .secure-desktop::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.12);
+        }
+
+        .secure-desktop > * {
+            position: relative;
+            z-index: 1;
+        }
+
+        /* 居中确认卡片 */
+        .confirm-card {
+            width: 440px;
+            max-width: 92vw;
+            background: #FFFFFF;
+            border-radius: 8px;
+            box-shadow: 0 0 0.5px rgba(0, 0, 0, 0.13), 0 24px 48px rgba(0, 0, 0, 0.4);
+            overflow: hidden;
+            transform: scale(0.95);
+            opacity: 0;
+            animation: cardIn 200ms cubic-bezier(0.0, 0.0, 0.2, 1) forwards;
+        }
+
+        @keyframes cardIn {
+            to { transform: scale(1); opacity: 1; }
+        }
+
+        /* 顶部状态色条（威胁红） */
+        .card-status-bar {
+            height: 4px;
+            background: #D13438;
+        }
+
+        .card-body {
+            padding: 28px 28px 24px;
+        }
+
+        /* 图标与标题行 */
+        .card-header {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+
+        .shield-icon {
+            width: 44px;
+            height: 44px;
+            flex-shrink: 0;
+            border-radius: 8px;
+            background: rgba(209, 52, 56, 0.1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .card-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: #1A1A1A;
+            line-height: 1.3;
+        }
+
+        .card-subtitle {
+            font-size: 12px;
+            color: #5F5F5F;
+            margin-top: 2px;
+        }
+
+        /* 操作描述 */
+        .action-box {
+            background: #F8F8F8;
+            border: 1px solid #EBEBEB;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 8px;
+        }
+
+        .action-label {
+            font-size: 12px;
+            color: #5F5F5F;
+            margin-bottom: 6px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .action-label svg {
+            flex-shrink: 0;
+        }
+
+        .action-text {
+            font-size: 15px;
+            font-weight: 600;
+            color: #1F1F1F;
+            line-height: 1.5;
+        }
+
+        .warning-hint {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            font-size: 12px;
+            color: #D13438;
+            line-height: 1.5;
+            margin-bottom: 20px;
+            padding: 10px 12px;
+            background: rgba(209, 52, 56, 0.06);
+            border-radius: 6px;
+        }
+
+        .warning-hint svg {
+            flex-shrink: 0;
+            margin-top: 1px;
+        }
+
+        /* 长按确认按钮（防误触） */
+        .hold-confirm {
+            width: 100%;
+            height: 44px;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: 600;
+            color: #FFFFFF;
+            background: #D13438;
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+            transition: background 100ms ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 12px;
+            touch-action: none;
+            user-select: none;
+        }
+
+        .hold-confirm:hover { background: #C52B2F; }
+        .hold-confirm:active { background: #B32327; }
+        .hold-confirm.holding { background: #B32327; }
+
+        .hold-fill {
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 0%;
+            background: rgba(255, 255, 255, 0.18);
+            transition: width 60ms linear;
+        }
+
+        .hold-confirm .hold-label {
+            position: relative;
+            z-index: 1;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            white-space: nowrap;
+        }
+
+        /* 倒计时：绝对定位固定在按钮右侧垂直居中，不参与 flex 布局，
+           与"按住确认"文字严格对齐，数字变化不影响整体布局 */
+        .hold-confirm .hold-timer {
+            position: absolute;
+            right: 16px;
+            top: 50%;
+            transform: translateY(-50%);
+            z-index: 1;
+            font-variant-numeric: tabular-nums;
+            opacity: 0.9;
+            line-height: 1;
+        }
+
+        /* 取消按钮 */
+        .cancel-btn {
+            width: 100%;
+            height: 40px;
+            border: 1px solid #E5E5E5;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: 500;
+            color: #1F1F1F;
+            background: #FFFFFF;
+            cursor: pointer;
+            transition: background 100ms ease;
+        }
+
+        .cancel-btn:hover { background: #F5F5F5; }
+        .cancel-btn:active { background: #EAEAEA; }
+    </style>
+</head>
+<body>
+    <div class="secure-desktop" id="secure-desktop">
+        <!-- 居中确认卡片 -->
+        <div class="confirm-card">
+            <div class="card-status-bar"></div>
+            <div class="card-body">
+                <div class="card-header">
+                    <div class="shield-icon">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M12 2L4 5V11C4 16.55 7.41 21.26 12 22C16.59 21.26 20 16.55 20 11V5L12 2ZM12 4.18L18 6.49V11C18 15.52 15.39 19.44 12 20.46C8.61 19.44 6 15.52 6 11V6.49L12 4.18ZM11 7H13V13H11V7ZM11 15H13V17H11V15Z" fill="#D13438"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <div class="card-title" id="card-title">安全确认</div>
+                        <div class="card-subtitle" id="card-subtitle">XIGUASecurity EndPoint Protection</div>
+                    </div>
+                </div>
+
+                <div class="action-box">
+                    <div class="action-label">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M12 2C6.48 2 2 6.48 2 12C2 17.52 6.48 22 12 22C17.52 22 22 17.52 22 12C22 6.48 17.52 2 12 2ZM12 20C7.59 20 4 16.41 4 12C4 7.59 7.59 4 12 4C16.41 4 20 7.59 20 12C20 16.41 16.41 20 12 20ZM11 7H13V13H11V7ZM11 15H13V17H11V15Z" fill="#5F5F5F"/>
+                        </svg>
+                        请求的操作
+                    </div>
+                    <div class="action-text" id="action-text">--</div>
+                </div>
+
+                <div class="warning-hint">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M12 2C6.48 2 2 6.48 2 12C2 17.52 6.48 22 12 22C17.52 22 22 17.52 22 12C22 6.48 17.52 2 12 2ZM13 17H11V15H13V17ZM13 13H11V7H13V13Z" fill="#D13438"/>
+                    </svg>
+                    <span id="warning-text">此操作需要您的确认，请按住下方按钮以继续。</span>
+                </div>
+
+                <button class="hold-confirm" id="confirm-btn">
+                    <span class="hold-fill" id="hold-fill"></span>
+                    <span class="hold-label" id="hold-label">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M12 1L3 5V11C3 16.55 6.84 21.74 12 23C17.16 21.74 21 16.55 21 11V5L12 1ZM10 17L5 12.01L6.41 10.6L10 14.17L17.59 6.58L19 8L10 17Z" fill="currentColor"/>
+                        </svg>
+                        <span>按住确认</span>
+                    </span>
+                    <span class="hold-timer" id="hold-timer">3s</span>
+                </button>
+                <button class="cancel-btn" id="cancel-btn">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ============ 会话状态 ============
+        let currentSessionId = '';
+        let currentAction = '';
+        let holdActive = false;
+        let holdTimer = null;
+        let holdStartTime = 0;
+        const HOLD_MS = 3000; // 按住 3 秒确认
+
+        // ============ Tauri 调用封装 ============
+        async function tauriInvoke(cmd, args) {
+            if (window.__TAURI__ && window.__TAURI__.core) {
+                return await window.__TAURI__.core.invoke(cmd, args);
+            }
+            throw new Error('Tauri API not available');
+        }
+
+        // ============ 初始化（由 Rust 端通过 eval 注入数据） ============
+        function initConfirm(data) {
+            currentSessionId = data.sessionId || '';
+            currentAction = data.action || '';
+            if (data.title) {
+                document.getElementById('card-title').textContent = data.title;
+            }
+            if (data.description) {
+                document.getElementById('action-text').textContent = data.description;
+            }
+            if (data.warning) {
+                document.getElementById('warning-text').textContent = data.warning;
+            }
+            // 使用真实桌面壁纸作为背景（与 Windows 锁屏/安全桌面一致）
+            if (data.wallpaper) {
+                const sd = document.getElementById('secure-desktop');
+                if (sd) {
+                    sd.style.backgroundImage = 'url("' + data.wallpaper + '")';
+                    sd.style.backgroundColor = 'transparent';
+                }
+            }
+            console.log('[SecureConfirm] Initialized, session:', currentSessionId, 'action:', currentAction, 'wallpaper:', data.wallpaper ? 'yes' : 'no');
+        }
+
+        // 供 Rust eval 调用：等待 DOM 就绪后注入数据
+        window.applySecureConfirmData = function (data) {
+            var tries = 0;
+            function apply() {
+                var el = document.getElementById('card-title');
+                if (!el) {
+                    if (tries < 80) { tries++; setTimeout(apply, 100); return; }
+                    console.error('[SecureConfirm] DOM not ready');
+                    return;
+                }
+                initConfirm(data);
+            }
+            apply();
+        };
+
+        // 事件监听（Rust 端通过 emit 注入，线程安全；与 eval 双通道保证可靠）
+        (function () {
+            if (window.__TAURI__ && window.__TAURI__.event && window.__TAURI__.event.listen) {
+                window.__TAURI__.event.listen('secure-confirm-data', function (event) {
+                    console.log('[SecureConfirm] Received event data:', event.payload);
+                    if (event.payload) {
+                        window.applySecureConfirmData(event.payload);
+                    }
+                }).catch(function (err) {
+                    console.error('[SecureConfirm] Failed to listen event:', err);
+                });
+            }
+        })();
+
+        // ============ 长按确认逻辑 ============
+        function startHold() {
+            if (holdActive) return;
+            holdActive = true;
+            holdStartTime = Date.now();
+            const btn = document.getElementById('confirm-btn');
+            const fill = document.getElementById('hold-fill');
+            const timer = document.getElementById('hold-timer');
+            btn.classList.add('holding');
+
+            // 倒计时（直接更新已存在的 span，不再动态创建，保证布局稳定）
+            holdTimer = setInterval(() => {
+                const elapsed = Date.now() - holdStartTime;
+                const progress = Math.min(elapsed / HOLD_MS * 100, 100);
+                fill.style.width = progress + '%';
+                const remain = Math.max(Math.ceil((HOLD_MS - elapsed) / 1000), 0);
+                timer.textContent = remain + 's';
+                if (elapsed >= HOLD_MS) {
+                    completeHold();
+                }
+            }, 60);
+        }
+
+        function cancelHold() {
+            if (!holdActive) return;
+            holdActive = false;
+            clearInterval(holdTimer);
+            holdTimer = null;
+            const btn = document.getElementById('confirm-btn');
+            const fill = document.getElementById('hold-fill');
+            const timer = document.getElementById('hold-timer');
+            btn.classList.remove('holding');
+            fill.style.width = '0%';
+            timer.textContent = '3s';
+        }
+
+        function completeHold() {
+            if (!holdActive) return;
+            holdActive = false;
+            clearInterval(holdTimer);
+            holdTimer = null;
+            const btn = document.getElementById('confirm-btn');
+            const fill = document.getElementById('hold-fill');
+            const timer = document.getElementById('hold-timer');
+            btn.classList.remove('holding');
+            fill.style.width = '100%';
+            timer.textContent = '3s';
+            respond(true);
+        }
+
+        // ============ 决策回调 ============
+        async function respond(approved) {
+            try {
+                await tauriInvoke('secure_confirm_respond', {
+                    sessionId: currentSessionId,
+                    approved: approved
+                });
+            } catch (e) {
+                console.error('[SecureConfirm] Failed to respond:', e);
+            }
+            // 无论成功与否，尝试关闭窗口
+            try {
+                if (window.__TAURI__ && window.__TAURI__.window) {
+                    await window.__TAURI__.window.getCurrentWindow().hide();
+                }
+            } catch (e) {}
+        }
+
+        // ============ 事件绑定 ============
+        const confirmBtn = document.getElementById('confirm-btn');
+        const cancelBtn = document.getElementById('cancel-btn');
+
+        // 关键：mousedown 时给 window 绑定一次性 up/move/leave 监听，
+        // 确保只要松开鼠标就一定取消（即使光标移出按钮/窗口）。
+        confirmBtn.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            startHold();
+            const stop = () => { cancelHold(); window.removeEventListener('mouseup', stop); };
+            window.addEventListener('mouseup', stop);
+        });
+
+        // 触摸支持
+        confirmBtn.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            startHold();
+            const stop = () => { cancelHold(); window.removeEventListener('touchend', stop); };
+            window.addEventListener('touchend', stop);
+        }, { passive: false });
+
+        // 窗口失焦时也取消（Alt+Tab 等）
+        window.addEventListener('blur', cancelHold);
+
+        cancelBtn.addEventListener('click', () => respond(false));
+
+        // 防止窗口被误关闭（Esc 等按键不做任何事，必须点击按钮）
+        window.addEventListener('keydown', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+        });
+        document.addEventListener('contextmenu', (e) => e.preventDefault());
+
+        console.log('[SecureConfirm] Page loaded, waiting for data injection');
+    </script>
+</body>
+</html>

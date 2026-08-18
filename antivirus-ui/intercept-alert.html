@@ -1,0 +1,812 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>实时防护拦截</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        html {
+            overflow: hidden;
+        }
+        
+        body {
+            font-family: "Segoe UI Variable", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: #f9fafb;
+            width: 360px;
+            min-height: 340px;
+            height: auto;
+            overflow: hidden;
+            border-radius: 8px;
+        }
+        
+        .intercept-container {
+            width: 360px;
+            min-height: 340px;
+            height: auto;
+            display: flex;
+            flex-direction: column;
+            background: #f9fafb;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        }
+        
+        /* 顶部标题栏 */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 16px;
+            background: #f9fafb;
+            flex-shrink: 0;
+        }
+        
+        .header-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #1a1a1a;
+        }
+        
+        .close-btn {
+            width: 28px;
+            height: 28px;
+            background: transparent;
+            border: none;
+            color: #5c5c5c;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            transition: all 0.2s ease;
+        }
+        
+        .close-btn:hover {
+            background: #e5e5e5;
+            color: #1a1a1a;
+        }
+        
+        /* 中间内容区域 */
+        .content {
+            display: flex;
+            flex-direction: column;
+            padding: 4px 20px 8px;
+            flex-shrink: 0;
+        }
+        
+        /* 标题 */
+        .main-title {
+            font-size: 17px;
+            font-weight: 600;
+            color: #0f2b46;
+            margin-bottom: 10px;
+        }
+        
+        /* 描述区域 */
+        .description {
+            background: #fff4e6;
+            border-left: 3px solid #ffa726;
+            border-radius: 0 6px 6px 0;
+            padding: 10px 12px;
+            margin-bottom: 12px;
+        }
+        
+        .description-text {
+            font-size: 12.5px;
+            color: #5c4030;
+            line-height: 1.6;
+        }
+        
+        /* 信息卡片 */
+        .info-card {
+            width: 100%;
+            background: #f0f3f6;
+            border-radius: 8px;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        
+        .info-item {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        
+        .info-label {
+            font-size: 11px;
+            color: #8a9ba8;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+        
+        .info-value {
+            font-size: 13px;
+            color: #1a1a1a;
+            word-break: break-all;
+            line-height: 1.4;
+            font-weight: 500;
+        }
+        
+        /* 底部状态栏 */
+        .footer {
+            padding: 14px 24px 16px;
+            background: #f0f3f6;
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            border-top: 1px solid #e8ebee;
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+        
+        .footer:hover {
+            background: #e8ebee;
+        }
+        
+        .status-text {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+            color: #107c10;
+            font-weight: 500;
+            pointer-events: none;
+        }
+        
+        .status-text svg {
+            width: 16px;
+            height: 16px;
+        }
+
+        /* 操作按钮区域（驱动防护模式） */
+        .action-buttons {
+            display: none;
+            padding: 10px 20px 14px;
+            background: #f0f3f6;
+            border-top: 1px solid #e8ebee;
+        }
+
+        .action-buttons.visible {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        .button-row {
+            display: flex;
+            gap: 10px;
+            width: 100%;
+        }
+
+        .btn-action {
+            flex: 1;
+            padding: 8px 16px;
+            border: 1px solid rgba(0,0,0,0.1);
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            font-family: inherit;
+            transition: all 0.15s ease;
+            background: #fff;
+            color: #1a1a1a;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+        }
+
+        .btn-action:active {
+            transform: scale(0.98);
+        }
+
+        .btn-block {
+            background: #005FB8;
+            color: #ffffff;
+            border: none;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        }
+
+        .btn-block:hover {
+            background: #0066C7;
+        }
+
+        .btn-block:active {
+            background: #004E92;
+        }
+
+        .btn-allow {
+            color: #1a1a1a;
+        }
+
+        .btn-allow:hover {
+            background: #f0f0f0;
+        }
+
+        .btn-allow:active {
+            background: #e0e0e0;
+        }
+
+        .checkbox-row {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            margin-top: 10px;
+            flex-shrink: 0;
+        }
+
+        .always-checkbox {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+            color: #5c5c5c;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .always-checkbox input[type="checkbox"] {
+            width: 15px;
+            height: 15px;
+            cursor: pointer;
+            accent-color: #005FB8;
+            margin: 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="intercept-container">
+        <!-- 顶部标题栏 -->
+        <div class="header">
+            <div class="header-title">XIGUASecurity</div>
+            <button class="close-btn" id="close-btn">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M2.146 2.146a.5.5 0 0 1 .708 0L8 7.293l5.146-5.147a.5.5 0 0 1 .708.708L8.707 8l5.147 5.146a.5.5 0 0 1-.708.708L8 8.707l-5.146 5.147a.5.5 0 0 1-.708-.708L7.293 8 2.146 2.854a.5.5 0 0 1 0-.708z" fill="currentColor"/>
+                </svg>
+            </button>
+        </div>
+        
+        <!-- 中间内容区域 -->
+        <div class="content">
+            <!-- 标题 -->
+            <div class="main-title" data-i18n="interceptAlertTitle">实时防护拦截</div>
+            
+            <!-- 描述区域（根据拦截类型显示不同说明） -->
+            <div class="description">
+                <div class="description-text" id="intercept-description">--</div>
+            </div>
+            
+            <!-- 信息卡片 -->
+            <div class="info-card">
+                <div class="info-item">
+                    <div class="info-label" data-i18n="interceptType">拦截类型</div>
+                    <div class="info-value" id="intercept-type">--</div>
+                </div>
+                
+                <div class="info-item">
+                    <div class="info-label" data-i18n="interceptProcess">拦截进程</div>
+                    <div class="info-value" id="intercept-process">--</div>
+                </div>
+                
+                <div class="info-item">
+                    <div class="info-label" data-i18n="interceptTarget">拦截目标</div>
+                    <div class="info-value" id="intercept-command">--</div>
+                </div>
+            </div>
+            
+            <!-- 记住选择复选框（内容区域，不会被压缩） -->
+            <div class="checkbox-row" id="checkbox-row">
+                <label class="always-checkbox">
+                    <input type="checkbox" id="chk-always">
+                    <span data-i18n="interceptRememberChoice">记住此选择</span>
+                </label>
+            </div>
+        </div>
+        
+        <!-- 操作按钮区域（驱动防护模式） -->
+        <div class="action-buttons" id="action-buttons">
+            <div class="button-row">
+                <button class="btn-action btn-allow" id="btn-allow" data-i18n="interceptAllow">允许</button>
+                <button class="btn-action btn-block" id="btn-block" data-i18n="interceptBlock">拦截</button>
+            </div>
+        </div>
+
+        <!-- 底部状态栏（基础防护模式） -->
+        <div class="footer" id="action-btn">
+            <div class="status-text">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                    <polyline points="22 4 12 14.01 9 11.01"/>
+                </svg>
+                <span data-i18n="interceptUserHandled">用户已处理</span>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const translations = {
+            'zh-CN': {
+                interceptAlertTitle: '实时防护拦截',
+                interceptType: '拦截类型',
+                interceptProcess: '拦截进程',
+                interceptTarget: '拦截目标',
+                interceptBlock: '拦截',
+                interceptAllow: '允许',
+                interceptAutoBlock: '拦截 ({s}s)',
+                interceptUserHandled: '用户已处理',
+                interceptRememberChoice: '记住此选择',
+                interceptTypeBoot: '引导扇区拦截',
+                interceptTypeRegistry: '注册表拦截',
+                interceptTypeRansomware: '勒索软件拦截',
+                interceptTypeBehavior: '可疑行为拦截',
+                interceptTypeMemory: '内存保护拦截',
+                interceptTypeProcess: '进程拦截',
+                unknownProcess: '未知进程',
+                descProcess: 'XIGUASecurity已拦截程序，因为它可能包含病毒。在以下指定时间内，您的电脑处于安全状态，您可以自由选择处置方式。若您不认识此应用程序，则应该选择拦截。',
+                descRegistry: '有程序正在执行可疑的注册表操作。如果您不认识该程序，请及时阻止程序行为。',
+                descInjection: '有程序正在进行「远程线程注入」，如果您不确定该程序，请拒绝。',
+                descEndpoint: 'XIGUASecurity EndPoint 已侦测到威胁。在指定时间内，您可以选择对于此威胁的处理方式。如果您不确定该程序是否安全，请单击拦截。',
+                descRansomware: 'XIGUASecurity已侦测到勒索程序，我们已在该程序修改您的文件之前创建备份。若您不认识该程序，请选择拦截以回滚该进程做的全部文件修改。',
+                descMemory: '有程序正在进行可疑的内存操作。如果您不确定该程序是否安全，请选择拦截。',
+                descBoot: '检测到可疑的引导扇区修改。如果您不认识该操作，请选择拦截。',
+                descBehavior: 'XIGUASecurity已侦测到可疑行为。如果您不确定该程序是否安全，请选择拦截。'
+            },
+            'zh-TW': {
+                interceptAlertTitle: '即時防護攔截',
+                interceptType: '攔截類型',
+                interceptProcess: '攔截程序',
+                interceptTarget: '攔截目標',
+                interceptBlock: '攔截',
+                interceptAllow: '允許',
+                interceptAutoBlock: '攔截 ({s}s)',
+                interceptUserHandled: '用戶已處理',
+                interceptRememberChoice: '記住此選擇',
+                interceptTypeBoot: '引導扇區攔截',
+                interceptTypeRegistry: '登錄檔攔截',
+                interceptTypeRansomware: '勒索軟體攔截',
+                interceptTypeBehavior: '可疑行為攔截',
+                interceptTypeMemory: '記憶體保護攔截',
+                interceptTypeProcess: '程序攔截',
+                unknownProcess: '未知程序',
+                descProcess: 'XIGUASecurity已攔截程序，因為它可能包含病毒。在以下指定時間內，您的電腦處於安全狀態，您可以自由選擇處置方式。若您不認識此應用程式，則應該選擇攔截。',
+                descRegistry: '有程序正在執行可疑的登錄檔操作。如果您不認識該程序，請及時阻止程序行為。',
+                descInjection: '有程序正在進行「遠端線程注入」，如果您不確定該程序，請拒絕。',
+                descEndpoint: 'XIGUASecurity EndPoint 已偵測到威脅。在指定時間內，您可以選擇對於此威脅的處理方式。如果您不確定該程序是否安全，請點擊攔截。',
+                descRansomware: 'XIGUASecurity已偵測到勒索程序，我們已在該程序修改您的檔案之前建立備份。若您不認識該程序，請選擇攔截以回滾該程序做的全部檔案修改。',
+                descMemory: '有程序正在進行可疑的記憶體操作。如果您不確定該程序是否安全，請選擇攔截。',
+                descBoot: '偵測到可疑的引導扇區修改。如果您不認識該操作，請選擇攔截。',
+                descBehavior: 'XIGUASecurity已偵測到可疑行為。如果您不確定該程序是否安全，請選擇攔截。'
+            },
+            'en-US': {
+                interceptAlertTitle: 'Real-time Protection Intercept',
+                interceptType: 'Intercept Type',
+                interceptProcess: 'Process',
+                interceptTarget: 'Target',
+                interceptBlock: 'Block',
+                interceptAllow: 'Allow',
+                interceptAutoBlock: 'Block ({s}s)',
+                interceptUserHandled: 'User handled',
+                interceptRememberChoice: 'Remember this choice',
+                interceptTypeBoot: 'Boot Sector Intercept',
+                interceptTypeRegistry: 'Registry Intercept',
+                interceptTypeRansomware: 'Ransomware Intercept',
+                interceptTypeBehavior: 'Suspicious Behavior Intercept',
+                interceptTypeMemory: 'Memory Protection Intercept',
+                interceptTypeProcess: 'Process Intercept',
+                unknownProcess: 'Unknown process',
+                descProcess: 'XIGUASecurity has intercepted a program because it may contain a virus. Your computer is safe within the specified time. You can choose how to handle it. If you do not recognize this application, you should choose Block.',
+                descRegistry: 'A program is performing a suspicious registry operation. If you do not recognize this program, please block it immediately.',
+                descInjection: 'A program is performing "remote thread injection". If you are unsure about this program, please deny it.',
+                descEndpoint: 'XIGUASecurity EndPoint has detected a threat. Within the specified time, you can choose how to handle it. If you are unsure whether the program is safe, please click Block.',
+                descRansomware: 'XIGUASecurity has detected a ransomware program. We have created backups before the program modified your files. If you do not recognize this program, please choose Block to roll back all file modifications.',
+                descMemory: 'A program is performing suspicious memory operations. If you are unsure whether the program is safe, please choose Block.',
+                descBoot: 'A suspicious boot sector modification has been detected. If you do not recognize this operation, please choose Block.',
+                descBehavior: 'XIGUASecurity has detected suspicious behavior. If you are unsure whether the program is safe, please choose Block.'
+            }
+        };
+
+        const params = new URLSearchParams(window.location.search);
+        const currentLang = ['zh-CN', 'zh-TW', 'en-US'].includes(params.get('lang')) ? params.get('lang') : 'zh-CN';
+
+        function t(key, replacements) {
+            let text = translations[currentLang]?.[key] ?? translations['zh-CN']?.[key] ?? key;
+            if (replacements) {
+                Object.entries(replacements).forEach(([k, v]) => {
+                    text = text.replace(new RegExp('\\{' + k + '\\}', 'g'), String(v));
+                });
+            }
+            return text;
+        }
+
+        function mapTypeToKey(type) {
+            if (!type) return 'interceptTypeProcess';
+            const mapping = {
+                '引导扇区拦截': 'interceptTypeBoot',
+                '注册表拦截': 'interceptTypeRegistry',
+                '勒索软件拦截': 'interceptTypeRansomware',
+                '可疑行为拦截': 'interceptTypeBehavior',
+                '内存保护拦截': 'interceptTypeMemory',
+                '进程拦截': 'interceptTypeProcess'
+            };
+            if (mapping[type]) return mapping[type];
+            if (translations['zh-CN'][type] || translations['zh-TW'][type] || translations['en-US'][type]) return type;
+            return 'interceptTypeProcess';
+        }
+
+        // 根据拦截类型和详细信息更新描述
+        function updateDescription(typeStr) {
+            const typeKey = mapTypeToKey(typeStr || '');
+            const cmd = (document.getElementById('intercept-command')?.textContent || '').toLowerCase();
+            let descKey;
+
+            if (typeKey === 'interceptTypeBehavior') {
+                // 区分 EDR 和远程线程注入
+                if (cmd.includes('威胁评分') || cmd.includes('threat score') || cmd.includes('命中规则') || cmd.includes('rule')) {
+                    descKey = 'descEndpoint';
+                } else if (cmd.includes('目标pid') || cmd.includes('target pid') || cmd.includes('远程线程') || cmd.includes('remote thread') || cmd.includes('线程id')) {
+                    descKey = 'descInjection';
+                } else {
+                    descKey = 'descBehavior';
+                }
+            } else if (typeKey === 'interceptTypeProcess') {
+                descKey = 'descProcess';
+            } else if (typeKey === 'interceptTypeRegistry') {
+                descKey = 'descRegistry';
+            } else if (typeKey === 'interceptTypeRansomware') {
+                descKey = 'descRansomware';
+            } else if (typeKey === 'interceptTypeMemory') {
+                descKey = 'descMemory';
+            } else if (typeKey === 'interceptTypeBoot') {
+                descKey = 'descBoot';
+            } else {
+                descKey = 'descBehavior';
+            }
+
+            const el = document.getElementById('intercept-description');
+            if (el) el.textContent = t(descKey);
+        }
+
+        // 全局存储当前响应管道名（事件更新时覆盖）
+        let currentRespPipe = '';
+        let countdownTimer = null;
+        let countdownValue = 20;
+        
+        // 测量内容实际高度并通知后端调整窗口大小。
+        // 后端 resize_intercept_window 已改用纯 Win32 SetWindowPos，
+        // 不经过 Tauri 主线程事件循环，因此不会阻塞主线程/卡住按钮。
+        // 注意：不使用 requestAnimationFrame——WebView2 在窗口显示前可能不触发它，
+        // 导致窗口初始高度 500px 不变，内容"没有填满"。
+        // 直接测量 DOM 即可，scrollHeight 在 DOM 更新后立即可靠。
+        async function adjustWindowHeight() {
+            const container = document.querySelector('.intercept-container');
+            if (!container) return;
+            const measured = Math.ceil(container.scrollHeight);
+
+            const minH = 340;
+            const maxH = 680;
+            const finalH = Math.max(minH, Math.min(maxH, measured));
+            console.log('[InterceptAlert] adjustWindowHeight: measured=' + measured + ' final=' + finalH);
+
+            try {
+                const invoke = window.__TAURI__ && window.__TAURI__.core
+                    ? window.__TAURI__.core.invoke
+                    : null;
+                if (invoke) {
+                    await invoke('resize_intercept_window', { height: finalH });
+                    console.log('[InterceptAlert] Window resized to ' + finalH);
+                }
+            } catch (e) {
+                console.error('[InterceptAlert] adjustWindowHeight error:', e);
+            }
+        }
+        
+        // 更新显示内容
+        function updateContent(data) {
+            console.log('[InterceptAlert] Updating content:', JSON.stringify(data));
+            
+            // 新拦截数据到达：允许发送新决策（上一个拦截的防重复标记清零）
+            decisionSent = false;
+            
+            // 新拦截数据到达：重置倒计时（防止上一次的计时器残留导致提前超时）
+            if (countdownTimer) {
+                clearInterval(countdownTimer);
+                countdownTimer = null;
+            }
+            countdownValue = 20;
+            const countdownEl = document.getElementById('countdown');
+            if (countdownEl) countdownEl.textContent = '20';
+            
+            const typeEl = document.getElementById('intercept-type');
+            const processEl = document.getElementById('intercept-process');
+            const commandEl = document.getElementById('intercept-command');
+            
+            const typeStr = data.type || '';
+            const typeKey = mapTypeToKey(typeStr);
+            if (typeEl) typeEl.textContent = t(typeKey);
+            if (processEl) processEl.textContent = data.process || t('unknownProcess');
+            if (commandEl) commandEl.textContent = data.command || '--';
+            
+            // 更新响应管道名（每次拦截都不同）
+            if (data.resp_pipe) {
+                currentRespPipe = data.resp_pipe;
+            } else if (data.source === 'basic_protection') {
+                // 基础防护模式：清除旧的 resp_pipe，防止发送过期的驱动决策
+                currentRespPipe = '';
+            }
+
+            // 更新描述
+            updateDescription(typeStr);
+            
+            // 根据 source 类型切换 UI 模式：
+            // - basic_protection：显示底部状态栏（"用户已处理"），隐藏按钮
+            // - driver_protection / pua_protection：显示拦截/允许按钮，隐藏底部状态栏
+            if (data.source === 'basic_protection') {
+                // 基础防护：显示"用户已处理"状态栏，隐藏按钮区域
+                document.getElementById('action-btn').style.display = '';
+                document.getElementById('action-buttons').classList.remove('visible');
+                // 只为按钮绑定事件（幂等），但不同时切换显示
+                bindDecisionButtonsOnly();
+            } else {
+                // 驱动防护/PUA：显示拦截/允许按钮（幂等绑定），隐藏底部状态栏
+                bindDecisionButtons();
+            }
+            
+            // 启动倒计时
+            startCountdown();
+            
+            // 自适应窗口高度
+            adjustWindowHeight();
+        }
+        
+        // 绑定拦截/允许按钮（幂等：多次调用只绑一次）
+        function bindDecisionButtons() {
+            bindDecisionButtonsOnly();
+            
+            // 显示按钮区域（隐藏自动拦截占位）
+            document.getElementById('action-btn').style.display = 'none';
+            document.getElementById('action-buttons').classList.add('visible');
+        }
+        
+        // 只绑定按钮事件，不切换 UI 显示（用于基础防护模式下仅绑定事件，保持状态栏可见）
+        function bindDecisionButtonsOnly() {
+            const btnBlock = document.getElementById('btn-block');
+            const btnAllow = document.getElementById('btn-allow');
+            if (!btnBlock || !btnAllow) return;
+            
+            // 标记防止重复绑定
+            if (!btnBlock._bound) {
+                btnBlock._bound = true;
+                btnBlock.addEventListener('click', function() {
+                    console.log('[InterceptAlert] User clicked BLOCK');
+                    sendDecision('block');
+                });
+            }
+            if (!btnAllow._bound) {
+                btnAllow._bound = true;
+                btnAllow.addEventListener('click', function() {
+                    console.log('[InterceptAlert] User clicked ALLOW');
+                    sendDecision('allow');
+                });
+            }
+        }
+        
+        // 启动倒计时（20秒后自动拦截）
+        function startCountdown() {
+            // 清除旧计时器
+            if (countdownTimer) {
+                clearInterval(countdownTimer);
+                countdownTimer = null;
+            }
+            
+            countdownValue = 20;
+            const btn = document.getElementById('btn-block');
+            if (btn) btn.textContent = t('interceptAutoBlock', { s: countdownValue });
+            
+            countdownTimer = setInterval(() => {
+                countdownValue--;
+                if (btn) btn.textContent = t('interceptAutoBlock', { s: countdownValue });
+                
+                if (countdownValue <= 0) {
+                    clearInterval(countdownTimer);
+                    countdownTimer = null;
+                    console.log('[InterceptAlert] Countdown expired, auto-blocking');
+                    sendDecision('block');
+                }
+            }, 1000);
+        }
+        
+        // 停止倒计时
+        function stopCountdown() {
+            if (countdownTimer) {
+                clearInterval(countdownTimer);
+                countdownTimer = null;
+            }
+        }
+        
+        // 发送决策到主程序
+        let decisionSent = false; // 防重复点击：同一拦截只发一次决策
+        
+        async function sendDecision(decision) {
+            // 防重复：窗口可能因异步延迟短暂未隐藏，用户连点导致重复发送
+            if (decisionSent) {
+                console.log('[InterceptAlert] Decision already sent, ignoring duplicate click');
+                return;
+            }
+            decisionSent = true;
+            
+            stopCountdown();
+            const params = new URLSearchParams(window.location.search);
+            const source = params.get('source') || '';
+            const pid = parseInt(params.get('pid') || '0', 10);
+            console.log('[InterceptAlert] Sending decision:', decision, 'source:', source, 'resp_pipe:', currentRespPipe);
+            
+            // 无 resp_pipe 时：基础防护模式（非驱动拦截），直接关闭窗口。
+            // 不发送 send_av_driver_decision（会导致后端找不到 pendingKey 报错）。
+            if (!currentRespPipe) {
+                console.log('[InterceptAlert] No resp_pipe (basic protection), closing window');
+                try {
+                    const invoke = window.__TAURI__ && window.__TAURI__.core
+                        ? window.__TAURI__.core.invoke
+                        : null;
+                    if (invoke) await invoke('close_intercept_window');
+                } catch (e) {
+                    console.error('[InterceptAlert] Failed to close window:', e);
+                }
+                return;
+            }
+            
+            try {
+                // 使用 withGlobalTauri 注入的全局 API，不依赖 CDN（CDN 不可达时 import 会挂起）
+                const invoke = window.__TAURI__ && window.__TAURI__.core
+                    ? window.__TAURI__.core.invoke
+                    : null;
+                if (!invoke) {
+                    console.error('[InterceptAlert] window.__TAURI__ not available, cannot send decision');
+                    return;
+                }
+
+                // ★修复：先发送决策，再关闭窗口。
+                // 后端弹窗线程收到决策后立即隐藏窗口（纯 Win32，毫秒级），
+                // 用户点击后窗口会马上消失，不需要前端先关。
+                // 历史 bug：先 close_intercept_window 会重置 INTERCEPT_BUSY 并主动
+                // 拉取队列，若队列有下一个拦截项，可能把"当前窗口"提前切走/关错窗口；
+                // 且决策晚到期间用户可重复点击，产生 "Notification not found"。
+                if (source === 'pua_protection') {
+                    // PUA 模式：调用 send_pua_decision，传递 PID
+                    await invoke('send_pua_decision', { decision: decision, pid: pid });
+                } else {
+                    // 驱动防护模式：调用 send_av_driver_decision (新 KMDF 驱动)
+                    // 如果勾选"记住此选择"，根据用户当前操作转为 allow_always / block_always
+                    let finalDecision = decision;
+                    const chkAlways = document.getElementById('chk-always');
+                    if (chkAlways && chkAlways.checked) {
+                        finalDecision = (decision === 'allow') ? 'allow_always' : 'block_always';
+                    }
+                    await invoke('send_av_driver_decision', { pendingKey: currentRespPipe, decision: finalDecision });
+                }
+                console.log('[InterceptAlert] Decision sent successfully');
+
+                // 兜底关闭窗口（幂等）：正常情况后端已隐藏，这里保险一次
+                try {
+                    await invoke('close_intercept_window');
+                } catch (e) {
+                    console.error('[InterceptAlert] Failed to close window after decision:', e);
+                }
+            } catch (e) {
+                console.error('[InterceptAlert] Failed to send decision:', e);
+                // 发送失败：允许用户重试（后端 25/30 秒超时兜底仍有效）
+                decisionSent = false;
+            }
+        }
+        
+        // 关闭窗口
+        async function closeWindow() {
+            const params = new URLSearchParams(window.location.search);
+            const src = params.get('source') || '';
+            // 驱动防护/PUA 模式下点击关闭等同于拦截
+            if (src === 'driver_protection' || src === 'pua_protection') {
+                await sendDecision('block');
+                return;
+            }
+            try {
+                // 优先使用 Tauri 命令关闭窗口
+                if (window.__TAURI__ && window.__TAURI__.core) {
+                    await window.__TAURI__.core.invoke('close_intercept_window');
+                    return;
+                }
+                // 无全局 API 时尝试直接关闭当前窗口
+                try {
+                    if (window.__TAURI__ && window.__TAURI__.window) {
+                        await window.__TAURI__.window.getCurrentWindow().close();
+                    }
+                } catch (e2) {
+                    console.error('[InterceptAlert] Failed to close window:', e2);
+                }
+            } catch (e) {
+                console.error('[InterceptAlert] Failed to close window via command:', e);
+            }
+        }
+        
+        // DOM 加载完成后初始化
+        document.addEventListener('DOMContentLoaded', async function() {
+            console.log('[InterceptAlert] DOM loaded');
+
+            document.title = t('interceptAlertTitle');
+            document.documentElement.lang = currentLang;
+            document.querySelectorAll('[data-i18n]').forEach(el => {
+                const key = el.getAttribute('data-i18n');
+                if (key) el.textContent = t(key);
+            });
+            
+            // 绑定关闭按钮
+            document.getElementById('close-btn')?.addEventListener('click', closeWindow);
+            document.getElementById('action-btn')?.addEventListener('click', closeWindow);
+            
+            // 检查模式
+            const source = params.get('source') || '';
+            const isDriverMode = source === 'driver_protection';
+            
+            // 从 URL 读取初始数据（预创建时可能有 source=driver_protection，其他为空）
+            const urlData = {
+                time: params.get('time') || '',
+                type: params.get('type') || '',
+                process: params.get('process') || '',
+                command: params.get('command') || '',
+                resp_pipe: params.get('resp_pipe') || ''
+            };
+            
+            if (urlData.time || urlData.process) {
+                updateContent(urlData);
+            }
+            
+            // 驱动防护/PUA 模式：只绑定按钮事件，不切换 UI 显示（UI 由 updateContent 根据数据 source 决定）。
+            // 注意：配置窗口 URL 固定为 source=driver_protection（预创建时设定），
+            // 但实际数据可能为 basic_protection（通过 intercept-data 事件传递）。
+            // 不能在这里无条件调用 bindDecisionButtons()（会显示按钮并隐藏状态栏）。
+            const isPUAMode = source === 'pua_protection';
+            if (isDriverMode || isPUAMode) {
+                // 只绑定事件，不切换显示——UI 由实际数据到达时的 updateContent 决定
+                bindDecisionButtonsOnly();
+                
+                // PUA 模式下隐藏"记住此选择"复选框（仅新驱动支持持久决策）
+                if (isPUAMode) {
+                    const chkRow = document.querySelector('.checkbox-row');
+                    if (chkRow) chkRow.style.display = 'none';
+                }
+            }
+            
+            // 设置事件监听器（驱动防护数据通过事件传递，使用全局注入的 Tauri API）
+            try {
+                const listen = window.__TAURI__ && window.__TAURI__.event
+                    ? window.__TAURI__.event.listen
+                    : null;
+                if (!listen) {
+                    console.warn('[InterceptAlert] Tauri event API not available, intercept-data events will be ignored');
+                } else {
+                    await listen('intercept-data', (event) => {
+                        console.log('[InterceptAlert] Received intercept-data event:', JSON.stringify(event.payload));
+                        if (event.payload) {
+                            updateContent(event.payload);
+                            // 如果是驱动防护模式，确保按钮可见
+                            if (event.payload.source === 'driver_protection') {
+                                document.getElementById('action-btn').style.display = 'none';
+                                document.getElementById('action-buttons').classList.add('visible');
+                            }
+                        }
+                    });
+                    console.log('[InterceptAlert] Event listener registered successfully');
+                }
+            } catch (e) {
+                console.error('[InterceptAlert] Failed to setup event listener:', e);
+            }
+        });
+    </script>
+</body>
+</html>

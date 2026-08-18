@@ -1,0 +1,24 @@
+{
+  "name": "antivirus-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build && copy threat-alert.html dist\\ && copy intercept-alert.html dist\\ && copy tray-menu.html dist\\ && copy timeline.html dist\\ && copy suspicious-intercept.html dist\\ && copy edr-alert.html dist\\ && copy edr-behavior-chain.html dist\\ && copy file-protection-alert.html dist\\ && copy popup-prompt.html dist\\ && copy promo.html dist\\ && copy sandbox-progress.html dist\\ && copy secure-confirm.html dist\\ && if not exist dist\\icons mkdir dist\\icons && copy src-tauri\\icons\\icon.png dist\\icons\\",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-dialog": "^2.7.2",
+    "@tauri-apps/plugin-fs": "^2.5.1",
+    "@tauri-apps/plugin-opener": "^2.5.4"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
+    "sharp": "^0.35.3",
+    "typescript": "~5.6.2",
+    "vite": "^6.0.3"
+  }
+}
