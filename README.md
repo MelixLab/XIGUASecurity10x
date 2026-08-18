@@ -96,7 +96,7 @@ npm run tauri build
 
 ### License
 
-MIT License - See LICENSE file for details
+XIGUASecurity Non-Commercial License v1.0 — Non-commercial use only. Redistribution and derivative publication require explicit written permission from the author. See [LICENSE](LICENSE) file for details.
 
 ---
 
@@ -184,4 +184,4 @@ npm run tauri build
 
 ### 许可证
 
-MIT 许可证 - 详见 LICENSE 文件
+XIGUASecurity 非商业许可证 v1.0 — 仅限非商业使用。再分发与衍生作品发布须获得作者明确书面许可。详见 [LICENSE](LICENSE) 文件。

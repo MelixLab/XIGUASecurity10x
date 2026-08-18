@@ -1,139 +1,179 @@
-Melix License Agreement
-Version 1.0, April 2026
+XIGUASecurity Non-Commercial License
+Version 1.0, August 2026
 
-Copyright (c) 2026 MelixLab. All Rights Reserved.
+Copyright (c) 2026 MelixLab (XIGUASecurity Project). All rights reserved.
 
-This software and associated documentation files (the "Software") are protected by
-copyright law and international treaties. Unauthorized reproduction or distribution
-of this Software, or any portion of it, may result in severe civil and criminal
-penalties, and will be prosecuted to the maximum extent possible under law.
+This software and associated documentation files (the "Software") are protected
+by copyright law and international treaties. Unauthorized reproduction,
+redistribution, or commercial use of the Software, or any portion of it, may
+result in severe civil and criminal penalties, and will be prosecuted to the
+maximum extent possible under law.
 
 ================================================================================
                               TERMS AND CONDITIONS
 ================================================================================
 
-1. COMMERCIAL USE RESTRICTIONS
-   ----------------------------
-   1.1 The Software may be used for commercial purposes ONLY with explicit prior
-       written permission from the copyright holder (MelixLab).
+1. DEFINITIONS
+   -----------
+   1.1 "Software" means the source code, compiled binaries, models, rule sets,
+       documentation, and any other files distributed in this repository.
 
-   1.2 Any commercial use, including but not limited to:
-       - Selling the Software or derivative works
-       - Using the Software in commercial products or services
-       - Bundling the Software with commercial offerings
-       requires a separate commercial license agreement.
+   1.2 "Author" means MelixLab (XIGUASecurity Project), the copyright holder.
 
-   1.3 Unauthorized commercial use is strictly prohibited and constitutes a
-       material breach of this license.
+   1.3 "Non-Commercial Use" means use for personal, educational, research,
+       or internal evaluation purposes only, without any direct or indirect
+       commercial benefit, revenue, or business advantage.
 
-2. SOURCE CODE ATTRIBUTION REQUIREMENTS
-   -------------------------------------
-   2.1 Any software that incorporates, modifies, or distributes any portion of
-       the source code from this Software MUST include prominent attribution in
-       a clearly visible location within the software, such as:
-       - Settings > About menu
-       - Help > Credits section
-       - Splash screen or startup dialog
-       - Documentation or README files
+   1.4 "Redistribution" means any act of re-publishing, re-uploading, mirroring,
+       hosting, forwarding, or otherwise making the Software (or any part of it)
+       available to any third party, whether modified or unmodified, in whole
+       or in part.
 
-   2.2 The attribution MUST include:
-       - The name of this Software: "Melix" or "XIGUASecurity"
-       - The original author: "MelixLab"
-       - A statement indicating that portions of the code are derived from this
-         Software
-       - A link to the original repository (if applicable)
+2. GRANT OF RIGHTS
+   ----------------
+   Subject to the restrictions in Sections 3 and 4, the Author grants you a
+   limited, non-exclusive, non-transferable, revocable license to:
 
-   2.3 Example attribution text:
-       "Portions of this software use code from Melix/XIGUASecurity by MelixLab.
-        Used under the Melix License."
+   2.1 Use the Software for Non-Commercial Use only.
 
-3. COPYLEFT AND VIRAL LICENSE REQUIREMENTS
-   ----------------------------------------
-   3.1 This license has VIRAL characteristics. Any software that incorporates,
-       modifies, or is derived from any portion of this Software's source code
-       MUST be distributed under the terms of this Melix License.
+   2.2 Study and analyze the Software for educational or research purposes.
 
-   3.2 The viral nature of this license applies to:
-       - Direct copies of source code files
-       - Modified versions of source code
-       - Derivative works based on the source code
-       - Any code that links to or incorporates portions of this Software
+   2.3 Modify the Software for your own personal, Non-Commercial Use.
 
-   3.3 You may NOT distribute derivative works under a different license that
-       would allow recipients to bypass these requirements.
+   2.4 Produce the Software's outputs (e.g., detection reports, scan results)
+       for personal, Non-Commercial Use.
 
-   3.4 If you distribute the Software or any derivative work, you must provide
-       a complete copy of this Melix License Agreement.
-
-4. PERMITTED USES
-   ---------------
-   Subject to the restrictions above, you are permitted to:
-
-   4.1 Use the Software for personal, non-commercial purposes.
-
-   4.2 Study the source code for educational purposes.
-
-   4.3 Modify the source code for personal use.
-
-   4.4 Distribute the Software or derivative works, PROVIDED THAT:
-        - You comply with all attribution requirements in Section 2
-        - You apply this Melix License to all distributed code (Section 3)
-        - You do not engage in unauthorized commercial use (Section 1)
-
-5. PROHIBITED ACTIONS
-   ------------------
+3. RESTRICTIONS
+   -------------
    You are expressly prohibited from:
 
-   5.1 Using the Software for commercial purposes without written authorization.
+   3.1 COMMERCIAL USE
+       Using the Software, or any derivative of it, for any commercial purpose
+       whatsoever, including but not limited to:
+       - Selling, renting, leasing, or licensing the Software or derivative works;
+       - Using the Software in any product, service, or offering that generates
+         revenue, directly or indirectly;
+       - Providing paid security, consulting, or managed services that rely on
+         the Software;
+       - Bundling the Software with any commercial offering.
+       Commercial use requires a separate commercial license agreement signed by
+       the Author.
 
-   5.2 Removing or obscuring any copyright notices, license terms, or
-       attribution requirements.
+   3.2 REDISTRIBUTION WITHOUT CONSENT
+       Redistributing the Software, or any derivative or modified version of it,
+       in any form or through any channel (including but not limited to other
+       repositories, forums, file-sharing platforms, cloud storage, or websites),
+       WITHOUT the Author's explicit prior written consent.
+       Permission to redistribute is granted on a case-by-case basis and may be
+       requested by contacting the Author. Any authorized redistribution MUST:
+       - Include a complete copy of this license;
+       - Retain all copyright and license notices;
+       - Not be for commercial purposes.
 
-   5.3 Distributing the Software or derivative works under a license that is
-       incompatible with the viral requirements of Section 3.
+   3.3 DERIVATIVE PUBLICATION
+       Publishing, releasing, or distributing any modified version, derivative
+       work, or work that incorporates any portion of the Software, without the
+       Author's explicit prior written consent.
 
-   5.4 Sublicensing the Software under terms that would permit others to avoid
-       these license obligations.
+   3.4 REMOVAL OF NOTICES
+       Removing, altering, or obscuring any copyright notice, license text,
+       attribution, or branding associated with the Software.
 
-   5.5 Using the Software in any way that violates applicable laws or
-       regulations.
+   3.5 SUBLICENSING
+       Sublicensing, granting, or transferring any of the rights granted under
+       this license to any third party.
 
-6. TERMINATION
-   -----------
-   6.1 This license automatically terminates if you fail to comply with any of
-       its terms and conditions.
+   3.6 MALICIOUS USE
+       Using the Software or any portion of it to create, develop, or support
+       malware, viruses, ransomware, trojans, or any other malicious software
+       or attack tooling.
 
-   6.2 Upon termination, you must immediately cease all use of the Software
-       and destroy all copies in your possession.
+   3.7 TRADEMARK USE
+       Using the names, logos, or trademarks "XIGUASecurity", "XIGUA",
+       "MelixLab", or any confusingly similar marks, except as expressly
+       permitted by the Author.
 
-   6.3 Termination does not relieve you of obligations incurred prior to
-       termination, including attribution requirements for any distributed
-       derivative works.
+4. REQUESTING PERMISSION
+   ---------------------
+   Requests for redistribution, derivative publication, commercial use, or any
+   other use not expressly permitted by this license must be submitted in
+   writing to the Author before such use begins. The Author reserves the right
+   to grant, condition, or deny any request at its sole discretion.
 
-7. DISCLAIMER OF WARRANTY
+5. TERMINATION
+   ------------
+   5.1 This license automatically terminates, without notice, if you fail to
+       comply with any of its terms and conditions.
+
+   5.2 Upon termination, you must immediately cease all use of the Software
+       and destroy all copies, including modified copies, in your possession
+       or control.
+
+   5.3 Termination does not relieve you of any liability for breaches that
+       occurred prior to termination.
+
+6. DISCLAIMER OF WARRANTY
    ----------------------
    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-   FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-   DEALINGS IN THE SOFTWARE.
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. THE ENTIRE RISK AS TO
+   THE QUALITY AND PERFORMANCE OF THE SOFTWARE IS WITH YOU.
+
+7. LIMITATION OF LIABILITY
+   -----------------------
+   IN NO EVENT SHALL THE AUTHOR OR COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM,
+   DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+   USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 8. GOVERNING LAW
    -------------
    This license shall be governed by and construed in accordance with the laws
-   of the jurisdiction where the copyright holder resides, without regard to
-   its conflict of law provisions.
+   of the jurisdiction where the Author resides, without regard to its conflict
+   of law provisions.
 
 ================================================================================
 
-By using, copying, modifying, or distributing this Software, you acknowledge
+By using, copying, modifying, or distributing the Software, you acknowledge
 that you have read and understood this license agreement and agree to be bound
 by its terms.
 
-For commercial licensing inquiries, contact: [Your Contact Information]
+For licensing inquiries or permission requests, contact: 3118296183@qq.com
 
 ================================================================================
-                         END OF MELIX LICENSE AGREEMENT
+                    END OF XIGUASECURITY NON-COMMERCIAL LICENSE
 ================================================================================
+
+----------------------------------------------------------------------
+中文说明（非正式翻译，仅供参考；如与英文条款冲突，以英文为准）
+----------------------------------------------------------------------
+
+XIGUASecurity 非商业许可证 v1.0（2026 年 8 月）
+版权所有 (c) 2026 MelixLab（XIGUASecurity 项目）。保留所有权利。
+
+本软件受著作权法和国际条约保护。未经授权的复制、再分发或商业使用可能
+导致民事和刑事处罚，并将依法追究到底。
+
+许可范围（仅限非商业）：
+1. 仅允许用于个人学习、教育、研究或内部评估等非商业用途；
+2. 允许出于学习研究目的阅读、分析源码；
+3. 允许为个人非商业用途修改代码；
+4. 扫描/检测结果可用于个人非商业用途。
+
+明确禁止：
+1. 商业使用：任何直接或间接盈利的使用、销售、租赁、打包进商业产品或提供
+   收费服务（商业使用须与作者另签商业许可协议）；
+2. 未经作者书面同意进行再分发：不得将本软件（含修改版）上传、托管、镜像、
+   转发到任何其他仓库、论坛、网盘或网站。授权为逐案审批，须事先联系作者；
+3. 未经作者书面同意发布修改版或衍生作品；
+4. 删除或遮蔽版权与许可声明；
+5. 向第三方再授权；
+6. 利用本软件代码制作恶意软件或攻击工具；
+7. 未经授权使用 "XIGUASecurity / XIGUA / MelixLab" 商标。
+
+终止：违反任何条款即自动终止许可，须立即停止使用并销毁所有副本。
+无担保与责任限制：软件按"现状"提供，作者不承担任何明示或默示担保及任何
+损害赔偿责任。
+准据法：作者所在地法律。
+
+需要再分发、商业使用或其他授权：请先书面联系作者。
