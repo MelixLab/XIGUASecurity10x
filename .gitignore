@@ -2,6 +2,16 @@
 rules_server/
 log-server/
 
+# Unrelated / auxiliary projects (not part of the main antivirus product)
+lty-live2d/
+extensions/browser-protection/
+docs/
+XIGUASecurityHelper/
+Melix.Diagnose/
+Melix-New/
+standalone-intercept/
+threat-engine-component/
+
 # Dependencies
 node_modules/
 
