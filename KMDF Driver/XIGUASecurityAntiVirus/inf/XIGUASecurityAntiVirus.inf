@@ -1,8 +1,8 @@
 ;=============================================================================
-; AVDriver.inf - KMDF 杀毒驱动安装信息文件
+; AVDriver.inf - WDM 杀毒驱动安装信息文件
 ;
-; 目标系统: Windows 10 20H2 ~ Windows 11 24H2
-; KMDF 版本: 1.31
+; 目标系统: Windows 10 1607 ~ Windows 11 24H2
+; 纯 WDM 驱动, 无 KMDF 依赖
 ;=============================================================================
 
 [Version]
@@ -71,19 +71,6 @@ StartType      = 3                 ; SERVICE_DEMAND_START
 ErrorControl   = 1                 ; SERVICE_ERROR_NORMAL
 ServiceBinary  = %12%\XIGUASecurityAntiVirus.sys
 LoadOrderGroup = ExtendedBase
-
-;=============================================================================
-; WDF 特定配置
-;=============================================================================
-
-[AVDriver_Install.Wdf]
-KmdfService = AVDriver, AVDriver_Wdf
-
-[AVDriver_Install.Wdf.NTamd64]
-KmdfService = AVDriver, AVDriver_Wdf
-
-[AVDriver_Wdf]
-KmdfLibraryVersion = 1.31
 
 ;=============================================================================
 ; 字符串定义

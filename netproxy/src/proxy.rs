@@ -9,10 +9,10 @@ use crate::assess::DynamicAssessor;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -92,6 +92,75 @@ impl DomainRules {
             }
         }
         None
+    }
+}
+
+/// 白名单缓存（热重载用）
+struct WhitelistCache {
+    mtime: Option<SystemTime>,
+    entries: Vec<String>,
+}
+
+/// 域名白名单（用户级，主程序维护）
+///
+/// 数据源：主程序 whitelist.rs 持久化的 `%LOCALAPPDATA%\XIGUASecurity\user_whitelist.json`，
+/// 读取其中 `domains` 数组（Vec<String>，与主程序 WhitelistData 结构一致）。
+/// 热重载：每次检查时比对文件修改时间，变更则重新加载，主程序增删域名后即时生效。
+#[derive(Clone)]
+pub struct DomainWhitelist {
+    path: Option<PathBuf>,
+    cache: Arc<Mutex<WhitelistCache>>,
+}
+
+impl DomainWhitelist {
+    pub fn new(path: Option<PathBuf>) -> Self {
+        let cache = Arc::new(Mutex::new(WhitelistCache {
+            mtime: None,
+            entries: Vec::new(),
+        }));
+        let wl = Self { path, cache };
+        wl.refresh_if_changed();
+        wl
+    }
+
+    /// 检查域名是否在白名单中（精确匹配或子域匹配：example.com 命中 www.example.com）
+    pub fn is_whitelisted(&self, host: &str) -> bool {
+        self.refresh_if_changed();
+        let host = host.trim().trim_end_matches('.').to_lowercase();
+        if host.is_empty() {
+            return false;
+        }
+        let cache = self.cache.lock().unwrap();
+        cache
+            .entries
+            .iter()
+            .any(|d| host == *d || host.ends_with(&format!(".{}", d)))
+    }
+
+    /// 文件修改时间变化时重载白名单
+    fn refresh_if_changed(&self) {
+        let Some(path) = &self.path else { return };
+        let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+        let mut cache = self.cache.lock().unwrap();
+        if mtime == cache.mtime {
+            return;
+        }
+        cache.mtime = mtime;
+        // 重新加载（文件缺失/解析失败时保留旧数据，mtime 已记录避免反复重试）
+        if let Ok(content) = std::fs::read_to_string(path) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(arr) = v.get("domains").and_then(|x| x.as_array()) {
+                    let entries: Vec<String> = arr
+                        .iter()
+                        .filter_map(|d| d.as_str())
+                        .map(|s| s.trim().to_lowercase())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    println!("[NetProxy] Reloaded {} whitelist domains from {:?}", entries.len(), path);
+                    cache.entries = entries;
+                }
+            }
+        }
     }
 }
 
@@ -347,11 +416,45 @@ async fn tunnel(mut a: TcpStream, mut b: TcpStream) {
     let _ = tokio::io::copy_bidirectional(&mut a, &mut b).await;
 }
 
+/// 放行：转发到上游（CONNECT 隧道 / HTTP 转发，失败回 502）
+async fn forward(mut stream: TcpStream, method: &str, host: &str, port: u16, buf: &[u8]) {
+    if method == "CONNECT" {
+        match TcpStream::connect((host, port)).await {
+            Ok(upstream) => {
+                let _ = stream
+                    .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                    .await;
+                let _ = stream.flush().await;
+                tunnel(stream, upstream).await;
+            }
+            Err(_) => {
+                let _ = stream
+                    .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .await;
+            }
+        }
+    } else {
+        match TcpStream::connect((host, port)).await {
+            Ok(mut upstream) => {
+                let _ = upstream.write_all(buf).await;
+                let _ = upstream.flush().await;
+                tunnel(stream, upstream).await;
+            }
+            Err(_) => {
+                let _ = stream
+                    .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .await;
+            }
+        }
+    }
+}
+
 /// 处理单个客户端连接
 async fn handle_connection(
     mut stream: TcpStream,
     listen_port: u16,
     rules: Arc<DomainRules>,
+    whitelist: Arc<DomainWhitelist>,
     logger: Arc<EventLogger>,
 ) {
     let client_addr = stream.peer_addr().ok();
@@ -406,6 +509,14 @@ async fn handle_connection(
         return;
     }
 
+    // ★网页白名单★：用户白名单中的域名（含子域）直接放行，
+    // 先于黑名单命中与动态风险评估，命中后不再记录任何拦截事件。
+    if whitelist.is_whitelisted(&host) {
+        println!("[NetProxy] ALLOW {} (user whitelist)", host);
+        forward(stream, &method, &host, port, &buf).await;
+        return;
+    }
+
     // 黑名单命中检查
     if let Some(rule) = rules.match_rule(&host) {
         let (process, pid) = lookup_client_process(listen_port, client_addr);
@@ -453,35 +564,7 @@ async fn handle_connection(
     }
 
     // 放行：转发
-    if method == "CONNECT" {
-        match TcpStream::connect((host.as_str(), port)).await {
-            Ok(upstream) => {
-                let _ = stream
-                    .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
-                    .await;
-                let _ = stream.flush().await;
-                tunnel(stream, upstream).await;
-            }
-            Err(_) => {
-                let _ = stream
-                    .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-                    .await;
-            }
-        }
-    } else {
-        match TcpStream::connect((host.as_str(), port)).await {
-            Ok(mut upstream) => {
-                let _ = upstream.write_all(&buf).await;
-                let _ = upstream.flush().await;
-                tunnel(stream, upstream).await;
-            }
-            Err(_) => {
-                let _ = stream
-                    .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-                    .await;
-            }
-        }
-    }
+    forward(stream, &method, &host, port, &buf).await;
 }
 
 /// 启动代理服务器，返回监听器。绑定失败时返回 Err。
@@ -499,6 +582,7 @@ pub async fn run_proxy_loop(
     listener: TcpListener,
     port: u16,
     rules: Arc<DomainRules>,
+    whitelist: Arc<DomainWhitelist>,
     logger: Arc<EventLogger>,
 ) {
     let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT));
@@ -516,9 +600,10 @@ pub async fn run_proxy_loop(
             }
         };
         let rules = rules.clone();
+        let whitelist = whitelist.clone();
         let logger = logger.clone();
         tokio::spawn(async move {
-            handle_connection(stream, port, rules, logger).await;
+            handle_connection(stream, port, rules, whitelist, logger).await;
             drop(permit);
         });
     }

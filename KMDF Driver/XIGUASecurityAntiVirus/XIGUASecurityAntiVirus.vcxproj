@@ -25,8 +25,7 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>Driver</ConfigurationType>
     <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
-    <DriverType>KMDF</DriverType>
-    <KmdfVersion>1.31</KmdfVersion>
+    <DriverType>Driver</DriverType>
     <TargetVersion>Windows10</TargetVersion>
     <UseDebugLibraries>true</UseDebugLibraries>
     <OutDir>$(SolutionDir)Build\$(Platform)\$(Configuration)\</OutDir>
@@ -35,8 +34,7 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>Driver</ConfigurationType>
     <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
-    <DriverType>KMDF</DriverType>
-    <KmdfVersion>1.31</KmdfVersion>
+    <DriverType>Driver</DriverType>
     <TargetVersion>Windows10</TargetVersion>
     <UseDebugLibraries>false</UseDebugLibraries>
     <OutDir>$(SolutionDir)Build\$(Platform)\$(Configuration)\</OutDir>
@@ -73,7 +71,7 @@
       <AdditionalIncludeDirectories>$(SolutionDir)AVCommon;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>cng.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/INTEGRITYCHECK %(AdditionalOptions)</AdditionalOptions>
     </Link>
   </ItemDefinitionGroup>
@@ -86,7 +84,7 @@
       <AdditionalIncludeDirectories>$(SolutionDir)AVCommon;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>cng.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/INTEGRITYCHECK %(AdditionalOptions)</AdditionalOptions>
     </Link>
   </ItemDefinitionGroup>
@@ -103,6 +101,7 @@
     <ClCompile Include="AVProcessNotify.c" />
     <ClCompile Include="AVRegNotify.c" />
     <ClCompile Include="AVInjectNotify.c" />
+    <ClCompile Include="AVImageNotify.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="XIGUASecurityAntiVirus.h" />
@@ -110,6 +109,7 @@
     <ClInclude Include="AVProcessNotify.h" />
     <ClInclude Include="AVRegNotify.h" />
     <ClInclude Include="AVInjectNotify.h" />
+    <ClInclude Include="AVImageNotify.h" />
     <ClInclude Include="..\AVCommon\AVProtocol.h" />
   </ItemGroup>
   <ItemGroup>

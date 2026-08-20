@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>实时防护拦截</title>
+    <link rel="stylesheet" href="intercept-theme.css">
     <style>
         * {
             margin: 0;
@@ -17,7 +18,7 @@
         
         body {
             font-family: "Segoe UI Variable", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", Arial, sans-serif;
-            background: #f9fafb;
+            background: var(--bg-primary);
             width: 360px;
             min-height: 340px;
             height: auto;
@@ -31,10 +32,10 @@
             height: auto;
             display: flex;
             flex-direction: column;
-            background: #f9fafb;
+            background: var(--bg-primary);
             border-radius: 8px;
             overflow: hidden;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+            box-shadow: var(--shadow-md);
         }
         
         /* 顶部标题栏 */
@@ -43,14 +44,14 @@
             justify-content: space-between;
             align-items: center;
             padding: 10px 16px;
-            background: #f9fafb;
+            background: var(--bg-primary);
             flex-shrink: 0;
         }
         
         .header-title {
             font-size: 14px;
             font-weight: 600;
-            color: #1a1a1a;
+            color: var(--text-primary);
         }
         
         .close-btn {
@@ -58,7 +59,7 @@
             height: 28px;
             background: transparent;
             border: none;
-            color: #5c5c5c;
+            color: var(--text-secondary);
             cursor: pointer;
             display: flex;
             align-items: center;
@@ -68,8 +69,8 @@
         }
         
         .close-btn:hover {
-            background: #e5e5e5;
-            color: #1a1a1a;
+            background: var(--bg-hover);
+            color: var(--text-primary);
         }
         
         /* 中间内容区域 */
@@ -84,14 +85,14 @@
         .main-title {
             font-size: 17px;
             font-weight: 600;
-            color: #0f2b46;
+            color: var(--text-primary);
             margin-bottom: 10px;
         }
         
         /* 描述区域 */
         .description {
-            background: #fff4e6;
-            border-left: 3px solid #ffa726;
+            background: rgba(255, 167, 38, 0.1);
+            border-left: 3px solid var(--warning);
             border-radius: 0 6px 6px 0;
             padding: 10px 12px;
             margin-bottom: 12px;
@@ -99,14 +100,14 @@
         
         .description-text {
             font-size: 12.5px;
-            color: #5c4030;
+            color: var(--text-secondary);
             line-height: 1.6;
         }
         
         /* 信息卡片 */
         .info-card {
             width: 100%;
-            background: #f0f3f6;
+            background: var(--bg-secondary);
             border-radius: 8px;
             padding: 12px;
             display: flex;
@@ -122,14 +123,14 @@
         
         .info-label {
             font-size: 11px;
-            color: #8a9ba8;
+            color: var(--text-tertiary);
             text-transform: uppercase;
             letter-spacing: 0.3px;
         }
         
         .info-value {
             font-size: 13px;
-            color: #1a1a1a;
+            color: var(--text-primary);
             word-break: break-all;
             line-height: 1.4;
             font-weight: 500;
@@ -138,17 +139,17 @@
         /* 底部状态栏 */
         .footer {
             padding: 14px 24px 16px;
-            background: #f0f3f6;
+            background: var(--bg-secondary);
             display: flex;
             justify-content: flex-end;
             align-items: center;
-            border-top: 1px solid #e8ebee;
+            border-top: 1px solid var(--border-color);
             cursor: pointer;
             transition: background 0.2s ease;
         }
         
         .footer:hover {
-            background: #e8ebee;
+            background: var(--bg-hover);
         }
         
         .status-text {
@@ -156,7 +157,7 @@
             align-items: center;
             gap: 6px;
             font-size: 13px;
-            color: #107c10;
+            color: var(--success);
             font-weight: 500;
             pointer-events: none;
         }
@@ -170,8 +171,8 @@
         .action-buttons {
             display: none;
             padding: 10px 20px 14px;
-            background: #f0f3f6;
-            border-top: 1px solid #e8ebee;
+            background: var(--bg-secondary);
+            border-top: 1px solid var(--border-color);
         }
 
         .action-buttons.visible {
@@ -191,16 +192,16 @@
         .btn-action {
             flex: 1;
             padding: 8px 16px;
-            border: 1px solid rgba(0,0,0,0.1);
+            border: 1px solid var(--border-color);
             border-radius: 4px;
             font-size: 14px;
             font-weight: 500;
             cursor: pointer;
             font-family: inherit;
             transition: all 0.15s ease;
-            background: #fff;
-            color: #1a1a1a;
-            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+            background: var(--bg-card);
+            color: var(--text-primary);
+            box-shadow: var(--shadow-sm);
         }
 
         .btn-action:active {
@@ -208,30 +209,30 @@
         }
 
         .btn-block {
-            background: #005FB8;
-            color: #ffffff;
+            background: var(--accent-primary);
+            color: var(--text-inverse);
             border: none;
-            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+            box-shadow: var(--shadow-sm);
         }
 
         .btn-block:hover {
-            background: #0066C7;
+            background: var(--accent-secondary);
         }
 
         .btn-block:active {
-            background: #004E92;
+            background: var(--accent-secondary);
         }
 
         .btn-allow {
-            color: #1a1a1a;
+            color: var(--text-primary);
         }
 
         .btn-allow:hover {
-            background: #f0f0f0;
+            background: var(--bg-hover);
         }
 
         .btn-allow:active {
-            background: #e0e0e0;
+            background: var(--bg-active);
         }
 
         .checkbox-row {
@@ -247,7 +248,7 @@
             align-items: center;
             gap: 6px;
             font-size: 13px;
-            color: #5c5c5c;
+            color: var(--text-secondary);
             cursor: pointer;
             user-select: none;
         }
@@ -256,10 +257,38 @@
             width: 15px;
             height: 15px;
             cursor: pointer;
-            accent-color: #005FB8;
+            accent-color: var(--accent-primary);
             margin: 0;
         }
     </style>
+    <script>
+        (function() {
+            var theme = localStorage.getItem('theme') || 'blue';
+            var themeMode = localStorage.getItem('themeMode') || 'colorful';
+            var backdrop = localStorage.getItem('windowBackdrop') || 'none';
+            document.documentElement.setAttribute('data-theme', theme);
+            document.documentElement.setAttribute('data-theme-mode', themeMode);
+            document.documentElement.setAttribute('data-backdrop', backdrop);
+            if (backdrop !== 'none' && window.__TAURI__ && window.__TAURI__.core) {
+                window.__TAURI__.core.invoke('set_window_backdrop', { backdrop: backdrop, themeMode: themeMode }).catch(function(){});
+            }
+        })();
+        document.addEventListener('DOMContentLoaded', function() {
+            var listen = window.__TAURI__ && window.__TAURI__.event && window.__TAURI__.event.listen;
+            if (!listen) return;
+            listen('theme-changed', function(event) {
+                var d = event.payload || {};
+                if (d.theme) document.documentElement.setAttribute('data-theme', d.theme);
+                if (d.themeMode) document.documentElement.setAttribute('data-theme-mode', d.themeMode);
+                if (d.backdrop) {
+                    document.documentElement.setAttribute('data-backdrop', d.backdrop);
+                    if (d.backdrop !== 'none' && window.__TAURI__ && window.__TAURI__.core) {
+                        window.__TAURI__.core.invoke('set_window_backdrop', { backdrop: d.backdrop, themeMode: d.themeMode || 'colorful' }).catch(function(){});
+                    }
+                }
+            });
+        });
+    </script>
 </head>
 <body>
     <div class="intercept-container">

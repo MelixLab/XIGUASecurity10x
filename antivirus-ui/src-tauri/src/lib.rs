@@ -261,7 +261,7 @@ use context_menu::{register_context_menu_command, unregister_context_menu_comman
 mod signature_verifier;
 
 mod whitelist;
-use whitelist::{get_whitelist_manager, reload_whitelist, WhitelistData};
+use whitelist::reload_whitelist;
 
 mod blacklist;
 use blacklist::{get_blacklist_manager, reload_blacklist, BlacklistData};
@@ -794,6 +794,86 @@ fn force_window_visible(win: &tauri::WebviewWindow) {    // 提取原始 HWND �
             hwnd_raw as usize, foreground_tid, current_tid, attached
         );
     }
+}
+
+/// 仅显示窗口并获取前台权限，不改变窗口位置/大小。
+/// 用于非拦截窗口（如时间线窗口）从后台线程显示时绕过 Windows 前台锁。
+#[cfg(windows)]
+fn force_window_foreground(win: &tauri::WebviewWindow) {
+    let hwnd_raw = match win.hwnd() {
+        Ok(h) => h.0 as *mut std::ffi::c_void,
+        Err(e) => {
+            eprintln!("[ForceForeground] Failed to get HWND: {}", e);
+            return;
+        }
+    };
+
+    unsafe {
+        let user32 = match windows::Win32::System::LibraryLoader::LoadLibraryW(windows::core::w!("user32.dll")) {
+            Ok(h) => h,
+            Err(e) => {
+                eprintln!("[ForceForeground] Failed to load user32.dll: {}", e);
+                return;
+            }
+        };
+
+        type FnGetForegroundWindow = unsafe extern "system" fn() -> *mut std::ffi::c_void;
+        type FnGetWindowThreadProcessId = unsafe extern "system" fn(*mut std::ffi::c_void, *mut u32) -> u32;
+        type FnGetCurrentThreadId = unsafe extern "system" fn() -> u32;
+        type FnAttachThreadInput = unsafe extern "system" fn(u32, u32, i32) -> i32;
+        type FnShowWindow = unsafe extern "system" fn(*mut std::ffi::c_void, i32) -> i32;
+        type FnSetForegroundWindow = unsafe extern "system" fn(*mut std::ffi::c_void) -> i32;
+
+        let get_foreground: FnGetForegroundWindow = std::mem::transmute(
+            windows::Win32::System::LibraryLoader::GetProcAddress(user32, windows::core::s!("GetForegroundWindow")).unwrap()
+        );
+        let get_thread_pid: FnGetWindowThreadProcessId = std::mem::transmute(
+            windows::Win32::System::LibraryLoader::GetProcAddress(user32, windows::core::s!("GetWindowThreadProcessId")).unwrap()
+        );
+        let get_current_tid: FnGetCurrentThreadId = std::mem::transmute(
+            windows::Win32::System::LibraryLoader::GetProcAddress(
+                windows::Win32::System::LibraryLoader::LoadLibraryW(windows::core::w!("kernel32.dll")).unwrap(),
+                windows::core::s!("GetCurrentThreadId")
+            ).unwrap()
+        );
+        let attach_thread: FnAttachThreadInput = std::mem::transmute(
+            windows::Win32::System::LibraryLoader::GetProcAddress(user32, windows::core::s!("AttachThreadInput")).unwrap()
+        );
+        let show_win: FnShowWindow = std::mem::transmute(
+            windows::Win32::System::LibraryLoader::GetProcAddress(user32, windows::core::s!("ShowWindow")).unwrap()
+        );
+        let set_foreground: FnSetForegroundWindow = std::mem::transmute(
+            windows::Win32::System::LibraryLoader::GetProcAddress(user32, windows::core::s!("SetForegroundWindow")).unwrap()
+        );
+
+        let foreground = get_foreground();
+        let foreground_tid = if foreground as usize != 0 {
+            get_thread_pid(foreground, std::ptr::null_mut())
+        } else {
+            0
+        };
+        let current_tid = get_current_tid();
+
+        let mut attached = false;
+        if foreground_tid != 0 && foreground_tid != current_tid {
+            attached = attach_thread(foreground_tid, current_tid, 1) != 0;
+        }
+
+        let _ = show_win(hwnd_raw, 1); // SW_SHOWNORMAL
+        let _ = set_foreground(hwnd_raw);
+
+        if attached {
+            let _ = attach_thread(foreground_tid, current_tid, 0);
+        }
+
+        println!("[ForceForeground] Window forced foreground: hwnd={:#x}", hwnd_raw as usize);
+    }
+}
+
+#[cfg(not(windows))]
+fn force_window_foreground(win: &tauri::WebviewWindow) {
+    let _ = win.show();
+    let _ = win.set_focus();
 }
 
 #[cfg(not(windows))]
@@ -2023,7 +2103,10 @@ fn collect_behavior_events(controller: &mut sandbox_analysis::SandboxController,
     }
 
     // 2. 打开 Sandboxie 驱动并启用 Monitor API
-    let mut monitor = match sbie_api::SbieMonitor::open(sample_pids.clone()) {
+    // 传入空 PID 集合以禁用 PID 过滤 — AUTOSandBox 是专用沙箱，
+    // 其中所有进程都属于样本，无需按 PID 过滤。
+    // 历史 bug：PID 集合在启动时固定，子进程启动后其事件被丢弃。
+    let mut monitor = match sbie_api::SbieMonitor::open(Vec::new()) {
         Ok(m) => {
             println!("[SandboxAnalysis] Sandboxie Monitor API 已启用");
             crate::diag_info!("[SandboxAnalysis] Sandboxie Monitor API 已启用（内核驱动级 trace）");
@@ -2708,7 +2791,11 @@ fn handle_av_driver_notification(app_handle: &tauri::AppHandle, notification: &a
                 return;
             }
 
-            // 白名单检查
+            // ★白名单先行校验（v2）★
+            // 决策完全由主程序处理：白名单中的进程/驱动，主程序直接 ALLOW_ONCE，
+            // 跳过沙箱、扫描、深度分析等一切后续防护检查。
+            // 匹配维度：路径白名单（前缀匹配）+ 进程名白名单（从 image_path 提取文件名）。
+            // 位置保持在 AVIC 云端信誉库之后，云端已知威胁优先拦截（历史 bug 修复）。
             if crate::whitelist::is_path_whitelisted(&n.image_path) {
                 println!("[AvDriver] Whitelisted, auto-allow: {}", n.image_path);
                 let _ = send_av_decision(AvDecision::Process {
@@ -5378,14 +5465,14 @@ fn check_essential_files() -> Vec<String> {
 #[tauri::command]
 async fn open_timeline_window(app: tauri::AppHandle) -> Result<(), String> {
     println!("[Timeline] Opening timeline window");
-    
-    // 如果窗口已存在，先关闭
+
+    // 窗口已存在则直接显示并聚焦，避免重复创建导致 label 冲突
     if let Some(existing) = app.get_webview_window("timeline") {
-        println!("[Timeline] Closing existing window");
-        let _ = existing.close();
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        println!("[Timeline] Window already exists, focusing it");
+        force_window_foreground(&existing);
+        return Ok(());
     }
-    
+
     let window = tauri::WebviewWindowBuilder::new(
         &app,
         "timeline",
@@ -5406,11 +5493,10 @@ async fn open_timeline_window(app: tauri::AppHandle) -> Result<(), String> {
     // 设置窗口图标
     let icon = tauri::include_image!("icons/icon.png");
     let _ = window.set_icon(icon);
-    
-    // 显示窗口
-    let _ = window.show();
-    let _ = window.set_focus();
-    
+
+    // 使用 Win32 API 显示窗口并获取前台权限，绕过 Windows 前台锁
+    force_window_foreground(&window);
+
     println!("[Timeline] Timeline window opened successfully");
     Ok(())
 }
@@ -7514,12 +7600,7 @@ async fn close_threat_window(app: tauri::AppHandle) -> Result<(), String> {
 // 白名单管理命令
 #[tauri::command]
 fn get_whitelist_info() -> serde_json::Value {
-    let manager = get_whitelist_manager();
-    serde_json::json!({
-        "version": manager.get_version(),
-        "updated_at": manager.get_updated_at(),
-        "hash_count": manager.get_hash_count(),
-    })
+    crate::rules_updater::get_rules_status()
 }
 
 #[tauri::command]
@@ -7528,31 +7609,21 @@ fn reload_whitelist_command() -> bool {
 }
 
 #[tauri::command]
-fn import_whitelist_from_json(json_content: String) -> Result<(), String> {
-    let data: WhitelistData = serde_json::from_str(&json_content)
-        .map_err(|e| format!("Invalid JSON format: {}", e))?;
-    
-    let mut manager = get_whitelist_manager();
-    manager.update_data(data);
-    manager.save_to_file()?;
-    
-    Ok(())
+fn import_whitelist_from_json(_json_content: String) -> Result<(), String> {
+    Err("规则库已迁移至 SQLite，请使用规则库更新功能".to_string())
 }
 
-// 扫描并加载本地规则文件
+// 重新加载规则库 SQLite 数据库
 #[tauri::command]
 fn scan_and_load_rules_command() -> Result<serde_json::Value, String> {
-    match crate::whitelist::scan_and_load_rules() {
-        Ok((count, version, file_count)) => {
-            Ok(serde_json::json!({
-                "success": true,
-                "hash_count": count,
-                "version": version,
-                "file_count": file_count,
-            }))
-        }
-        Err(e) => Err(e),
-    }
+    crate::rules_db::reload_rules_db().map_err(|e| e.to_string())?;
+    let status = crate::rules_updater::get_rules_status();
+    Ok(serde_json::json!({
+        "success": true,
+        "hash_count": status.get("hash_count").and_then(|v| v.as_u64()).unwrap_or(0),
+        "version": status.get("version").and_then(|v| v.as_str()).unwrap_or("0.0.0"),
+        "file_count": status.get("file_count").and_then(|v| v.as_u64()).unwrap_or(0),
+    }))
 }
 
 // 黑规则库管理命令
@@ -8659,7 +8730,7 @@ async fn show_suspicious_intercept_window(
     .title("可疑文件检测")
     .inner_size(520.0, 320.0)
     .decorations(false)
-    .transparent(false)
+    .transparent(true)
     .shadow(true)
     .always_on_top(true)
     .skip_taskbar(true)
@@ -9182,6 +9253,28 @@ fn get_whitelist_processes_command() -> Vec<String> {
 #[tauri::command]
 fn is_process_whitelisted_command(name: String) -> bool {
     crate::whitelist::is_process_whitelisted(&name)
+}
+
+// ========== 网页域名白名单管理命令（netproxy 热加载生效） ==========
+
+#[tauri::command]
+fn add_whitelist_domain_command(domain: String) -> Result<(), String> {
+    crate::whitelist::add_whitelist_domain(domain)
+}
+
+#[tauri::command]
+fn remove_whitelist_domain_command(domain: String) -> Result<(), String> {
+    crate::whitelist::remove_whitelist_domain(&domain)
+}
+
+#[tauri::command]
+fn get_whitelist_domains_command() -> Vec<String> {
+    crate::whitelist::get_whitelist_domains()
+}
+
+#[tauri::command]
+fn is_domain_whitelisted_command(domain: String) -> bool {
+    crate::whitelist::is_domain_whitelisted(&domain)
 }
 
 // ========== 路径黑名单管理命令 ==========
@@ -9851,51 +9944,11 @@ fn is_windows_11() -> bool {
     false
 }
 
-/// 在 Windows 10 上显示驱动防护兼容性警告弹窗
-/// 返回 true=用户选择"是"(启用)，false=用户选择"否"(不启用)
-#[tauri::command]
-fn show_windows10_driver_warning() -> bool {
-    #[cfg(windows)]
-    unsafe {
-        use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_YESNO, MB_ICONWARNING, MB_TOPMOST, IDYES};
-        use windows::core::PCWSTR;
-
-        let title: Vec<u16> = "XIGUASecurity - 进程拦截功能".encode_utf16().chain(Some(0)).collect();
-        let message: Vec<u16> = ("我们已知当前的进程拦截功能在 Windows 10 上可能存在兼容性问题，"
-            .to_string() + "您可以选择不启用此功能，使用基础防护代替。\n\n"
-            + "基础防护与此进程拦截功能作用一致，但防护效果可能会有所降低。\n\n"
-            + "在系统不兼容的情况下，可能会造成以下问题：\n"
-            + "• 进程卡死\n"
-            + "• 功能无法正常启动\n"
-            + "• 系统响应变慢\n"
-            + "• 蓝屏或系统崩溃\n\n"
-            + "建议您将系统升级到 Windows 11，或禁用此功能以获得更好的使用体验。\n\n"
-            + "您希望启用此功能吗？")
-            .encode_utf16().chain(Some(0)).collect();
-
-        let result = MessageBoxW(
-            None,
-            PCWSTR(message.as_ptr()),
-            PCWSTR(title.as_ptr()),
-            MB_YESNO | MB_ICONWARNING | MB_TOPMOST,
-        );
-        return result == IDYES;
-    }
-    #[cfg(not(windows))]
-    true
-}
-
-/// 获取驱动防护是否应自动启动（Win11 自动启，Win10 弹窗确认）
+/// 获取驱动防护是否应自动启动
 #[tauri::command]
 #[cfg(not(feature = "ms_store"))]
 fn get_driver_auto_start_decision() -> bool {
-    if is_windows_11() {
-        // Windows 11：直接启用
-        true
-    } else {
-        // Windows 10 及以下：弹窗让用户决定
-        show_windows10_driver_warning()
-    }
+    true
 }
 
 // 白名单检查命令
@@ -10922,7 +10975,6 @@ pub fn run() {
             #[cfg(not(feature = "ms_store"))]
             set_driver_protection_config_enabled,
             is_windows_11,
-            show_windows10_driver_warning,
             #[cfg(not(feature = "ms_store"))]
             get_driver_auto_start_decision,
             #[cfg(not(feature = "ms_store"))]
@@ -11118,6 +11170,10 @@ pub fn run() {
             remove_whitelist_process_command,
             get_whitelist_processes_command,
             is_process_whitelisted_command,
+            add_whitelist_domain_command,
+            remove_whitelist_domain_command,
+            get_whitelist_domains_command,
+            is_domain_whitelisted_command,
             add_blacklist_path_command,
             remove_blacklist_path_command,
             get_blacklist_paths_command,
@@ -11402,61 +11458,10 @@ pub fn run() {
                     let _ = window.set_focus();
                 });
             }
-            
-            // 启动时自动加载规则文件
-            // 1) 先从 Driver 文件夹复制内置规则到用户数据目录
-            // 2) 再从用户数据目录加载规则到白名单管理器
-            println!("[Startup] Auto-loading rules...");
-            crate::whitelist::copy_rules_from_driver_folder();
-            let app_handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                match crate::whitelist::scan_and_load_rules() {
-                    Ok((count, version, file_count)) => {
-                        println!("[Startup] Auto-loaded {} rules from {} files, version: {}", count, file_count, version);
-                        // 记录安全日志
-                        let _ = security_log::add_security_log(
-                            security_log::LogCategory::Update,
-                            "规则库",
-                            &format!("成功加载 {} 条规则，版本 {}", count, version),
-                            None,
-                            None,
-                            security_log::LogAction::Updated,
-                            security_log::LogResult::Success,
-                            Some(security_log::LogDetails {
-                                scanned_files: None,
-                                threats_found: None,
-                                threats_cleaned: None,
-                                file_size: None,
-                                virus_family: None,
-                                additional_info: Some(format!("从 {} 个规则文件加载", file_count)),
-                            }),
-                        );
-                        // 通知前端规则已加载
-                        let _ = app_handle.emit("rules-loaded", serde_json::json!({
-                            "count": count,
-                            "version": version,
-                            "file_count": file_count,
-                        }));
-                    }
-                    Err(e) => {
-                        println!("[Startup] Failed to auto-load rules: {}", e);
-                        // 记录失败日志
-                        let _ = security_log::add_security_log(
-                            security_log::LogCategory::Update,
-                            "规则库",
-                            &format!("规则库加载失败: {}", e),
-                            None,
-                            None,
-                            security_log::LogAction::Updated,
-                            security_log::LogResult::Failed,
-                            None,
-                        );
-                    }
-                }
-            });
-            
-            // 启动日志上传后台任务（每 10 秒刷新一次前端推送的最近日志）
+
+            // 规则库已迁移至 SQLite（rules.db），启动时由 rules_db 模块加载，无需 JSON 扫描
+            println!("[Startup] Rules DB (SQLite) initialized by rules_db module");
+
             tauri::async_runtime::spawn(async move {
                 loop {
                     tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;

@@ -72,6 +72,7 @@ fn main() {
     let mut backup_path = sys::default_backup_path();
     let mut events_path = sys::default_events_path();
     let mut rules_path: Option<PathBuf> = None;
+    let mut whitelist_path: Option<PathBuf> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -106,6 +107,12 @@ fn main() {
                     i += 1;
                 }
             }
+            "--whitelist" => {
+                if let Some(v) = args.get(i + 1) {
+                    whitelist_path = Some(PathBuf::from(v));
+                    i += 1;
+                }
+            }
             _ => {}
         }
         i += 1;
@@ -120,7 +127,7 @@ fn main() {
         .build()
         .expect("failed to build tokio runtime");
 
-    rt.block_on(async_main(port, parent_pid, backup_path, events_path, rules_path));
+    rt.block_on(async_main(port, parent_pid, backup_path, events_path, rules_path, whitelist_path));
 }
 
 async fn async_main(
@@ -129,9 +136,11 @@ async fn async_main(
     backup_path: PathBuf,
     events_path: PathBuf,
     rules_path: Option<PathBuf>,
+    whitelist_path: Option<PathBuf>,
 ) {
-    // 1. 加载域名库
+    // 1. 加载域名库与域名白名单
     let rules = Arc::new(DomainRules::new(EMBEDDED_RULES, rules_path.as_deref()));
+    let whitelist = Arc::new(proxy::DomainWhitelist::new(whitelist_path));
     let logger = Arc::new(EventLogger::new(events_path));
 
     // 2. 备份并设置系统代理（失败则直接退出，不动任何东西）
@@ -161,7 +170,7 @@ async fn async_main(
     let _ = std::io::stdout().flush();
 
     // 6. 运行代理循环，同时等待关闭信号
-    let proxy_task = tokio::spawn(proxy::run_proxy_loop(listener, port, rules, logger.clone()));
+    let proxy_task = tokio::spawn(proxy::run_proxy_loop(listener, port, rules, whitelist, logger.clone()));
 
     // 7. 等待关闭：Ctrl+C 或 关闭事件（主程序信号/父进程死亡）
     tokio::select! {

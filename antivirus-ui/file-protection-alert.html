@@ -4,11 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>文件防护</title>
+    <link rel="stylesheet" href="intercept-theme.css">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            background: #ffffff;
+            background: var(--bg-primary);
             height: 100vh;
             display: flex;
             align-items: center;
@@ -22,7 +23,7 @@
             display: flex;
             flex-direction: column;
             justify-content: space-between;
-            background: #ffffff;
+            background: var(--bg-primary);
             border-radius: 8px;
             overflow: hidden;
             position: relative;
@@ -40,14 +41,14 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            color: #999;
+            color: var(--text-tertiary);
             transition: background .15s, color .15s;
             -webkit-app-region: no-drag;
             z-index: 20;
         }
         .close-btn:hover {
-            background: #f0f0f0;
-            color: #333;
+            background: var(--bg-hover);
+            color: var(--text-primary);
         }
         .close-btn svg {
             width: 14px;
@@ -73,7 +74,7 @@
             height: 36px;
             flex-shrink: 0;
             border-radius: 50%;
-            background: #10b981;
+            background: var(--success);
             display: flex;
             align-items: center;
             justify-content: center;
@@ -94,12 +95,12 @@
         .alert-title {
             font-size: 15px;
             font-weight: 600;
-            color: #1a1a1a;
+            color: var(--text-primary);
             line-height: 1.3;
         }
         .file-name {
             font-size: 11px;
-            color: #666;
+            color: var(--text-secondary);
             line-height: 1.4;
             margin-top: 1px;
             overflow: hidden;
@@ -122,20 +123,20 @@
             line-height: 1.6;
         }
         .detail-label {
-            color: #888;
+            color: var(--text-tertiary);
             white-space: nowrap;
             flex-shrink: 0;
             min-width: 48px;
         }
         .detail-value {
-            color: #1a1a1a;
+            color: var(--text-primary);
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
         }
         .infection-type {
             font-size: 12px;
-            color: #dc2626;
+            color: var(--danger);
             font-weight: 500;
             margin-top: 4px;
             line-height: 1.4;
@@ -159,17 +160,45 @@
             line-height: 18px;
         }
         .btn-primary {
-            background: #005fb8;
+            background: var(--accent-primary);
             color: white;
         }
-        .btn-primary:hover { background: #0066c7; }
+        .btn-primary:hover { background: var(--accent-secondary); }
         .btn-secondary {
-            background: #f0f0f0;
-            color: #333;
-            border: 1px solid #d0d0d0;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
         }
-        .btn-secondary:hover { background: #e0e0e0; }
+        .btn-secondary:hover { background: var(--bg-hover); }
     </style>
+    <script>
+        (function() {
+            var theme = localStorage.getItem('theme') || 'blue';
+            var themeMode = localStorage.getItem('themeMode') || 'colorful';
+            var backdrop = localStorage.getItem('windowBackdrop') || 'none';
+            document.documentElement.setAttribute('data-theme', theme);
+            document.documentElement.setAttribute('data-theme-mode', themeMode);
+            document.documentElement.setAttribute('data-backdrop', backdrop);
+            if (backdrop !== 'none' && window.__TAURI__ && window.__TAURI__.core) {
+                window.__TAURI__.core.invoke('set_window_backdrop', { backdrop: backdrop, themeMode: themeMode }).catch(function(){});
+            }
+        })();
+        document.addEventListener('DOMContentLoaded', function() {
+            var listen = window.__TAURI__ && window.__TAURI__.event && window.__TAURI__.event.listen;
+            if (!listen) return;
+            listen('theme-changed', function(event) {
+                var d = event.payload || {};
+                if (d.theme) document.documentElement.setAttribute('data-theme', d.theme);
+                if (d.themeMode) document.documentElement.setAttribute('data-theme-mode', d.themeMode);
+                if (d.backdrop) {
+                    document.documentElement.setAttribute('data-backdrop', d.backdrop);
+                    if (d.backdrop !== 'none' && window.__TAURI__ && window.__TAURI__.core) {
+                        window.__TAURI__.core.invoke('set_window_backdrop', { backdrop: d.backdrop, themeMode: d.themeMode || 'colorful' }).catch(function(){});
+                    }
+                }
+            });
+        });
+    </script>
 </head>
 <body>
     <div class="drag-region"></div>

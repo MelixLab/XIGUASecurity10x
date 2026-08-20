@@ -23,41 +23,8 @@
 #include <ntstrsafe.h>
 
 //
-// 手动声明的内核 API (当前 WDK 头文件未声明或仅声明于 ntifs.h)
+// 手动声明的内核 API (ntoskrnl.exe 导出, Win10/Win11 均可用)
 //
-NTKERNELAPI
-NTSTATUS
-NTAPI
-ZwOpenThread(
-    _Out_ PHANDLE ThreadHandle,
-    _In_ ACCESS_MASK DesiredAccess,
-    _In_ POBJECT_ATTRIBUTES ObjectAttributes,
-    _In_opt_ PCLIENT_ID ClientId
-    );
-
-NTKERNELAPI
-NTSTATUS
-NTAPI
-ZwSuspendThread(
-    _In_ HANDLE ThreadHandle,
-    _Out_opt_ PULONG PreviousSuspendCount
-    );
-
-NTKERNELAPI
-NTSTATUS
-NTAPI
-ZwResumeThread(
-    _In_ HANDLE ThreadHandle,
-    _Out_opt_ PULONG PreviousSuspendCount
-    );
-
-//
-// 注: 此 WDK 的 ntoskrnl 不导出 ZwTerminateThread / NtTerminateThread,
-//     线程终止无法通过导出系统调用完成。拒绝注入时:
-//       1. 被注入线程保持挂起 (无法执行注入代码, 即被中和)
-//       2. 通过 ZwTerminateProcess 终止注入源进程 (恶意软件本体)
-//
-
 NTKERNELAPI
 NTSTATUS
 NTAPI
@@ -87,10 +54,34 @@ ZwQueryInformationProcess(
     _Out_opt_ PULONG ReturnLength
     );
 
-NTKERNELAPI
-NTSTATUS
-NTAPI
-ZwQueryInformationThread(
+//
+// 动态解析的内核 API
+// ZwOpenThread / ZwSuspendThread / ZwResumeThread / ZwQueryInformationThread
+// 在 Win10 ntoskrnl.exe 中未导出 (Win11 才导出)。静态链接会导致驱动
+// 在 Win10 加载时报 ERROR_PROC_NOT_FOUND (127)。
+// 改为 MmGetSystemRoutineAddress 动态解析: Win11 可用时正常工作,
+// Win10 不可用时注入防护降级为仅终止源进程 (不挂起线程)。
+//
+// 注: ntoskrnl 不导出 ZwTerminateThread / NtTerminateThread,
+//     线程终止无法通过导出系统调用完成。拒绝注入时:
+//       1. 被注入线程保持挂起 (无法执行注入代码, 即被中和)
+//       2. 通过 ZwTerminateProcess 终止注入源进程 (恶意软件本体)
+//
+typedef NTSTATUS (NTAPI *PFN_ZwOpenThread)(
+    _Out_ PHANDLE ThreadHandle,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ POBJECT_ATTRIBUTES ObjectAttributes,
+    _In_opt_ PCLIENT_ID ClientId
+    );
+typedef NTSTATUS (NTAPI *PFN_ZwSuspendThread)(
+    _In_ HANDLE ThreadHandle,
+    _Out_opt_ PULONG PreviousSuspendCount
+    );
+typedef NTSTATUS (NTAPI *PFN_ZwResumeThread)(
+    _In_ HANDLE ThreadHandle,
+    _Out_opt_ PULONG PreviousSuspendCount
+    );
+typedef NTSTATUS (NTAPI *PFN_ZwQueryInformationThread)(
     _In_ HANDLE ThreadHandle,
     _In_ ULONG ThreadInformationClass,
     _Out_ PVOID ThreadInformation,
@@ -199,6 +190,14 @@ AV_NON_PAGED static BOOLEAN g_InjectWorkerStop = FALSE;
 AV_NON_PAGED static HANDLE  g_InjectWorkerHandle = NULL;
 
 AV_NON_PAGED static UINT64  g_InjectionTriggers = 0;
+
+//
+// 动态解析的线程 API 函数指针 (Win10 不导出, 运行时解析)
+//
+AV_NON_PAGED static PFN_ZwOpenThread              g_pZwOpenThread              = NULL;
+AV_NON_PAGED static PFN_ZwSuspendThread           g_pZwSuspendThread           = NULL;
+AV_NON_PAGED static PFN_ZwResumeThread            g_pZwResumeThread            = NULL;
+AV_NON_PAGED static PFN_ZwQueryInformationThread  g_pZwQueryInformationThread  = NULL;
 
 //=============================================================================
 // 字符串辅助 (大小写不敏感子串匹配)
@@ -731,9 +730,11 @@ AvInjectWorkerRoutine(
             cid.UniqueProcess = NULL;
             cid.UniqueThread = detect.ThreadId;
 
-            if (NT_SUCCESS(ZwOpenThread(&hThread, THREAD_SUSPEND_RESUME, &oa, &cid)))
+            if (g_pZwOpenThread != NULL &&
+                NT_SUCCESS(g_pZwOpenThread(&hThread, THREAD_SUSPEND_RESUME, &oa, &cid)))
             {
-                ZwSuspendThread(hThread, NULL);   // 中和注入线程 (无法执行)
+                if (g_pZwSuspendThread != NULL)
+                    g_pZwSuspendThread(hThread, NULL);
                 ZwClose(hThread);
             }
 
@@ -756,7 +757,13 @@ AvInjectWorkerRoutine(
         cid.UniqueProcess = NULL;
         cid.UniqueThread = detect.ThreadId;
 
-        if (!NT_SUCCESS(ZwOpenThread(&hThread,
+        if (g_pZwOpenThread == NULL)
+        {
+            KdPrint(("AVInject: ZwOpenThread not available on this OS, skipping\n"));
+            continue;
+        }
+
+        if (!NT_SUCCESS(g_pZwOpenThread(&hThread,
                                      THREAD_SUSPEND_RESUME | THREAD_TERMINATE |
                                      THREAD_QUERY_INFORMATION,
                                      &oa, &cid)))
@@ -766,12 +773,14 @@ AvInjectWorkerRoutine(
             continue;
         }
 
-        ZwSuspendThread(hThread, NULL);
+        if (g_pZwSuspendThread != NULL)
+            g_pZwSuspendThread(hThread, NULL);
 
         //
         // 查询线程起始地址 (供用户态做模块归属分析)
         //
-        if (!NT_SUCCESS(ZwQueryInformationThread(hThread,
+        if (g_pZwQueryInformationThread == NULL ||
+            !NT_SUCCESS(g_pZwQueryInformationThread(hThread,
                                                  AV_THREAD_QUERY_SET_WIN32_START_ADDRESS,
                                                  &startAddress,
                                                  sizeof(startAddress),
@@ -835,7 +844,8 @@ AvInjectWorkerRoutine(
 
         if (allow)
         {
-            ZwResumeThread(hThread, NULL);
+            if (g_pZwResumeThread != NULL)
+                g_pZwResumeThread(hThread, NULL);
             KdPrint(("AVInject: ALLOWED, resumed thread tid %lu\n",
                      (ULONG)(ULONG_PTR)detect.ThreadId));
         }
@@ -868,6 +878,25 @@ AvInjectNotifyInitialize(
     PAGED_CODE();
 
     KdPrint(("AVInject: Initializing remote thread injection protection\n"));
+
+    //
+    // 动态解析 Win10 不导出的线程 API
+    // Win11 ntoskrnl 导出这些函数; Win10 不导出, 指针为 NULL 时降级处理
+    //
+    {
+        UNICODE_STRING name;
+        RtlInitUnicodeString(&name, L"ZwOpenThread");
+        g_pZwOpenThread = (PFN_ZwOpenThread)MmGetSystemRoutineAddress(&name);
+        RtlInitUnicodeString(&name, L"ZwSuspendThread");
+        g_pZwSuspendThread = (PFN_ZwSuspendThread)MmGetSystemRoutineAddress(&name);
+        RtlInitUnicodeString(&name, L"ZwResumeThread");
+        g_pZwResumeThread = (PFN_ZwResumeThread)MmGetSystemRoutineAddress(&name);
+        RtlInitUnicodeString(&name, L"ZwQueryInformationThread");
+        g_pZwQueryInformationThread = (PFN_ZwQueryInformationThread)MmGetSystemRoutineAddress(&name);
+        KdPrint(("AVInject: DynAPI OpenThread=%p Suspend=%p Resume=%p QueryThread=%p\n",
+                 g_pZwOpenThread, g_pZwSuspendThread, g_pZwResumeThread,
+                 g_pZwQueryInformationThread));
+    }
 
     KeInitializeSpinLock(&g_InjectLock);
     KeInitializeEvent(&g_InjectWaitEvent, NotificationEvent, FALSE);

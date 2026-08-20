@@ -56,6 +56,53 @@ const MONITOR_DENIED: u32 = 0x00200000;
 const MONITOR_SUCCESS: u32 = 0x00400000;
 const MONITOR_FAILURE: u32 = 0x00800000;
 
+// ── Access mask parsing ─────────────────────────────────────────────
+
+/// Parse the hex access mask from a trace entry's access string.
+/// Format: "FA 00100002" or "KA 00020019" → u32 value.
+fn parse_access_mask(access: &str) -> u32 {
+    access
+        .split_whitespace()
+        .nth(1)
+        .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+        .unwrap_or(0)
+}
+
+// File access rights (Windows SDK)
+const FILE_WRITE_DATA_BIT: u32 = 0x00000002;
+const FILE_APPEND_DATA_BIT: u32 = 0x00000004;
+const FILE_WRITE_EA_BIT: u32 = 0x00000010;
+const FILE_WRITE_ATTRIBUTES_BIT: u32 = 0x00000100;
+const FILE_DELETE_BIT: u32 = 0x00010000;
+const FILE_WRITE_DAC_BIT: u32 = 0x00040000;
+const FILE_WRITE_OWNER_BIT: u32 = 0x00080000;
+const FILE_GENERIC_WRITE_BIT: u32 = 0x40000000;
+
+// Registry access rights
+const KEY_SET_VALUE_BIT: u32 = 0x00000002;
+const KEY_CREATE_SUB_KEY_BIT: u32 = 0x00000004;
+
+/// Check if a file access mask indicates a write operation.
+/// mask==0 means unparseable — assume write to avoid missing events.
+fn is_file_write_op(mask: u32) -> bool {
+    mask == 0 || (mask & (FILE_WRITE_DATA_BIT | FILE_APPEND_DATA_BIT
+        | FILE_WRITE_EA_BIT | FILE_WRITE_ATTRIBUTES_BIT
+        | FILE_WRITE_DAC_BIT | FILE_WRITE_OWNER_BIT
+        | FILE_GENERIC_WRITE_BIT)) != 0
+}
+
+/// Check if a file access mask indicates a delete operation.
+fn is_file_delete_op(mask: u32) -> bool {
+    (mask & FILE_DELETE_BIT) != 0
+}
+
+/// Check if a registry access mask indicates a write/create operation.
+/// mask==0 means unparseable — assume write to avoid missing events.
+fn is_reg_write_op(mask: u32) -> bool {
+    mask == 0 || (mask & (KEY_SET_VALUE_BIT | KEY_CREATE_SUB_KEY_BIT
+        | FILE_WRITE_DAC_BIT | FILE_WRITE_OWNER_BIT)) != 0
+}
+
 // ── Win32 imports ──────────────────────────────────────────────────
 
 #[cfg(windows)]
@@ -165,6 +212,18 @@ impl SbieMonitor {
         Err("Sandboxie Monitor API 仅支持 Windows".into())
     }
 
+    /// Dynamically add a PID to the monitored set.
+    pub fn add_pid(&mut self, pid: u32) {
+        self.sample_pids.insert(pid);
+    }
+
+    /// Dynamically add multiple PIDs to the monitored set.
+    pub fn add_pids(&mut self, pids: &[u32]) {
+        for &pid in pids {
+            self.sample_pids.insert(pid);
+        }
+    }
+
     /// Drain all pending trace entries and convert them to `BehaviorEvent`s.
     ///
     /// Call this in a loop (e.g. every 500 ms) until the analysis timeout.
@@ -184,8 +243,8 @@ impl SbieMonitor {
                     GetMonitorResult::Failed(_) => break,
                     GetMonitorResult::Entries(entries, _) => {
                         for entry in entries {
-                            // Only collect entries from sample PIDs
-                            if !self.sample_pids.is_empty() && !self.sample_pids.contains(&entry.pid) {
+                            // Filter by PID if set (empty = capture all sandboxed processes)
+                        if !self.sample_pids.is_empty() && !self.sample_pids.contains(&entry.pid) {
                                 continue;
                             }
 
@@ -406,53 +465,44 @@ fn is_noise_event(entry: &TraceEntry) -> bool {
 
     let res = entry.primary().to_lowercase();
 
-    // Filter system DLL reads (normal dependency loading)
+    // With FileTrace=wcd and KeyTrace=wcd, all traced operations are
+    // writes/creates/deletes. Only filter genuine noise, never writes.
+
     if entry.mon_type() == MONITOR_FILE {
-        let is_system_read = res.contains("\\windows\\system32\\")
-            || res.contains("\\windows\\syswow64\\")
-            || res.contains("\\windows\\winsxs\\")
-            || res.contains("\\program files\\")
-            || res.contains("\\program files (x86)\\")
-            || res.contains("\\device\\harddiskvolume");
+        let mask = parse_access_mask(&entry.access_flags());
+        let is_write = is_file_write_op(mask);
+        let is_delete = is_file_delete_op(mask);
 
-        // Only filter if it's a read operation (no write flags)
-        let access = entry.access_flags().to_lowercase();
-        let is_write = access.contains("00100000")
-            || access.contains("00000002")
-            || access.contains("00000004")
-            || access.contains("00010000");
-
-        if is_system_read && !is_write {
-            return true;
+        // Only filter reads from system paths (edge case with wcd config)
+        if !is_write && !is_delete {
+            let is_system_path = res.contains("\\windows\\system32\\")
+                || res.contains("\\windows\\syswow64\\")
+                || res.contains("\\windows\\winsxs\\")
+                || res.contains("\\program files\\")
+                || res.contains("\\program files (x86)\\")
+                || res.contains("\\device\\harddiskvolume");
+            if is_system_path || res.contains("\\sandbox\\") {
+                return true;
+            }
         }
-
-        // Filter sandbox-internal paths
-        if res.contains("\\sandbox\\") && !is_write {
-            return true;
-        }
+        // All writes are kept — even to system directories
     }
 
-    // Filter system registry queries (CLSID, Interface, TypeLib)
+    // With KeyTrace=wcd, all registry traces are writes/creates/deletes.
+    // Do NOT filter any registry writes — CLSID/TypeLib modifications
+    // can indicate COM hijacking.
     if entry.mon_type() == MONITOR_KEY {
-        let is_system_query = res.contains("\\clsid\\")
-            || res.contains("\\interface\\")
-            || res.contains("\\typelib\\")
-            || res.contains("\\microsoft\\windows\\currentversion\\explorer")
-            || res.contains("\\microsoft\\windows nt\\currentversion\\font");
-
-        let is_important = res.contains("\\run")
-            || res.contains("\\runonce")
-            || res.contains("\\startup")
-            || res.contains("\\shell\\open\\command")
-            || res.contains("\\winlogon")
-            || res.contains("\\services\\")
-            || res.contains("\\drivers\\")
-            || res.contains("\\image file execution")
-            || res.contains("\\appinit_dlls");
-
-        if is_system_query && !is_important {
-            return true;
+        let mask = parse_access_mask(&entry.access_flags());
+        // Only filter if we're certain it's a read (mask != 0 and no write bits)
+        if mask != 0 && !is_reg_write_op(mask) {
+            let is_system_query = res.contains("\\clsid\\")
+                || res.contains("\\interface\\")
+                || res.contains("\\typelib\\");
+            if is_system_query {
+                return true;
+            }
         }
+        // All registry writes are kept
     }
 
     // Filter common noise API calls
@@ -515,10 +565,9 @@ fn map_trace_to_behavior(entry: &TraceEntry, _start: Instant) -> Option<Behavior
 
 fn map_file_event(path: &str, access: &str) -> Option<BehaviorEvent> {
     let lower = path.to_lowercase();
-    let is_write = access.contains("00100000")
-        || access.contains("00000002")
-        || access.contains("00000004");
-    let is_delete = access.contains("00010000");
+    let mask = parse_access_mask(access);
+    let is_write = is_file_write_op(mask);
+    let is_delete = is_file_delete_op(mask);
 
     if !is_write && !is_delete {
         return None; // Only care about writes/deletes
@@ -565,6 +614,14 @@ fn map_file_event(path: &str, access: &str) -> Option<BehaviorEvent> {
 
 fn map_registry_event(entry: &TraceEntry, path: &str, access: &str) -> Option<BehaviorEvent> {
     let lower = path.to_lowercase();
+    let mask = parse_access_mask(access);
+
+    // With KeyTrace=wcd, all traced registry ops are writes/creates/deletes.
+    // Capture ALL of them — do not filter by path.
+    // Only skip if we're certain it's a read (mask != 0 and no write bits).
+    if mask != 0 && !is_reg_write_op(mask) {
+        return None;
+    }
 
     let is_run_key = lower.contains("\\run")
         || lower.contains("\\runonce")
@@ -575,25 +632,8 @@ fn map_registry_event(entry: &TraceEntry, path: &str, access: &str) -> Option<Be
     let is_proxy_key = lower.contains("\\proxysettings")
         || lower.contains("\\internet settings\\proxy");
 
-    // Only report important registry keys
-    let is_important = is_run_key
-        || is_security_key
-        || is_proxy_key
-        || lower.contains("\\winlogon")
-        || lower.contains("\\services\\")
-        || lower.contains("\\drivers\\")
-        || lower.contains("\\image file execution")
-        || lower.contains("\\appinit_dlls")
-        || lower.contains("\\shell\\open\\command")
-        || lower.contains("\\userinit")
-        || lower.contains("\\cmdprocedure");
-
-    if !is_important {
-        return None;
-    }
-
-    // Determine if create or modify
-    let is_create = access.contains("00020000") || entry.is_success();
+    let is_create = (mask & KEY_CREATE_SUB_KEY_BIT) != 0
+        || (mask == 0 && entry.is_success());
 
     if is_create && !entry.is_denied() {
         Some(BehaviorEvent::RegCreate {

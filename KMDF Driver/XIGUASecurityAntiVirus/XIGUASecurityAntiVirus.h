@@ -1,15 +1,17 @@
 //=============================================================================
-// AVDriver.h - 杀毒驱动 KMDF 主头文件
+// XIGUASecurityAntiVirus.h - 杀毒驱动 WDM 主头文件
 //
-// 包含驱动设备扩展定义及所有回调函数声明
+// 纯 WDM 驱动, 无 KMDF/cng.sys 依赖, 仅依赖 ntoskrnl.exe
 // IRQL: 取决于调用的上下文
 //=============================================================================
 
 #pragma once
 
 #include <ntddk.h>
-#include <wdf.h>
-#include <bcrypt.h>
+
+#ifndef BYTE
+typedef unsigned char BYTE;
+#endif
 
 #include "../AVCommon/AVProtocol.h"
 
@@ -17,7 +19,7 @@
 // 池标签定义
 //=============================================================================
 
-#define AVDR_POOL_TAG       'RVDA'  // "AVDR" reversed for little-endian
+#define AVDR_POOL_TAG       'RVDA'
 
 //=============================================================================
 // 驱动版本定义
@@ -36,63 +38,46 @@
 
 typedef struct _AV_SESSION_ENTRY
 {
-    BOOLEAN     InUse;                              // 是否使用中
-    UCHAR       SessionId[AV_SESSION_ID_SIZE];      // 会话 ID
-    HANDLE      ProcessId;                          // 创建进程 ID
-    LARGE_INTEGER CreationTime;                     // 创建时间
-    LARGE_INTEGER LastActivity;                     // 最后活动时间
+    BOOLEAN     InUse;
+    UCHAR       SessionId[AV_SESSION_ID_SIZE];
+    HANDLE      ProcessId;
+    LARGE_INTEGER CreationTime;
+    LARGE_INTEGER LastActivity;
 } AV_SESSION_ENTRY;
 
 //=============================================================================
-// 设备扩展结构体
+// 设备扩展结构体 (WDM DeviceExtension)
 //=============================================================================
 
 typedef struct _DEVICE_CONTEXT
 {
-    WDFQUEUE        DefaultQueue;                   // 默认 IO 队列
-    WDFWAITLOCK     SessionLock;                    // 会话列表锁 (PASSIVE_LEVEL)
-    AV_SESSION_ENTRY Sessions[AV_MAX_SESSIONS];     // 会话数组
-    UINT32          SessionCount;                   // 当前活跃会话数
-    UINT64          TotalScans;                     // 总扫描次数
-    LARGE_INTEGER   StartTime;                      // 驱动启动时间
-    UINT64          SequenceCounter;                // 挑战序列号计数器 (防止重放)
-} DEVICE_CONTEXT;
-
-WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(DEVICE_CONTEXT, GetDeviceContext)
+    KSPIN_LOCK      SessionLock;                    // 会话列表锁
+    AV_SESSION_ENTRY Sessions[AV_MAX_SESSIONS];
+    UINT32          SessionCount;
+    UINT64          TotalScans;
+    LARGE_INTEGER   StartTime;
+    UINT64          SequenceCounter;
+} DEVICE_CONTEXT, *PDEVICE_CONTEXT;
 
 //=============================================================================
-// 驱动入口回调声明
+// 驱动入口和分发函数声明
 //=============================================================================
 
 DRIVER_INITIALIZE DriverEntry;
+DRIVER_UNLOAD AvDriverUnload;
 
-EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL EvtIoDeviceControl;
-
-//
-// 驱动清理回调 (手动声明, 避免宏兼容性问题)
-//
-VOID
-EvtDriverContextCleanup(
-    _In_ WDFOBJECT DriverObject
-    );
+DRIVER_DISPATCH AvDispatchCreateClose;
+DRIVER_DISPATCH AvDispatchDeviceControl;
 
 //=============================================================================
 // 鉴权模块函数声明 (AVAuth.c)
 //=============================================================================
 
-//
-// AvAuthGenerateChallenge - 生成鉴权挑战码
-// IRQL: PASSIVE_LEVEL
-//
 NTSTATUS
 AvAuthGenerateChallenge(
     _Out_ AV_AUTH_CHALLENGE* Challenge
     );
 
-//
-// AvAuthVerifyResponse - 验证鉴权响应 HMAC
-// IRQL: PASSIVE_LEVEL
-//
 NTSTATUS
 AvAuthVerifyResponse(
     _In_ const AV_AUTH_RESPONSE* Response,
@@ -100,19 +85,11 @@ AvAuthVerifyResponse(
     _Out_opt_ UCHAR ExpectedHmac[AV_HASH_SIZE]
     );
 
-//
-// AvAuthGenerateSessionId - 生成随机会话 ID
-// IRQL: PASSIVE_LEVEL
-//
 VOID
 AvAuthGenerateSessionId(
     _Out_ UCHAR SessionId[AV_SESSION_ID_SIZE]
     );
 
-//
-// AvAuthVerifyHeartbeatHmac - 验证心跳 HMAC
-// IRQL: PASSIVE_LEVEL
-//
 NTSTATUS
 AvAuthVerifyHeartbeatHmac(
     _In_ const AV_HEARTBEAT_REQUEST* Request,
@@ -123,13 +100,9 @@ AvAuthVerifyHeartbeatHmac(
 // 会话管理函数声明 (AVSession.c)
 //=============================================================================
 
-//
-// AvSessionCreate - 创建新会话
-// IRQL: PASSIVE_LEVEL
-//
 NTSTATUS
 AvSessionCreate(
-    _In_ WDFWAITLOCK SessionLock,
+    _In_ PKSPIN_LOCK SessionLock,
     _Inout_ AV_SESSION_ENTRY Sessions[],
     _In_ UINT32 MaxSessions,
     _Inout_ UINT32* SessionCount,
@@ -137,38 +110,26 @@ AvSessionCreate(
     _Out_ UCHAR SessionId[AV_SESSION_ID_SIZE]
     );
 
-//
-// AvSessionValidate - 验证会话是否有效
-// IRQL: PASSIVE_LEVEL
-//
 NTSTATUS
 AvSessionValidate(
-    _In_ WDFWAITLOCK SessionLock,
+    _In_ PKSPIN_LOCK SessionLock,
     _In_ AV_SESSION_ENTRY Sessions[],
     _In_ UINT32 MaxSessions,
     _In_ const UCHAR SessionId[AV_SESSION_ID_SIZE]
     );
 
-//
-// AvSessionRemove - 移除会话
-// IRQL: PASSIVE_LEVEL
-//
 VOID
 AvSessionRemove(
-    _In_ WDFWAITLOCK SessionLock,
+    _In_ PKSPIN_LOCK SessionLock,
     _Inout_ AV_SESSION_ENTRY Sessions[],
     _In_ UINT32 MaxSessions,
     _Inout_ UINT32* SessionCount,
     _In_ const UCHAR SessionId[AV_SESSION_ID_SIZE]
     );
 
-//
-// AvSessionUpdateActivity - 更新会话活动时间
-// IRQL: PASSIVE_LEVEL
-//
 VOID
 AvSessionUpdateActivity(
-    _In_ WDFWAITLOCK SessionLock,
+    _In_ PKSPIN_LOCK SessionLock,
     _Inout_ AV_SESSION_ENTRY Sessions[],
     _In_ UINT32 MaxSessions,
     _In_ const UCHAR SessionId[AV_SESSION_ID_SIZE]

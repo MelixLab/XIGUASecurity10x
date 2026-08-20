@@ -94,9 +94,36 @@
 #define XGS_RANSOM_LIST_MAX     12          // 单次通知携带的最大文件数 (弹窗展示)
 #define XGS_MODIFIED_MAX        256         // 驱动维护的受影响文件记录数
 #define XGS_RANSOM_WINDOW_MS    60000       // 检测时间窗 (毫秒)
-#define XGS_RANSOM_THRESHOLD    20          // 时间窗内文档改动次数阈值
 #define XGS_BACKUP_DIR_NT       L"\\??\\C:\\Windows\\Temp\\XGS\\Backup\\"  // 备份目录 (NT 路径)
 #define XGS_BACKUP_DIR_WIN32    L"C:\\Windows\\Temp\\XGS\\Backup\\"         // 备份目录 (Win32 路径)
+
+//
+// 勒索防护操作类型 (XGS_MODIFIED_FILE.Operation)
+//
+#define XGS_OP_MODIFY            1   // 文件修改 (写入)
+#define XGS_OP_DELETE            2   // 文件删除
+#define XGS_OP_RENAME            3   // 文件重命名
+#define XGS_OP_EXT_CHANGE        4   // 扩展名变更 (勒索软件特征)
+
+//
+// 勒索防护检测标志 (XGS_RANSOM_NOTIFICATION.DetectionFlags 位掩码)
+// 标识触发检测的具体规则组合
+//
+#define XGS_DETECT_MASS_MODIFY     0x01   // 大量文件修改 (>10 文件/30 秒)
+#define XGS_DETECT_MASS_DELETE     0x02   // 大量文件删除 (>8 文件/30 秒)
+#define XGS_DETECT_MASS_RENAME     0x04   // 大量文件重命名 (>5 文件/30 秒)
+#define XGS_DETECT_EXT_CHANGE      0x08   // 文件扩展名变更
+#define XGS_DETECT_ENTROPY         0x10   // 高熵写入 (疑似加密)
+#define XGS_DETECT_TYPE_DIVERSITY  0x20   // 文件类型多样性 (>5 种类型/30 秒)
+#define XGS_DETECT_DIR_DIVERSITY   0x40   // 目录多样性 (>8 个目录/30 秒)
+#define XGS_DETECT_RAPID_WRITES    0x80   // 快速连续写入 (>30 次/60 秒)
+
+//
+// 勒索防护评分阈值
+// 120 分: 需要多个威胁信号叠加才触发阻断 (如批量写+高熵+类型多样),
+// 单信号 (仅高熵/仅批量写) 不足以触发, 有效降低正常软件误报。
+//
+#define XGS_RANSOM_SCORE_THRESHOLD  120   // 阻断阈值 (达到此分数触发阻断)
 
 //
 // 勒索防护决策码 (用户态 -> 驱动)
@@ -205,6 +232,15 @@ typedef enum _XGS_EP_BEHAVIOR_TYPE
 
 #define IOCTL_AV_SEND_INJECTION_DECISION \
     CTL_CODE(AV_IOCTL_DEVICE_TYPE, 0x826, METHOD_BUFFERED, FILE_READ_DATA | FILE_WRITE_DATA)
+
+//
+// 镜像加载监控相关 IOCTL
+//
+#define IOCTL_AV_GET_PENDING_IMAGE_NOTIFICATION \
+    CTL_CODE(AV_IOCTL_DEVICE_TYPE, 0x827, METHOD_BUFFERED, FILE_READ_DATA | FILE_WRITE_DATA)
+
+#define IOCTL_AV_SEND_IMAGE_DECISION \
+    CTL_CODE(AV_IOCTL_DEVICE_TYPE, 0x828, METHOD_BUFFERED, FILE_READ_DATA | FILE_WRITE_DATA)
 
 //
 // 勒索防护 (XGSRansomFilter) IOCTL
@@ -342,6 +378,7 @@ typedef enum _AV_BLOCK_REASON
     AvBlockReasonNone            = 0,   // 无
     AvBlockReasonPathProtect     = 1,   // 目录保护 (受保护目录)
     AvBlockReasonBehaviorCmdline = 2,   // 行为防护 (可疑命令行工具调用)
+    AvBlockReasonImageLoad       = 3,   // 镜像加载异常 (白加黑/可疑DLL注入)
 } AV_BLOCK_REASON;
 
 //
@@ -454,22 +491,64 @@ typedef struct _AV_INJECTION_DECISION
 } AV_INJECTION_DECISION;
 
 //
-// 勒索防护: 受影响文件条目 (修改/删除 + 备份)
+// 镜像加载异常类型
+//
+typedef enum _AV_IMAGE_ANOMALY_TYPE
+{
+    AvImageAnomalyNone            = 0,
+    AvImageAnomalySideLoading     = 1,   // 白加黑: 同目录DLL侧加载
+    AvImageAnomalySystemInject    = 2,   // 系统进程加载非系统目录DLL
+    AvImageAnomalySuspiciousPath  = 3,   // 从Temp/Downloads/Desktop加载DLL
+    AvImageAnomalyUnsignedDriver  = 4,   // 加载未签名内核驱动
+} AV_IMAGE_ANOMALY_TYPE;
+
+//
+// 镜像加载通知 (IOCTL_AV_GET_PENDING_IMAGE_NOTIFICATION 输出)
+//
+typedef struct _AV_IMAGE_NOTIFICATION
+{
+    BOOLEAN  HasPending;                         // 是否有待处理通知
+    UINT64   NotificationId;                     // 通知唯一 ID
+    UINT32   ProcessId;                          // 加载镜像的进程 ID
+    UINT32   AnomalyType;                        // AV_IMAGE_ANOMALY_TYPE
+    WCHAR    ImagePath[AV_MAX_PROCESS_PATH_LEN]; // 被加载的镜像全路径
+    WCHAR    ProcessImagePath[AV_MAX_PROCESS_PATH_LEN]; // 加载者进程镜像路径
+    WCHAR    RuleDescription[128];               // 异常描述
+} AV_IMAGE_NOTIFICATION;
+
+//
+// 镜像加载决策 (IOCTL_AV_SEND_IMAGE_DECISION 输入)
+//
+typedef struct _AV_IMAGE_DECISION
+{
+    UINT64          NotificationId;             // 对应通知 ID
+    UINT32          ProcessId;                  // 决策针对的进程
+    AV_DECISION_TYPE Decision;                  // 决策类型 (本次/始终, 允许/拒绝)
+} AV_IMAGE_DECISION;
+
+//
+// 勒索防护: 受影响文件条目 (修改/删除/重命名 + 备份)
 //
 typedef struct _XGS_MODIFIED_FILE
 {
-    UINT32 Operation;                     // 1=修改 2=删除
+    UINT32 Operation;                     // XGS_OP_MODIFY / DELETE / RENAME / EXT_CHANGE
+    UINT32 ProcessId;                     // 发起操作的进程 ID
     WCHAR  OriginalPath[XGS_MAX_FILE_PATH_LEN];  // 原始路径
-    WCHAR  BackupPath[XGS_MAX_FILE_PATH_LEN];    // 备份路径 (删除时可能为空)
+    WCHAR  BackupPath[XGS_MAX_FILE_PATH_LEN];    // 备份路径 (重命名时存新路径)
 } XGS_MODIFIED_FILE;
 
 //
 // 勒索防护: 触发通知 (IOCTL_XGS_GET_NOTIFICATION 输出)
+// 包含触发进程信息和评分明细
 //
 typedef struct _XGS_RANSOM_NOTIFICATION
 {
     BOOLEAN  HasPending;                   // 是否有待处理通知
     UINT64   NotificationId;               // 通知唯一 ID
+    UINT32   ProcessId;                    // 触发进程 ID
+    WCHAR    ProcessName[32];              // 触发进程名 (截断到 15 字符)
+    UINT32   ThreatScore;                  // 当前威胁评分
+    UINT32   DetectionFlags;               // 检测标志 (XGS_DETECT_* 位掩码)
     UINT32   FileCount;                    // 受影响文件数
     XGS_MODIFIED_FILE Files[XGS_RANSOM_LIST_MAX];
 } XGS_RANSOM_NOTIFICATION;
@@ -481,6 +560,7 @@ typedef struct _XGS_RANSOM_DECISION
 {
     UINT64  NotificationId;                // 对应通知 ID
     UINT32  Decision;                      // 1=放行继续 2=保持阻断 3=仅恢复
+    UINT32  ProcessId;                     // 目标进程 ID (对指定进程生效)
 } XGS_RANSOM_DECISION;
 
 //
@@ -489,12 +569,16 @@ typedef struct _XGS_RANSOM_DECISION
 typedef struct _XGS_STATUS
 {
     UINT32  Version;
-    UINT32  RansomSuspected;               // 是否处于勒索阻断状态
+    UINT32  RansomSuspected;               // 当前阻断中的进程数
     UINT64  DocWrites;                     // 文档写操作总数
     UINT64  DocDeletes;                    // 文档删除操作总数
+    UINT64  DocRenames;                    // 文档重命名操作总数
     UINT64  BackupsCreated;                // 已创建备份数
     UINT32  PendingNotification;           // 是否有待处理通知
     UINT32  ModifiedCount;                 // 已记录的受影响文件数
+    UINT32  ActiveProcesses;               // 活跃跟踪进程数
+    UINT32  BlockedProcesses;              // 阻断中的进程数
+    UINT64  TotalDetections;               // 累计勒索检测次数
 } XGS_STATUS;
 
 //
@@ -763,6 +847,10 @@ typedef enum _AV_PIPE_MSG_TYPE
     AvPipeMsgInjectionNotify   = 0x2030,   // System -> Main: 远程线程注入通知 (要求 Main 弹窗决策)
     AvPipeMsgInjectionDecision = 0x2031,   // Main -> System: 注入决策回复
 
+    // 镜像加载监控 (System <-> Main)
+    AvPipeMsgImageNotify       = 0x2060,   // System -> Main: 镜像加载异常通知 (要求 Main 弹窗决策)
+    AvPipeMsgImageDecision     = 0x2061,   // Main -> System: 镜像加载决策回复
+
     // 勒索防护 (System <-> Main)
     AvPipeMsgRansomNotify      = 0x2040,   // System -> Main: 勒索防护通知 (要求 Main 弹窗决策)
     AvPipeMsgRansomDecision    = 0x2041,   // Main -> System: 勒索防护决策回复
@@ -952,6 +1040,10 @@ typedef struct _AV_PIPE_INJECTION_DECISION
 typedef struct _AV_PIPE_RANSOM_NOTIFY
 {
     UINT64   NotificationId;                 // 通知唯一 ID
+    UINT32   ProcessId;                      // 触发进程 ID
+    WCHAR    ProcessName[32];                // 触发进程名
+    UINT32   ThreatScore;                    // 威胁评分
+    UINT32   DetectionFlags;                 // 检测标志 (XGS_DETECT_* 位掩码)
     UINT32   FileCount;                      // 受影响文件数
     XGS_MODIFIED_FILE Files[XGS_RANSOM_LIST_MAX];
 } AV_PIPE_RANSOM_NOTIFY_DATA;
@@ -965,6 +1057,7 @@ typedef struct _AV_PIPE_RANSOM_DECISION
 {
     UINT64   NotificationId;                 // 对应通知 ID
     UINT32   Decision;                       // 1=放行继续 2=保持阻断 3=仅恢复
+    UINT32   ProcessId;                      // 目标进程 ID
 } AV_PIPE_RANSOM_DECISION_DATA;
 #pragma pack(pop)
 

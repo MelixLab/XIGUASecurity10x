@@ -15,9 +15,13 @@
 // AvRegNotifyInitialize - 初始化注册表通知模块
 // IRQL: PASSIVE_LEVEL
 //
+// RegistryPath: 驱动服务注册表键路径 (DriverEntry 传入),
+//               用于持久化"始终允许/始终拒绝"规则, 驱动重启后恢复
+//
 NTSTATUS
 AvRegNotifyInitialize(
-    _In_ PDRIVER_OBJECT DriverObject
+    _In_ PDRIVER_OBJECT DriverObject,
+    _In_ PUNICODE_STRING RegistryPath
     );
 
 //
@@ -68,7 +72,10 @@ AvRegSetTrustedClientPid(
 
 //
 // AvRegIsTrustedProcess - 当前进程是否为可信系统进程
-// (信任客户端 / System / services.exe / 镜像位于 \Windows\ 下)
+// (信任客户端 / System / 关键系统进程名精确匹配: winlogon/svchost/csrss/
+//  services/lsass/smss/wininit/dwm)
+// 注: reg.exe/regedit.exe/cmd.exe/powershell.exe/explorer.exe 等用户工具
+//     不在信任名单, 其注册表写操作会正常弹窗由用户决策。
 // IRQL: PASSIVE_LEVEL (回调中亦可)
 //
 BOOLEAN

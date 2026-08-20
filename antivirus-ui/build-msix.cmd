@@ -5,7 +5,7 @@ set PROJECTROOT=d:\XIGUASecurity10x\antivirus-ui
 set TAURIROOT=%PROJECTROOT%\src-tauri
 set BUILDDIR=%TAURIROOT%\target\release
 set PKGROOT=%TAURIROOT%\target\msix-packaging
-set OUTPUTMSIX=%TAURIROOT%\target\XIGUASecurity_10.2.33_x64.msix
+set OUTPUTMSIX=%TAURIROOT%\target\XIGUASecurity_10.2.34_x64.msix
 
 echo Cleaning...
 if exist "%PKGROOT%" rmdir /s /q "%PKGROOT%"

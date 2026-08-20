@@ -1,0 +1,188 @@
+/*
+ * intercept-theme.css
+ * 拦截窗口共享主题变量 —— 从主程序 styles.css 提取
+ * 通过 <link rel="stylesheet" href="intercept-theme.css"> 引入
+ * JS 初始化时读取 localStorage 的 theme / themeMode / windowBackdrop
+ * 并设置 data-theme / data-theme-mode / data-backdrop 属性即可生效
+ */
+
+:root {
+  --bg-primary: #f8fbff;
+  --bg-secondary: #eef4fc;
+  --bg-tertiary: #e8f0f8;
+  --bg-card: rgba(255, 255, 255, 0.88);
+  --bg-hover: rgba(0, 120, 212, 0.06);
+  --bg-active: rgba(0, 120, 212, 0.1);
+
+  --text-primary: #1a1a1a;
+  --text-secondary: #5a5a5a;
+  --text-tertiary: #8a8a8a;
+  --text-inverse: #ffffff;
+
+  --border-color: #d0e3f5;
+  --border-light: #e8f0f8;
+
+  --accent-primary: #0078d4;
+  --accent-secondary: #106ebe;
+  --accent-light: rgba(0, 120, 212, 0.12);
+  --accent-lighter: rgba(0, 120, 212, 0.06);
+  --accent-bg: rgba(239, 246, 255, 0.8);
+
+  --success: #107c10;
+  --warning: #ffc107;
+  --error: #d13438;
+  --danger: #d13438;
+  --info: #0078d4;
+
+  --shadow-sm: 0 1px 2px rgba(0, 120, 212, 0.06);
+  --shadow-md: 0 4px 6px -1px rgba(0, 120, 212, 0.1), 0 2px 4px -1px rgba(0, 120, 212, 0.06);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 120, 212, 0.1), 0 4px 6px -2px rgba(0, 120, 212, 0.05);
+
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  --transition-fast: 0.15s ease;
+  --transition-normal: 0.2s ease;
+}
+
+/* ===== 颜色主题 ===== */
+[data-theme="purple"] {
+  --accent-primary: #7c3aed;
+  --accent-secondary: #6d28d9;
+  --accent-light: rgba(124, 58, 237, 0.12);
+  --accent-lighter: rgba(124, 58, 237, 0.06);
+  --accent-bg: rgba(250, 245, 255, 0.8);
+  --bg-primary: #fcfaff;
+  --bg-secondary: #f8f0ff;
+  --bg-tertiary: #f3e8ff;
+  --border-color: #e9d5ff;
+  --border-light: #f3e8ff;
+  --bg-hover: rgba(124, 58, 237, 0.06);
+  --bg-active: rgba(124, 58, 237, 0.1);
+}
+[data-theme="green"] {
+  --accent-primary: #059669;
+  --accent-secondary: #047857;
+  --accent-light: rgba(5, 150, 105, 0.12);
+  --accent-lighter: rgba(5, 150, 105, 0.06);
+  --accent-bg: rgba(240, 253, 244, 0.8);
+  --bg-primary: #f6fdf9;
+  --bg-secondary: #e8faf0;
+  --bg-tertiary: #dcfce7;
+  --border-color: #bbf7d0;
+  --border-light: #dcfce7;
+  --bg-hover: rgba(5, 150, 105, 0.06);
+  --bg-active: rgba(5, 150, 105, 0.1);
+}
+[data-theme="orange"] {
+  --accent-primary: #ea580c;
+  --accent-secondary: #c2410c;
+  --accent-light: rgba(234, 88, 12, 0.12);
+  --accent-lighter: rgba(234, 88, 12, 0.06);
+  --accent-bg: rgba(255, 247, 237, 0.8);
+  --bg-primary: #fffbf7;
+  --bg-secondary: #fff0e6;
+  --bg-tertiary: #ffedd5;
+  --border-color: #fed7aa;
+  --border-light: #ffedd5;
+  --bg-hover: rgba(234, 88, 12, 0.06);
+  --bg-active: rgba(234, 88, 12, 0.1);
+}
+[data-theme="pink"] {
+  --accent-primary: #db2777;
+  --accent-secondary: #be185d;
+  --accent-light: rgba(219, 39, 119, 0.12);
+  --accent-lighter: rgba(219, 39, 119, 0.06);
+  --accent-bg: rgba(253, 242, 248, 0.8);
+  --bg-primary: #fffafd;
+  --bg-secondary: #fce8f3;
+  --bg-tertiary: #fce7f3;
+  --border-color: #fbcfe8;
+  --border-light: #fce7f3;
+  --bg-hover: rgba(219, 39, 119, 0.06);
+  --bg-active: rgba(219, 39, 119, 0.1);
+}
+[data-theme="teal"] {
+  --accent-primary: #0d9488;
+  --accent-secondary: #0f766e;
+  --accent-light: rgba(13, 148, 136, 0.12);
+  --accent-lighter: rgba(13, 148, 136, 0.06);
+  --accent-bg: rgba(240, 253, 250, 0.8);
+  --bg-primary: #f6fdfc;
+  --bg-secondary: #e6fcf9;
+  --bg-tertiary: #ccfbf1;
+  --border-color: #99f6e4;
+  --border-light: #ccfbf1;
+  --bg-hover: rgba(13, 148, 136, 0.06);
+  --bg-active: rgba(13, 148, 136, 0.1);
+}
+
+/* ===== 主题模式 ===== */
+
+/* Classic 模式 */
+[data-theme-mode="classic"] {
+  --bg-primary: #fafafa;
+  --bg-secondary: #f5f5f5;
+  --bg-tertiary: #eeeeee;
+  --bg-card: rgba(255, 255, 255, 0.98);
+  --bg-hover: rgba(0, 0, 0, 0.03);
+  --bg-active: rgba(0, 0, 0, 0.06);
+  --text-primary: #1f1f1f;
+  --text-secondary: #5a5a5a;
+  --text-tertiary: #8a8a8a;
+  --border-color: #e8e8e8;
+  --border-light: #f0f0f0;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.03);
+  --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.05);
+  --shadow-lg: 0 4px 8px rgba(0, 0, 0, 0.07);
+}
+
+/* Dark 模式 */
+[data-theme-mode="dark"] {
+  --bg-primary: #1e1e1e;
+  --bg-secondary: #252526;
+  --bg-tertiary: #2d2d30;
+  --bg-card: rgba(45, 45, 48, 0.92);
+  --bg-hover: rgba(255, 255, 255, 0.05);
+  --bg-active: rgba(255, 255, 255, 0.1);
+  --text-primary: #e4e4e4;
+  --text-secondary: #a0a0a0;
+  --text-tertiary: #6e6e6e;
+  --text-inverse: #1e1e1e;
+  --border-color: #3e3e42;
+  --border-light: #2d2d30;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.5);
+}
+
+/* ===== Backdrop (亚克力/Mica) 模式下的背景透明处理 ===== */
+
+/* 无 backdrop 时 body 使用不透明背景 */
+html[data-backdrop="none"] body,
+html:not([data-backdrop]) body {
+  background: var(--bg-primary);
+}
+
+/* 有 backdrop 时 body 透明，让窗口材质透出 */
+html[data-backdrop="acrylic"] body,
+html[data-backdrop="mica"] body,
+html[data-backdrop="micaAlt"] body {
+  background: transparent;
+}
+
+/* 确保文本颜色跟随主题（深色模式下避免黑色文字不可见） */
+body {
+  color: var(--text-primary);
+}
+
+/* Backdrop 模式下容器使用半透明背景，让亚克力/Mica 效果透出 */
+html[data-backdrop="acrylic"] .intercept-container,
+html[data-backdrop="acrylic"] .alert-container,
+html[data-backdrop="mica"] .intercept-container,
+html[data-backdrop="mica"] .alert-container,
+html[data-backdrop="micaAlt"] .intercept-container,
+html[data-backdrop="micaAlt"] .alert-container {
+  background: var(--bg-card) !important;
+}

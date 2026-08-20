@@ -17,6 +17,7 @@
 #include "AVRegNotify.h"
 #include "AVProcessNotify.h"
 #include <ntstrsafe.h>
+#include "../AVCommon/AVPoolCompat.h"
 
 //
 // PsGetProcessImageFileName 在 ntifs.h 中声明, 此处手动声明
@@ -57,7 +58,8 @@ ZwQueryInformationProcess(
 
 //
 // 注册表决策等待超时 (毫秒)
-// 回调阻塞期间其他进程的注册表操作被拖住, 超时必须尽可能小
+// 回调阻塞期间其他进程的注册表操作被拖住, 超时必须尽可能小。
+// 用户态断开时由 AvProcessIsClientActive 兜底静默放行。
 //
 #define AV_REG_DECISION_TIMEOUT_MS 30000
 
@@ -92,6 +94,30 @@ AV_NON_PAGED static UINT32  g_RegDenyRuleCount = 0;
 AV_NON_PAGED static LARGE_INTEGER g_RegCookie;
 AV_NON_PAGED static BOOLEAN       g_RegCallbackRegistered = FALSE;
 AV_NON_PAGED static UINT32        g_TrustedClientPid = 0;
+
+//
+// 驱动服务注册表键路径 (规则持久化用)
+// 初始化时从 DriverEntry 的 RegistryPath 复制, 卸载时释放
+//
+AV_NON_PAGED static UNICODE_STRING g_RegServicePath = { 0, 0, NULL };
+AV_NON_PAGED static BOOLEAN        g_RegServicePathValid = FALSE;
+
+//
+// UAC 策略敏感值 (CurrentVersion\Policies\System 下, 值名精确匹配)
+// 攻击者禁用 UAC 的标准手法: EnableLUA=0 等 (银狐/勒索均使用)
+//
+AV_NON_PAGED static const PCWSTR g_UacPolicyValues[] =
+{
+    L"EnableLUA",
+    L"ConsentPromptBehaviorAdmin",
+    L"PromptOnSecureDesktop",
+    L"EnableInstallerDetection",
+    L"FilterAdministratorToken",
+    L"ValidateAdminCodeSignatures",
+    L"EnableVirtualization",
+};
+AV_NON_PAGED static const UINT32 g_UacPolicyValueCount =
+    sizeof(g_UacPolicyValues) / sizeof(g_UacPolicyValues[0]);
 
 //
 // 诊断计数 (回调串行执行, 简单递增即可; 用户态通过 IOCTL_AV_GET_DEBUG_INFO 读取)
@@ -173,15 +199,284 @@ AvRegContainsSubstring(
 }
 
 //=============================================================================
+// 规则持久化
+//
+// "始终允许/始终拒绝"规则保存在驱动服务注册表键下:
+//   HKLM\SYSTEM\CurrentControlSet\Services\XIGUASecurityAntiVirus\RegRules
+//     AllowRules (REG_MULTI_SZ): 始终允许的注册表路径
+//     DenyRules  (REG_MULTI_SZ): 始终拒绝的注册表路径
+// 驱动每次加载时恢复规则, 保证用户的选择在重启后仍然生效。
+//=============================================================================
+
+#define AV_REG_RULES_SUBKEY    L"RegRules"
+#define AV_REG_ALLOW_VAL       L"AllowRules"
+#define AV_REG_DENY_VAL        L"DenyRules"
+
+//
+// 规则持久化缓冲区大小 (64 条规则 * (520 字符 + 终止) * 2 字节)
+//
+#define AV_REG_RULES_BUF_BYTES (AV_REG_RULE_MAX * (AV_MAX_REG_PATH_LEN + 1) * sizeof(WCHAR))
+
+//
+// AvRegOpenRulesKey - 打开/创建规则存储键
+// IRQL: PASSIVE_LEVEL
+//
+static
+NTSTATUS
+AvRegOpenRulesKey(
+    _Out_ PHANDLE pKey
+    )
+{
+    WCHAR fullPath[AV_MAX_REG_PATH_LEN + 64];
+    UNICODE_STRING path;
+    OBJECT_ATTRIBUTES oa;
+    NTSTATUS status;
+    ULONG disposition = 0;
+
+    if (pKey == NULL || !g_RegServicePathValid || g_RegServicePath.Buffer == NULL)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    status = RtlStringCbPrintfW(fullPath, sizeof(fullPath),
+                                L"%ws\\%ws", g_RegServicePath.Buffer, AV_REG_RULES_SUBKEY);
+    if (!NT_SUCCESS(status))
+    {
+        return status;
+    }
+
+    RtlInitUnicodeString(&path, fullPath);
+    InitializeObjectAttributes(&oa, &path, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+
+    return ZwCreateKey(pKey, KEY_READ | KEY_WRITE, &oa, 0, NULL,
+                       REG_OPTION_NON_VOLATILE, &disposition);
+}
+
+//
+// AvRegSaveRulesToRegistry - 把内存中的规则持久化到注册表
+// IRQL: PASSIVE_LEVEL (在 AvRegAddRule 释放自旋锁后调用)
+//
+static
+VOID
+AvRegSaveRulesToRegistry(
+    VOID
+    )
+{
+    HANDLE hKey = NULL;
+    NTSTATUS status;
+    KIRQL irql;
+    PWCHAR allowBuf = NULL;
+    PWCHAR denyBuf = NULL;
+    PWCHAR cursor;
+    ULONG allowLen = 0;
+    ULONG denyLen = 0;
+    UINT32 i;
+    UNICODE_STRING valueName;
+
+    status = AvRegOpenRulesKey(&hKey);
+    if (!NT_SUCCESS(status))
+    {
+        KdPrint(("AVReg: Open rules key failed 0x%08X, rules not persisted\n", status));
+        return;
+    }
+
+    allowBuf = (PWCHAR)AV_ALLOC_PAGED(AV_REG_RULES_BUF_BYTES, 'lgRA');
+    denyBuf = (PWCHAR)AV_ALLOC_PAGED(AV_REG_RULES_BUF_BYTES, 'lgRD');
+    if (allowBuf == NULL || denyBuf == NULL)
+    {
+        KdPrint(("AVReg: Rule persistence buffer allocation failed\n"));
+        if (allowBuf != NULL) ExFreePool(allowBuf);
+        if (denyBuf != NULL) ExFreePool(denyBuf);
+        ZwClose(hKey);
+        return;
+    }
+
+    //
+    // 在自旋锁保护下构建 MULTI_SZ (纯内存操作, 无分配)
+    //
+    KeAcquireSpinLock(&g_RegLock, &irql);
+
+    cursor = allowBuf;
+    for (i = 0; i < g_RegAllowRuleCount; i++)
+    {
+        RtlStringCbCopyW(cursor,
+                         AV_REG_RULES_BUF_BYTES -
+                             (SIZE_T)((PCHAR)cursor - (PCHAR)allowBuf),
+                         g_RegAllowRules[i]);
+        cursor += wcslen(g_RegAllowRules[i]) + 1;
+    }
+    *cursor = L'\0';
+    allowLen = (ULONG)((SIZE_T)((PCHAR)cursor - (PCHAR)allowBuf) + sizeof(WCHAR));
+
+    cursor = denyBuf;
+    for (i = 0; i < g_RegDenyRuleCount; i++)
+    {
+        RtlStringCbCopyW(cursor,
+                         AV_REG_RULES_BUF_BYTES -
+                             (SIZE_T)((PCHAR)cursor - (PCHAR)denyBuf),
+                         g_RegDenyRules[i]);
+        cursor += wcslen(g_RegDenyRules[i]) + 1;
+    }
+    *cursor = L'\0';
+    denyLen = (ULONG)((SIZE_T)((PCHAR)cursor - (PCHAR)denyBuf) + sizeof(WCHAR));
+
+    KeReleaseSpinLock(&g_RegLock, irql);
+
+    //
+    // 写回注册表 (PASSIVE_LEVEL, 注册表操作会被拷贝, 缓冲区内存在调用期间安全)
+    //
+    RtlInitUnicodeString(&valueName, AV_REG_ALLOW_VAL);
+    status = ZwSetValueKey(hKey, &valueName, 0, REG_MULTI_SZ, allowBuf, allowLen);
+    if (!NT_SUCCESS(status))
+    {
+        KdPrint(("AVReg: Write AllowRules failed 0x%08X\n", status));
+    }
+
+    RtlInitUnicodeString(&valueName, AV_REG_DENY_VAL);
+    status = ZwSetValueKey(hKey, &valueName, 0, REG_MULTI_SZ, denyBuf, denyLen);
+    if (!NT_SUCCESS(status))
+    {
+        KdPrint(("AVReg: Write DenyRules failed 0x%08X\n", status));
+    }
+
+    ZwClose(hKey);
+    ExFreePool(allowBuf);
+    ExFreePool(denyBuf);
+}
+
+//
+// AvRegLoadRulesFromRegistry - 从注册表恢复规则
+// IRQL: PASSIVE_LEVEL (驱动初始化时调用)
+//
+static
+NTSTATUS
+AvRegLoadRulesFromRegistry(
+    VOID
+    )
+{
+    HANDLE hKey = NULL;
+    NTSTATUS status;
+    KIRQL irql;
+    PVOID buf = NULL;
+    ULONG bufSize = (ULONG)(AV_REG_RULES_BUF_BYTES + sizeof(KEY_VALUE_PARTIAL_INFORMATION) + 64);
+    PKEY_VALUE_PARTIAL_INFORMATION info;
+    UNICODE_STRING valueName;
+    PWCHAR parsed[AV_REG_RULE_MAX];
+    UINT32 parsedCount = 0;
+    UINT32 i;
+
+    if (!g_RegServicePathValid)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    status = AvRegOpenRulesKey(&hKey);
+    if (!NT_SUCCESS(status))
+    {
+        KdPrint(("AVReg: Rules key unavailable 0x%08X, no persisted rules loaded\n", status));
+        return status;
+    }
+
+    buf = AV_ALLOC_PAGED(bufSize, 'lgRL');
+    if (buf == NULL)
+    {
+        ZwClose(hKey);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    //
+    // 解析 AllowRules (MULTI_SZ) -> 指向缓冲区内的字符串
+    //
+    parsedCount = 0;
+    RtlInitUnicodeString(&valueName, AV_REG_ALLOW_VAL);
+    status = ZwQueryValueKey(hKey, &valueName, KeyValuePartialInformation,
+                             buf, bufSize, NULL);
+    if (NT_SUCCESS(status))
+    {
+        info = (PKEY_VALUE_PARTIAL_INFORMATION)buf;
+        if (info->Type == REG_MULTI_SZ && info->DataLength >= sizeof(WCHAR))
+        {
+            PWCHAR p = (PWCHAR)info->Data;
+            while (p[0] != L'\0' && parsedCount < AV_REG_RULE_MAX)
+            {
+                parsed[parsedCount++] = p;
+                p += wcslen(p) + 1;
+            }
+        }
+    }
+
+    if (parsedCount > 0)
+    {
+        KeAcquireSpinLock(&g_RegLock, &irql);
+        for (i = 0; i < parsedCount && g_RegAllowRuleCount < AV_REG_RULE_MAX; i++)
+        {
+            RtlStringCbCopyW(g_RegAllowRules[g_RegAllowRuleCount],
+                             sizeof(g_RegAllowRules[g_RegAllowRuleCount]),
+                             parsed[i]);
+            g_RegAllowRuleCount++;
+        }
+        KeReleaseSpinLock(&g_RegLock, irql);
+    }
+
+    //
+    // 解析 DenyRules (MULTI_SZ) -> 指向缓冲区内的字符串
+    //
+    parsedCount = 0;
+    RtlInitUnicodeString(&valueName, AV_REG_DENY_VAL);
+    status = ZwQueryValueKey(hKey, &valueName, KeyValuePartialInformation,
+                             buf, bufSize, NULL);
+    if (NT_SUCCESS(status))
+    {
+        info = (PKEY_VALUE_PARTIAL_INFORMATION)buf;
+        if (info->Type == REG_MULTI_SZ && info->DataLength >= sizeof(WCHAR))
+        {
+            PWCHAR p = (PWCHAR)info->Data;
+            while (p[0] != L'\0' && parsedCount < AV_REG_RULE_MAX)
+            {
+                parsed[parsedCount++] = p;
+                p += wcslen(p) + 1;
+            }
+        }
+    }
+
+    if (parsedCount > 0)
+    {
+        KeAcquireSpinLock(&g_RegLock, &irql);
+        for (i = 0; i < parsedCount && g_RegDenyRuleCount < AV_REG_RULE_MAX; i++)
+        {
+            RtlStringCbCopyW(g_RegDenyRules[g_RegDenyRuleCount],
+                             sizeof(g_RegDenyRules[g_RegDenyRuleCount]),
+                             parsed[i]);
+            g_RegDenyRuleCount++;
+        }
+        KeReleaseSpinLock(&g_RegLock, irql);
+    }
+
+    ExFreePool(buf);
+    ZwClose(hKey);
+
+    KdPrint(("AVReg: Loaded %u allow / %u deny persisted rules\n",
+             g_RegAllowRuleCount, g_RegDenyRuleCount));
+
+    return STATUS_SUCCESS;
+}
+
+//=============================================================================
 // AvRegIsSensitivePath - 检查注册表路径是否为敏感路径
 // IRQL: PASSIVE_LEVEL
 //
 // 子串匹配 (编译期字面量, 大小写不敏感)。
 // 只保留真正的"自启动/持久化"点, 避免误报:
 //   Run / RunOnce / Policies\Explorer\Run / Winlogon
-// 注意: 宽泛的 CurrentVersion\Policies 会拦截 Windows 自身的策略写入
-//       (如 DataCollection), 已移除; Services / Session Manager 写入频繁
-//       (驱动加载/服务配置), 已移除。
+//
+// 注意: 普通软件写 Run 键是常见行为 (自启动配置), 全部拦截会产生大量误报。
+// 为降低误报, 仅拦截以下高价值目标:
+//   - 机器级 Run (HKLM\...\CurrentVersion\Run, 需要管理员权限, 更危险)
+//   - 所有 RunOnce (重启后执行, 一次性持久化, 正常软件极少用)
+//   - Policies\Explorer\Run (组策略强制自启动)
+//   - Winlogon 键 (登录触发, 正常软件极少写)
+// 用户级 Run (HKCU\...\CurrentVersion\Run) 是普通软件最常见的自启动位置,
+// 放行以减少误报; 该路径仍可通过用户手动添加白名单规则加强。
 //=============================================================================
 
 static
@@ -195,11 +490,231 @@ AvRegIsSensitivePath(
         return FALSE;
     }
 
+    //
+    // 区分机器级 (HKLM) 与用户级 (HKCU) Run 键:
+    // 机器级 Run 需要管理员权限且影响所有用户, 是恶意软件首选;
+    // 用户级 Run 是正常软件常见自启动位置, 放行避免误报。
+    //
+    BOOLEAN isMachineRun = FALSE;
+    BOOLEAN isUserRun = FALSE;
+
+    if (AvRegContainsSubstring(KeyPath, L"CurrentVersion\\Run"))
+    {
+        if (AvRegContainsSubstring(KeyPath, L"\\Microsoft\\Windows\\CurrentVersion\\Run") ||
+            AvRegContainsSubstring(KeyPath, L"\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Run"))
+        {
+            //
+            // 完整路径前缀命中: 再区分 HKLM / HKCU
+            //
+            if (AvRegContainsSubstring(KeyPath, L"HKLM\\") ||
+                AvRegContainsSubstring(KeyPath, L"\\REGISTRY\\MACHINE\\") ||
+                AvRegContainsSubstring(KeyPath, L"\\Registry\\Machine\\"))
+            {
+                isMachineRun = TRUE;
+            }
+            else
+            {
+                isUserRun = TRUE;
+            }
+        }
+        else
+        {
+            //
+            // 路径不含完整前缀, 保守处理: 机器级
+            //
+            isMachineRun = TRUE;
+        }
+    }
+
+    //
+    // 敏感路径判定:
+    //   机器级 Run (HKLM) / 所有 RunOnce / Policies\Explorer\Run / Winlogon
+    //   用户级 Run (HKCU) 不拦截 (正常软件常见行为)
+    //
     return
-        AvRegContainsSubstring(KeyPath, L"CurrentVersion\\Run") ||
+        isMachineRun ||
         AvRegContainsSubstring(KeyPath, L"CurrentVersion\\RunOnce") ||
         AvRegContainsSubstring(KeyPath, L"CurrentVersion\\Policies\\Explorer\\Run") ||
-        AvRegContainsSubstring(KeyPath, L"\\Winlogon");
+        AvRegContainsSubstring(KeyPath, L"\\Winlogon") ||
+
+        //
+        // ===== 恶意软件持久化/自启动点 (新增) =====
+        //
+
+        //
+        // 启动文件夹对应注册表键 (当前用户/所有用户)
+        //
+        AvRegContainsSubstring(KeyPath, L"Start Menu\\Programs\\Startup") ||
+        AvRegContainsSubstring(KeyPath, L"Startup\\Programs") ||
+
+        //
+        // 认证包/安全包/通知包 (恶意软件注入登录进程, 写入极少)
+        //
+        AvRegContainsSubstring(KeyPath, L"\\Control\\Lsa\\Authentication Packages") ||
+        AvRegContainsSubstring(KeyPath, L"\\Control\\Lsa\\Security Packages") ||
+        AvRegContainsSubstring(KeyPath, L"\\Control\\Lsa\\Notification Packages") ||
+        AvRegContainsSubstring(KeyPath, L"\\Control\\Lsa\\LsaExtensions") ||
+
+        //
+        // 打印监视器 DLL 持久化 (写入极少, 正常添加打印机不触碰)
+        //
+        AvRegContainsSubstring(KeyPath, L"Control\\Print\\Monitors") ||
+
+        //
+        // 屏幕保护程序持久化 (写入少)
+        //
+        AvRegContainsSubstring(KeyPath, L"Control Panel\\Desktop\\SCRNSAVE") ||
+
+        //
+        // 图标覆盖处理器 (写入少)
+        //
+        AvRegContainsSubstring(KeyPath, L"CurrentVersion\\Explorer\\ShellIconOverlayIdentifiers") ||
+
+        //
+        // 旧式自启动 (RunServices, 写入少)
+        //
+        AvRegContainsSubstring(KeyPath, L"CurrentVersion\\RunServicesOnce") ||
+        AvRegContainsSubstring(KeyPath, L"CurrentVersion\\RunServices") ||
+
+        //
+        // Windows Defender 策略禁用 (写入少, 仅策略分支)
+        //
+        AvRegContainsSubstring(KeyPath, L"\\Policies\\Microsoft\\Windows Defender") ||
+        AvRegContainsSubstring(KeyPath, L"\\Policies\\Microsoft\\WindowsFirewall") ||
+
+        //
+        // 防火墙策略 (写防火墙规则时更新, 中等频率)
+        //
+        AvRegContainsSubstring(KeyPath, L"Services\\SharedAccess\\Parameters\\FirewallPolicy") ||
+
+        //
+        // 浏览器主页劫持 (写入少)
+        //
+        AvRegContainsSubstring(KeyPath, L"Software\\Policies\\Microsoft\\Internet Explorer\\Main") ||
+        AvRegContainsSubstring(KeyPath, L"\\Internet Explorer\\Main\\Start Page") ||
+
+        //
+        // 无文件持久化: AppInit_DLLs 注入所有进程 (写入极少)
+        //
+        AvRegContainsSubstring(KeyPath, L"CurrentVersion\\Windows\\AppInit_DLLs") ||
+        AvRegContainsSubstring(KeyPath, L"CurrentVersion\\Windows\\LoadAppInit_DLLs") ||
+
+        //
+        // 会话管理器 BootExecute (恶意软件开机执行)
+        //
+        AvRegContainsSubstring(KeyPath, L"CurrentControlSet\\Control\\Session Manager\\") ||
+
+        //
+        // 环境变量替换 (恶意软件劫持系统命令)
+        // \??\HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment
+        //
+        AvRegContainsSubstring(KeyPath, L"\\Session Manager\\Environment") ||
+
+        //
+        // 已知 DLL 列表 (恶意软件注入系统调用链)
+        //
+        AvRegContainsSubstring(KeyPath, L"\\CurrentControlSet\\Control\\Session Manager\\KnownDLLs");
+}
+
+//=============================================================================
+// AvRegIsSensitiveValue - 检查值级敏感操作
+// IRQL: PASSIVE_LEVEL
+//
+// 值级检测覆盖以下恶意软件常用攻击点:
+//   - UAC 策略值 (EnableLUA 等 7 个): 禁用 UAC 的标准手法
+//   - IFEO Debugger / GlobalFlag / VerifierDlls: 进程劫持/AppCompat 攻击
+//   - 服务 ImagePath / Start: 创建/篡改服务实现持久化
+//   - Session Manager BootExecute: 开机执行恶意载荷
+//   - Winlogon Shell / Userinit: 登录自启动注入
+// 只对值名精确匹配, 不影响同键下的其他正常写入。
+//=============================================================================
+
+static
+BOOLEAN
+AvRegIsSensitiveValue(
+    _In_ PCWSTR KeyPath,
+    _In_ PCWSTR ValueName
+    )
+{
+    UINT32 i;
+
+    if (KeyPath == NULL || KeyPath[0] == L'\0' ||
+        ValueName == NULL || ValueName[0] == L'\0')
+    {
+        return FALSE;
+    }
+
+    //
+    // UAC 策略值 (CurrentVersion\Policies\System 下, 值名精确匹配)
+    //
+    if (AvRegContainsSubstring(KeyPath, L"CurrentVersion\\Policies\\System"))
+    {
+        for (i = 0; i < g_UacPolicyValueCount; i++)
+        {
+            if (_wcsicmp(ValueName, g_UacPolicyValues[i]) == 0)
+            {
+                return TRUE;
+            }
+        }
+    }
+
+    //
+    // IFEO: Image File Execution Options\<exe>\
+    //   Debugger       - 把目标程序重定向到恶意程序 (进程劫持)
+    //   GlobalFlag     - 开启调试器附加, 配合 Debugger 使用
+    //   VerifierDlls   - 注入 AppCompat 兼容性 DLL (持久化)
+    //
+    if (AvRegContainsSubstring(KeyPath, L"Image File Execution Options"))
+    {
+        if (_wcsicmp(ValueName, L"Debugger") == 0 ||
+            _wcsicmp(ValueName, L"GlobalFlag") == 0 ||
+            _wcsicmp(ValueName, L"VerifierDlls") == 0)
+        {
+            return TRUE;
+        }
+    }
+
+    //
+    // 服务持久化: Services\<service>\
+    //   ImagePath  - 服务二进制路径 (恶意软件指向其载荷)
+    //   Start      - 服务启动类型 (改为 2/0 实现开机自启)
+    //   Type       - 服务类型 (改为 kernel/system 提升权限)
+    //   ObjectName - 服务运行账户 (改为 SYSTEM)
+    // 仅值级匹配, 避免 Services 整键的频繁写入误报
+    //
+    if (AvRegContainsSubstring(KeyPath, L"CurrentControlSet\\Services\\"))
+    {
+        if (_wcsicmp(ValueName, L"ImagePath") == 0 ||
+            _wcsicmp(ValueName, L"Start") == 0 ||
+            _wcsicmp(ValueName, L"Type") == 0 ||
+            _wcsicmp(ValueName, L"ObjectName") == 0)
+        {
+            return TRUE;
+        }
+    }
+
+    //
+    // Session Manager BootExecute: 开机时执行 (恶意软件持久化,
+    // 正常系统该值为 autocheck autochk *, 写入极少)
+    //
+    if (AvRegContainsSubstring(KeyPath, L"Control\\Session Manager") &&
+        _wcsicmp(ValueName, L"BootExecute") == 0)
+    {
+        return TRUE;
+    }
+
+    //
+    // Winlogon Shell / Userinit: 登录时启动 (恶意软件替换 Shell 实现持久化)
+    // (Winlogon 键路径级已拦截, 此处按值精确匹配增强)
+    //
+    if (AvRegContainsSubstring(KeyPath, L"\\Winlogon") &&
+        (_wcsicmp(ValueName, L"Shell") == 0 ||
+         _wcsicmp(ValueName, L"Userinit") == 0))
+    {
+        return TRUE;
+    }
+
+    return FALSE;
 }
 
 //=============================================================================
@@ -262,6 +777,10 @@ AvRegIsInRuleList(
 
 //
 // AvRegAddRule - 添加 Always 规则
+// IRQL: PASSIVE_LEVEL
+//
+// 添加成功后把规则持久化到注册表,
+// 使"始终允许/始终拒绝"在驱动重启后仍然生效。
 //
 static
 NTSTATUS
@@ -274,6 +793,7 @@ AvRegAddRule(
     UINT32 i;
     UINT32* count;
     WCHAR (*rules)[AV_MAX_REG_PATH_LEN];
+    BOOLEAN added = FALSE;
 
     if (KeyPath == NULL || KeyPath[0] == L'\0')
     {
@@ -310,27 +830,63 @@ AvRegAddRule(
 
     RtlStringCbCopyW(rules[*count], sizeof(rules[*count]), KeyPath);
     (*count)++;
+    added = TRUE;
 
     KdPrint(("AVReg: Added %s rule [%u]: %ws\n",
              IsDeny ? "DENY" : "ALLOW", *count - 1, KeyPath));
 
     KeReleaseSpinLock(&g_RegLock, irql);
+
+    //
+    // 持久化到注册表 (PASSIVE_LEVEL, 不受自旋锁限制)
+    //
+    if (added)
+    {
+        AvRegSaveRulesToRegistry();
+    }
+
     return STATUS_SUCCESS;
 }
 
+//
+// 注册表操作可信系统进程名单 (按镜像名精确匹配, 大小写不敏感)
+// 这些进程作为 Windows 正常运行的一部分写入敏感注册表路径,
+// 拦截它们会导致系统功能异常 (登录/服务启动/安全子系统等)。
+//
+// 注意: reg.exe / regedit.exe / cmd.exe / powershell.exe / explorer.exe
+//       均不在信任名单中 — 它们是用户主动操作的工具,
+//       其注册表写操作必须弹窗让用户确认。
+//       (原实现通过 \Windows\ 路径子串匹配信任所有 Windows 目录下进程,
+//        导致 reg.exe/regedit.exe 等用户工具的注册表操作被静默放行)
+//
+AV_NON_PAGED static const PCSTR g_TrustedRegProcNames[] =
+{
+    "winlogon.exe",    // 登录管理器 (写 \Winlogon 键)
+    "svchost.exe",     // 服务宿主 (组件更新可能写 Run 键)
+    "csrss.exe",       // 客户端服务器运行时
+    "services.exe",    // 服务管理器 (SCM)
+    "lsass.exe",       // 本地安全授权
+    "smss.exe",        // 会话管理器
+    "wininit.exe",     // Windows 启动应用
+    "dwm.exe",         // 桌面窗口管理器
+};
+AV_NON_PAGED static const UINT32 g_TrustedRegProcNameCount =
+    sizeof(g_TrustedRegProcNames) / sizeof(g_TrustedRegProcNames[0]);
+
 //=============================================================================
-// AvRegIsTrustedProcess - 当前进程是否为可信进程
+// AvRegIsTrustedProcess - 当前进程是否为可信系统进程
 // IRQL: PASSIVE_LEVEL
 //
 // 可信进程的注册表操作直接放行:
 //   - 信任客户端 (AVSystem): 避免其自身注册表操作自锁死
-//   - System (PID 4) / services.exe: 系统服务管理器写 Services 键是
-//     正常系统行为, 拦截会破坏服务启动/驱动安装
-//   - 镜像位于 \Windows\ 下的进程 (svchost/explorer 等 Windows 组件):
-//     系统自身写 Run/Policies 等键属正常行为, 拦截会产生大量误报
+//   - System (PID 4): 内核系统进程
+//   - 关键系统进程 (winlogon/svchost/csrss/services/lsass/smss/wininit/dwm):
+//     这些进程作为 Windows 正常运行的一部分写入敏感注册表路径,
+//     拦截会导致系统功能异常。
 //
-// 注: 该函数同时被注入防护 (AVInjectNotify) 复用,
-//     判断"当前进程是否为可信系统进程"。
+// 不在信任名单中的进程 (包括 reg.exe / regedit.exe / cmd.exe /
+// powershell.exe / explorer.exe 等位于 \Windows\System32\ 下的用户工具):
+//   命中敏感路径时正常弹窗, 由用户决策。
 //=============================================================================
 
 BOOLEAN
@@ -340,6 +896,7 @@ AvRegIsTrustedProcess(
 {
     UINT32 pid = (UINT32)(ULONG_PTR)PsGetCurrentProcessId();
     PCHAR imageName;
+    UINT32 i;
 
     //
     // 信任客户端 (AVSystem) 自身的注册表操作
@@ -358,37 +915,15 @@ AvRegIsTrustedProcess(
     }
 
     //
-    // services.exe (SCM, 服务注册/启动)
+    // 关键系统进程 (按镜像名精确匹配, 大小写不敏感)
+    // 这些进程名均 ≤14 字符, 不受 PsGetProcessImageFileName 截断影响
     //
     imageName = PsGetProcessImageFileName(PsGetCurrentProcess());
-    if (imageName != NULL && _stricmp(imageName, "services.exe") == 0)
+    if (imageName != NULL)
     {
-        return TRUE;
-    }
-
-    //
-    // 镜像位于 \Windows\ 目录下的进程 (Windows 组件) 放行
-    // 通过 ZwQueryInformationProcess 查询当前进程完整镜像路径
-    //
-    {
-        BYTE buffer[sizeof(UNICODE_STRING) + 260 * sizeof(WCHAR)];
-        PUNICODE_STRING imagePath = (PUNICODE_STRING)buffer;
-        ULONG returnLength = 0;
-
-        if (NT_SUCCESS(ZwQueryInformationProcess(
-                NtCurrentProcess(),
-                AV_PROCESS_IMAGE_FILE_NAME_CLASS,
-                buffer,
-                sizeof(buffer),
-                &returnLength)) &&
-            imagePath->Buffer != NULL &&
-            imagePath->Length > 0 &&
-            ((ULONG_PTR)imagePath->Buffer - (ULONG_PTR)buffer + imagePath->Length)
-                <= sizeof(buffer))
+        for (i = 0; i < g_TrustedRegProcNameCount; i++)
         {
-            imagePath->Buffer[imagePath->Length / sizeof(WCHAR)] = L'\0';
-
-            if (AvRegContainsSubstring(imagePath->Buffer, L"\\Windows\\"))
+            if (_stricmp(imageName, g_TrustedRegProcNames[i]) == 0)
             {
                 return TRUE;
             }
@@ -638,9 +1173,11 @@ AvRegCallback(
     }
 
     //
-    // 非敏感路径: 放行
+    // 非敏感路径/值: 放行
+    // (值级敏感检测覆盖 UAC 策略值如 EnableLUA, 及 IFEO Debugger)
     //
-    if (!AvRegIsSensitivePath(keyPath))
+    if (!AvRegIsSensitivePath(keyPath) &&
+        !AvRegIsSensitiveValue(keyPath, valueName))
     {
         AvRegRecordAction(AV_REG_ACTION_ALLOW_NOMATCH, keyPath);
         return STATUS_SUCCESS;
@@ -742,7 +1279,8 @@ AvRegCallback(
 
 NTSTATUS
 AvRegNotifyInitialize(
-    _In_ PDRIVER_OBJECT DriverObject
+    _In_ PDRIVER_OBJECT DriverObject,
+    _In_ PUNICODE_STRING RegistryPath
     )
 {
     NTSTATUS status;
@@ -772,6 +1310,35 @@ AvRegNotifyInitialize(
     RtlZeroMemory(g_LastRegPath, sizeof(g_LastRegPath));
 
     //
+    // 保存驱动服务注册表键路径 (规则持久化存储位置)
+    // RegistryPath 只在 DriverEntry 期间有效, 必须复制
+    //
+    g_RegServicePathValid = FALSE;
+    if (g_RegServicePath.Buffer != NULL)
+    {
+        ExFreePool(g_RegServicePath.Buffer);
+        g_RegServicePath.Buffer = NULL;
+    }
+
+    if (RegistryPath != NULL && RegistryPath->Buffer != NULL && RegistryPath->Length > 0)
+    {
+        PWCHAR pathBuf = (PWCHAR)AV_ALLOC_PAGED(
+            RegistryPath->Length + sizeof(WCHAR), 'lgSP');
+
+        if (pathBuf != NULL)
+        {
+            RtlCopyMemory(pathBuf, RegistryPath->Buffer, RegistryPath->Length);
+            pathBuf[RegistryPath->Length / sizeof(WCHAR)] = L'\0';
+            g_RegServicePath.Length = RegistryPath->Length;
+            g_RegServicePath.MaximumLength =
+                (USHORT)(RegistryPath->Length + sizeof(WCHAR));
+            g_RegServicePath.Buffer = pathBuf;
+            g_RegServicePathValid = TRUE;
+            KdPrint(("AVReg: Service registry path: %wZ\n", RegistryPath));
+        }
+    }
+
+    //
     // 注册配置管理器回调 (带高度值, 支持卸载)
     // Driver 参数传真实驱动对象 (此 WDK 声明为必填), 保证卸载安全;
     // 第 6 参数 Reserved 必须为 NULL
@@ -788,7 +1355,13 @@ AvRegNotifyInitialize(
 
     g_RegCallbackRegistered = TRUE;
 
-    KdPrint(("AVReg: Registry callback registered\n"));
+    //
+    // 恢复持久化的规则 ("始终允许/始终拒绝" 重启后仍生效)
+    //
+    AvRegLoadRulesFromRegistry();
+
+    KdPrint(("AVReg: Registry callback registered, rules: %u allow / %u deny\n",
+             g_RegAllowRuleCount, g_RegDenyRuleCount));
     return STATUS_SUCCESS;
 }
 
@@ -818,6 +1391,16 @@ AvRegNotifyUninitialize(
     RtlZeroMemory(&g_RegPendingNotify, sizeof(g_RegPendingNotify));
     g_RegNotifyAvailable = FALSE;
     g_RegDecisionPending = FALSE;
+
+    //
+    // 释放驱动服务注册表路径缓冲区
+    //
+    if (g_RegServicePath.Buffer != NULL)
+    {
+        ExFreePool(g_RegServicePath.Buffer);
+        g_RegServicePath.Buffer = NULL;
+        g_RegServicePathValid = FALSE;
+    }
 
     KdPrint(("AVReg: Uninitialized\n"));
 }

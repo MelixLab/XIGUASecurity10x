@@ -1,3 +1,17 @@
+//! 用户白名单模块（v2）
+//!
+//! 防护架构重构后，规则库已迁移至 SQLite（rules_db.rs），
+//! 驱动侧不再读取任何白名单文件。本模块仅管理用户级白名单：
+//!
+//! 1. 进程白名单（进程名 + 完整路径）：驱动发来进程通知时，
+//!    主程序在决策链中先校验白名单，命中 → 直接放行。
+//! 2. 网页白名单（域名）：netproxy 在拦截前先查域名白名单，
+//!    命中 → 直接放行。netproxy 通过 --whitelist 参数读取
+//!    user_whitelist.json，并支持按文件修改时间热重载。
+//!
+//! 数据文件：%LOCALAPPDATA%\XIGUASecurity\user_whitelist.json
+//! v1 旧 whitelist.json 的 file_paths 在首次加载时自动迁入用户白名单。
+
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
@@ -5,146 +19,96 @@ use serde::{Deserialize, Serialize};
 use lazy_static::lazy_static;
 use std::sync::Mutex;
 
-/// 白名单数据结构
+/// 用户白名单数据结构
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WhitelistData {
     pub version: String,
     pub updated_at: String,
     pub description: String,
-    pub file_hashes: Vec<String>,
-    pub file_names: Vec<String>,
+    /// 进程名白名单（如 notepad.exe，匹配任意路径下同名进程）
+    #[serde(default)]
+    pub processes: Vec<String>,
+    /// 路径白名单（如 C:\Tools\xxx.exe，前缀匹配）
+    #[serde(default)]
+    pub paths: Vec<String>,
+    /// 网页域名白名单（如 example.com，匹配域名及其子域）
+    #[serde(default)]
+    pub domains: Vec<String>,
+    /// v1 旧字段：路径白名单（加载时并入 paths，用于迁移）
+    #[serde(default)]
     pub file_paths: Vec<String>,
 }
 
 impl Default for WhitelistData {
     fn default() -> Self {
         Self {
-            version: "1.0.0".to_string(),
+            version: "2.0.0".to_string(),
             updated_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-            description: "XIGUASecurity Hash Whitelist".to_string(),
-            file_hashes: Vec::new(),
-            file_names: Vec::new(),
+            description: "XIGUASecurity Whitelist (v2)".to_string(),
+            processes: Vec::new(),
+            paths: Vec::new(),
+            domains: Vec::new(),
             file_paths: Vec::new(),
         }
     }
 }
 
-/// 白名单管理器
+/// 白名单管理器（仅用户白名单；规则库由 rules_db.rs / SQLite 管理）
 pub struct WhitelistManager {
+    /// 用户白名单数据（processes/paths/domains，持久化到 user_whitelist.json）
     data: WhitelistData,
-    hash_set: HashSet<String>,
-    name_set: HashSet<String>,
+    /// 进程名白名单集合（小写）
+    process_set: HashSet<String>,
+    /// 路径白名单集合（小写，归一化 `\`）
     path_set: HashSet<String>,
+    /// 域名白名单集合（小写）
+    domain_set: HashSet<String>,
 }
 
 impl WhitelistManager {
     pub fn new() -> Self {
         let mut manager = Self {
             data: WhitelistData::default(),
-            hash_set: HashSet::new(),
-            name_set: HashSet::new(),
+            process_set: HashSet::new(),
             path_set: HashSet::new(),
+            domain_set: HashSet::new(),
         };
-        // 先尝试从用户数据目录加载已有白名单
         manager.load_from_file();
-        // 再尝试从 Driver 文件夹加载内置规则（确保扫描前规则已就绪）
-        manager.load_builtin_from_driver();
         manager
     }
 
-    /// 从 Driver 文件夹加载内置规则（在初始化时同步调用）
-    fn load_builtin_from_driver(&mut self) -> bool {
-        let exe_path = match std::env::current_exe() {
-            Ok(p) => p,
-            Err(_) => return false,
-        };
-        
-        // 从 exe 路径开始向上搜索最多 5 层找 Driver 文件夹
-        let mut current_dir = exe_path.parent();
-        let driver_dir = loop {
-            match current_dir {
-                Some(dir) => {
-                    let test = dir.join("Driver");
-                    if test.exists() && test.is_dir() {
-                        break Some(test);
-                    }
-                    current_dir = dir.parent();
-                }
-                None => break None,
-            }
-        };
-        
-        let driver_dir = match driver_dir {
-            Some(d) => d,
-            None => return false,
-        };
-        
-        let mut loaded = false;
-        if let Ok(entries) = fs::read_dir(&driver_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().map_or(false, |e| e == "json") {
-                    if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
-                        if name.starts_with("whitelist_v") {
-                            if let Ok(content) = fs::read_to_string(&path) {
-                                if let Ok(data) = serde_json::from_str::<WhitelistData>(&content) {
-                                    for hash in &data.file_hashes {
-                                        self.add_hash(hash.clone());
-                                    }
-                                    for name in &data.file_names {
-                                        self.add_name(name.clone());
-                                    }
-                                    loaded = true;
-                                    // 更新版本信息（用找到的最新版本）
-                                    let parts: Vec<&str> = name.split('_').collect();
-                                    if parts.len() >= 3 {
-                                        let ver = parts[1].trim_start_matches('v');
-                                        if is_newer_version(ver, &self.data.version) {
-                                            self.data.version = ver.to_string();
-                                            self.data.updated_at = data.updated_at.clone();
-                                        }
+    /// 从文件加载用户白名单（user_whitelist.json）
+    /// 若文件不存在且存在 v1 旧 whitelist.json，则迁移其 file_paths 后首次保存
+    pub fn load_from_file(&mut self) -> bool {
+        let whitelist_path = user_whitelist_path();
+
+        if !Path::new(&whitelist_path).exists() {
+            // v1 → v2 迁移：旧 whitelist.json 的用户路径白名单（file_paths）迁入新文件
+            let old_path = legacy_whitelist_path();
+            if Path::new(&old_path).exists() {
+                if let Ok(content) = fs::read_to_string(&old_path) {
+                    // 旧 whitelist.json 可能包含规则库字段，用通用 Value 解析只取 file_paths
+                    if let Ok(old) = serde_json::from_str::<serde_json::Value>(&content) {
+                        let mut migrated = false;
+                        if let Some(paths) = old.get("file_paths").and_then(|v| v.as_array()) {
+                            for p in paths {
+                                if let Some(s) = p.as_str() {
+                                    if !s.trim().is_empty() {
+                                        self.data.paths.push(s.trim().to_string());
+                                        migrated = true;
                                     }
                                 }
                             }
                         }
+                        if migrated {
+                            self.rebuild_sets();
+                            let _ = self.save_to_file();
+                            println!("[Whitelist] Migrated {} paths from v1 whitelist.json", self.data.paths.len());
+                        }
                     }
                 }
             }
-        }
-        
-        if loaded {
-            // 保存到用户数据目录，确保后续扫描也能加载
-            let _ = self.save_to_file();
-            // 同步更新 rules_info.json
-            if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-                let rules_dir = std::path::PathBuf::from(&local_app_data).join("XIGUASecurity");
-                if let Ok(info_path) = std::fs::create_dir_all(&rules_dir) {
-                    let _ = info_path; // suppress unused warning
-                }
-                let info_path = rules_dir.join("rules_info.json");
-                let info = serde_json::json!({
-                    "version": self.data.version,
-                    "updated_at": self.data.updated_at,
-                    "last_check": chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-                    "file_count": 1,
-                    "hash_count": self.hash_set.len(),
-                });
-                if let Ok(content) = serde_json::to_string_pretty(&info) {
-                    let _ = std::fs::write(&info_path, content);
-                }
-            }
-        }
-        
-        loaded
-    }
-
-    /// 从文件加载白名单
-    pub fn load_from_file(&mut self) -> bool {
-        let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".to_string());
-        let whitelist_path = format!("{}/XIGUASecurity/whitelist.json", local_app_data);
-        
-        if !Path::new(&whitelist_path).exists() {
-            println!("[Whitelist] - No whitelist file found at: {}", whitelist_path);
+            println!("[Whitelist] No user whitelist file found at: {}", whitelist_path);
             return false;
         }
 
@@ -152,171 +116,113 @@ impl WhitelistManager {
             Ok(content) => {
                 match serde_json::from_str::<WhitelistData>(&content) {
                     Ok(data) => {
-                        self.data = data.clone();
-                        self.hash_set = data.file_hashes.iter().map(|s| s.to_uppercase()).collect();
-                        self.name_set = data.file_names.iter().map(|s| s.to_lowercase()).collect();
-                        println!("[Whitelist] - Loaded {} hashes and {} filenames", 
-                            self.hash_set.len(), self.name_set.len());
-                        let _ = self.sync_edr_whitelist();
+                        self.data = data;
+                        self.rebuild_sets();
+                        println!(
+                            "[Whitelist] Loaded: {} processes, {} paths, {} domains",
+                            self.process_set.len(),
+                            self.path_set.len(),
+                            self.domain_set.len()
+                        );
                         true
                     }
                     Err(e) => {
-                        println!("[Whitelist] - Failed to parse whitelist: {}", e);
+                        println!("[Whitelist] Failed to parse user whitelist: {}", e);
                         false
                     }
                 }
             }
             Err(e) => {
-                println!("[Whitelist] - Failed to read whitelist file: {}", e);
+                println!("[Whitelist] Failed to read user whitelist file: {}", e);
                 false
             }
         }
     }
 
-    /// 保存白名单到文件
+    /// 根据 data 重建内存集合
+    fn rebuild_sets(&mut self) {
+        self.process_set = self.data.processes.iter().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect();
+        self.path_set = self.data.paths.iter().map(|s| normalize_path(s)).filter(|s| !s.is_empty()).collect();
+        self.domain_set = self.data.domains.iter().map(|s| normalize_domain(s)).filter(|s| !s.is_empty()).collect();
+    }
+
+    /// 保存用户白名单到文件（user_whitelist.json，仅含进程/路径/域名）
     pub fn save_to_file(&self) -> Result<(), String> {
-        let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".to_string());
-        let config_dir = format!("{}/XIGUASecurity", local_app_data);
-        
+        let config_dir = config_dir();
         fs::create_dir_all(&config_dir)
             .map_err(|e| format!("Failed to create config dir: {}", e))?;
-        
-        let whitelist_path = format!("{}/whitelist.json", config_dir);
-        let content = serde_json::to_string_pretty(&self.data)
-            .map_err(|e| format!("Failed to serialize whitelist: {}", e))?;
-        
-        fs::write(&whitelist_path, content)
-            .map_err(|e| format!("Failed to write whitelist file: {}", e))?;
-        
-        // 同步到驱动 EDR 白名单
-        let _ = self.sync_edr_whitelist();
-        
+
+        let mut user = WhitelistData::default();
+        user.processes = self.data.processes.clone();
+        user.paths = self.data.paths.clone();
+        user.domains = self.data.domains.clone();
+        user.updated_at = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+        let content = serde_json::to_string_pretty(&user)
+            .map_err(|e| format!("Failed to serialize user whitelist: {}", e))?;
+        fs::write(user_whitelist_path(), content)
+            .map_err(|e| format!("Failed to write user whitelist file: {}", e))?;
         Ok(())
     }
 
-    /// 同步白名单文件名到驱动 EDR 白名单文件
-    /// 文件路径: C:\ProgramData\XIGUASecurity\EDRWhitelist.txt
-    /// 格式: 每行一个进程名（如 cmd.exe）
-    fn sync_edr_whitelist(&self) -> Result<(), String> {
-        let program_data = std::env::var("PROGRAMDATA")
-            .unwrap_or_else(|_| "C:/ProgramData".to_string());
-        let edr_dir = std::path::PathBuf::from(&program_data).join("XIGUASecurity");
-        
-        std::fs::create_dir_all(&edr_dir)
-            .map_err(|e| format!("Failed to create EDR whitelist dir: {}", e))?;
-        
-        let edr_path = edr_dir.join("EDRWhitelist.txt");
-        
-        // 只写入用户添加的进程名，不内置系统进程（避免恶意进程改名绕过）
-        let names: Vec<String> = self.data.file_names.iter()
-            .map(|n| n.trim().to_lowercase())
-            .filter(|n| !n.is_empty())
-            .collect();
-        
-        let content = names.join("\r\n");
-        std::fs::write(&edr_path, content)
-            .map_err(|e| format!("Failed to write EDR whitelist file: {}", e))?;
-        
-        println!("[Whitelist] - Synced {} entries to EDR whitelist: {}",
-            names.len(), edr_path.display());
-        
-        Ok(())
+    // ========== 进程名白名单 ==========
+
+    /// 检查进程名是否在白名单中（精确匹配，忽略大小写）
+    pub fn contains_process(&self, name: &str) -> bool {
+        let lower = name.trim().to_lowercase();
+        !lower.is_empty() && self.process_set.contains(&lower)
     }
 
-    /// 检查哈希是否在白名单中
-    pub fn contains_hash(&self, hash: &str) -> bool {
-        self.hash_set.contains(&hash.to_uppercase())
-    }
-
-    /// 检查文件名是否在白名单中
-    pub fn contains_name(&self, name: &str) -> bool {
-        self.name_set.contains(&name.to_lowercase())
-    }
-
-    /// 添加哈希到白名单
-    pub fn add_hash(&mut self, hash: String) {
-        let hash_upper = hash.to_uppercase();
-        if !self.hash_set.contains(&hash_upper) {
-            self.hash_set.insert(hash_upper.clone());
-            self.data.file_hashes.push(hash_upper);
+    /// 添加进程名到白名单
+    pub fn add_process(&mut self, name: String) {
+        let lower = name.trim().to_lowercase();
+        if !lower.is_empty() && !self.process_set.contains(&lower) {
+            self.process_set.insert(lower.clone());
+            self.data.processes.push(lower);
         }
     }
 
-    /// 添加文件名到白名单
-    pub fn add_name(&mut self, name: String) {
-        let name_lower = name.to_lowercase();
-        if !self.name_set.contains(&name_lower) {
-            self.name_set.insert(name_lower.clone());
-            self.data.file_names.push(name_lower);
-        }
-    }
-
-    /// 从白名单移除文件名
-    pub fn remove_name(&mut self, name: &str) -> bool {
-        let name_lower = name.to_lowercase();
-        if self.name_set.remove(&name_lower) {
-            self.data.file_names.retain(|n| n.to_lowercase() != name_lower);
+    /// 从白名单移除进程名
+    pub fn remove_process(&mut self, name: &str) -> bool {
+        let lower = name.trim().to_lowercase();
+        if self.process_set.remove(&lower) {
+            self.data.processes.retain(|n| n.trim().to_lowercase() != lower);
             true
         } else {
             false
         }
     }
 
-    /// 获取所有白名单文件名（进程名）
-    pub fn get_names(&self) -> Vec<String> {
-        self.data.file_names.clone()
-    }
-
-    /// 获取版本
-    pub fn get_version(&self) -> String {
-        self.data.version.clone()
-    }
-
-    /// 获取更新日期
-    pub fn get_updated_at(&self) -> String {
-        self.data.updated_at.clone()
-    }
-
-    /// 获取哈希数量
-    pub fn get_hash_count(&self) -> usize {
-        self.hash_set.len()
-    }
-
-    /// 获取白名单数据
-    pub fn get_data(&self) -> &WhitelistData {
-        &self.data
-    }
-
-    /// 更新白名单数据
-    pub fn update_data(&mut self, data: WhitelistData) {
-        self.data = data.clone();
-        self.hash_set = data.file_hashes.iter().map(|s| s.to_uppercase()).collect();
-        self.name_set = data.file_names.iter().map(|s| s.to_lowercase()).collect();
-        self.path_set = data.file_paths.iter().map(|s| s.to_lowercase()).collect();
+    /// 获取所有白名单进程名
+    pub fn get_processes(&self) -> Vec<String> {
+        self.data.processes.clone()
     }
 
     // ========== 路径白名单 ==========
 
-    /// 检查路径是否在白名单中（前缀匹配）
+    /// 检查路径是否在白名单中（前缀匹配，忽略大小写）
     pub fn contains_path(&self, path: &str) -> bool {
-        let lower = path.to_lowercase().replace('/', "\\");
+        let lower = normalize_path(path);
+        if lower.is_empty() {
+            return false;
+        }
         self.path_set.iter().any(|p| lower.starts_with(p.as_str()) || lower == p.as_str())
     }
 
     /// 添加路径到白名单
     pub fn add_path(&mut self, path: String) {
-        let normalised = path.to_lowercase().replace('/', "\\").trim_end_matches('\\').to_string();
-        if !self.path_set.contains(&normalised) {
+        let normalised = normalize_path(&path);
+        if !normalised.is_empty() && !self.path_set.contains(&normalised) {
             self.path_set.insert(normalised.clone());
-            self.data.file_paths.push(normalised);
+            self.data.paths.push(normalised);
         }
     }
 
     /// 从白名单移除路径
     pub fn remove_path(&mut self, path: &str) -> bool {
-        let normalised = path.to_lowercase().replace('/', "\\").trim_end_matches('\\').to_string();
+        let normalised = normalize_path(path);
         if self.path_set.remove(&normalised) {
-            self.data.file_paths.retain(|p| p.to_lowercase() != normalised);
+            self.data.paths.retain(|p| normalize_path(p) != normalised);
             true
         } else {
             false
@@ -325,13 +231,67 @@ impl WhitelistManager {
 
     /// 获取所有白名单路径
     pub fn get_paths(&self) -> Vec<String> {
-        self.data.file_paths.clone()
+        self.data.paths.clone()
+    }
+
+    // ========== 网页域名白名单 ==========
+
+    /// 检查域名是否在白名单中（精确匹配或子域匹配，如 example.com 命中 www.example.com）
+    pub fn contains_domain(&self, host: &str) -> bool {
+        let host = normalize_domain(host);
+        if host.is_empty() {
+            return false;
+        }
+        self.domain_set
+            .iter()
+            .any(|d| host == d.as_str() || host.ends_with(&format!(".{}", d)))
+    }
+
+    /// 添加域名到白名单
+    pub fn add_domain(&mut self, domain: String) {
+        let normalised = normalize_domain(&domain);
+        if !normalised.is_empty() && !self.domain_set.contains(&normalised) {
+            self.domain_set.insert(normalised.clone());
+            self.data.domains.push(normalised);
+        }
+    }
+
+    /// 从白名单移除域名
+    pub fn remove_domain(&mut self, domain: &str) -> bool {
+        let normalised = normalize_domain(domain);
+        if self.domain_set.remove(&normalised) {
+            self.data.domains.retain(|d| normalize_domain(d) != normalised);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 获取所有白名单域名
+    pub fn get_domains(&self) -> Vec<String> {
+        self.data.domains.clone()
     }
 }
 
 // 全局白名单管理器实例
 lazy_static! {
     static ref WHITELIST_MANAGER: Mutex<WhitelistManager> = Mutex::new(WhitelistManager::new());
+}
+
+/// 配置目录：%LOCALAPPDATA%\XIGUASecurity
+fn config_dir() -> String {
+    let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".to_string());
+    format!("{}/XIGUASecurity", local_app_data)
+}
+
+/// 用户白名单文件：进程/路径/网页域名
+fn user_whitelist_path() -> String {
+    format!("{}/user_whitelist.json", config_dir())
+}
+
+/// v1 旧规则库文件路径（仅用于迁移读取）
+fn legacy_whitelist_path() -> String {
+    format!("{}/whitelist.json", config_dir())
 }
 
 /// 获取全局白名单管理器
@@ -344,39 +304,86 @@ pub fn reload_whitelist() -> bool {
     get_whitelist_manager().load_from_file()
 }
 
-/// 检查哈希是否在白名单中
+/// 归一化路径：统一分隔符为 `\`、小写、去尾部 `\`
+fn normalize_path(path: &str) -> String {
+    path.trim()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_lowercase()
+}
+
+/// 归一化域名：小写、去尾部 `.`、去协议与路径部分
+fn normalize_domain(domain: &str) -> String {
+    let mut d = domain.trim().to_lowercase();
+    for scheme in ["https://", "http://"] {
+        if let Some(rest) = d.strip_prefix(scheme) {
+            d = rest.to_string();
+            break;
+        }
+    }
+    d = d.split(['/', '?', '#']).next().unwrap_or(&d).to_string();
+    d = d.trim_end_matches('.').to_string();
+    d
+}
+
+// ========== 检查函数（决策链与扫描器共用） ==========
+
+/// 检查哈希是否在白名单中（规则库 SQLite 查询）
 pub fn is_hash_whitelisted(hash: &str) -> bool {
     match crate::rules_db::lookup_hash(hash) {
         crate::rules_db::HashLookupResult::Whitelisted => true,
         crate::rules_db::HashLookupResult::Blacklisted { .. } => false,
-        crate::rules_db::HashLookupResult::NotFound => get_whitelist_manager().contains_hash(hash),
+        crate::rules_db::HashLookupResult::NotFound => false,
     }
 }
 
-/// 检查文件名是否在白名单中
+/// 检查文件名是否在白名单中（规则库 SQLite 查询）
 pub fn is_name_whitelisted(name: &str) -> bool {
     match crate::rules_db::lookup_file_name(name) {
         Some(list_type) if list_type == "whitelist" => true,
-        Some(_) => false,
-        None => get_whitelist_manager().contains_name(name),
+        _ => false,
     }
 }
 
-// ========== 路径白名单（用户管理） ==========
-
-/// 检查路径是否在白名单中
+/// 检查路径是否在白名单中：
+/// 1. 规则库 SQLite 查询；2. 路径白名单前缀匹配；3. 文件名匹配进程名白名单。
+/// 进程防护决策链"先行校验白名单"即调用此函数。
 pub fn is_path_whitelisted(path: &str) -> bool {
     match crate::rules_db::lookup_file_path(path) {
-        Some(list_type) if list_type == "whitelist" => true,
-        Some(_) => false,
-        None => get_whitelist_manager().contains_path(path),
+        Some(list_type) if list_type == "whitelist" => return true,
+        _ => {}
     }
+    let mgr = get_whitelist_manager();
+    if mgr.contains_path(path) {
+        return true;
+    }
+    let file_name = Path::new(path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    mgr.contains_process(file_name)
 }
+
+/// 检查进程名是否在白名单中
+pub fn is_process_whitelisted(name: &str) -> bool {
+    get_whitelist_manager().contains_process(name)
+}
+
+/// 检查域名是否在网页白名单中（netproxy 与主程序共用语义）
+pub fn is_domain_whitelisted(host: &str) -> bool {
+    get_whitelist_manager().contains_domain(host)
+}
+
+// ========== 路径白名单（用户管理，持久化） ==========
 
 /// 添加路径到白名单（持久化保存）
 pub fn add_whitelist_path(path: String) -> Result<(), String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("路径不能为空".to_string());
+    }
     let mut mgr = get_whitelist_manager();
-    mgr.add_path(path);
+    mgr.add_path(trimmed.to_string());
     mgr.save_to_file()
 }
 
@@ -392,14 +399,9 @@ pub fn get_whitelist_paths() -> Vec<String> {
     get_whitelist_manager().get_paths()
 }
 
-// ========== 进程名白名单（用户管理，同步到 EDR 驱动白名单） ==========
+// ========== 进程名白名单（用户管理，持久化） ==========
 
-/// 检查进程名是否在白名单中
-pub fn is_process_whitelisted(name: &str) -> bool {
-    get_whitelist_manager().contains_name(name)
-}
-
-/// 添加进程名到白名单（持久化保存并同步到 EDRWhitelist.txt）
+/// 添加进程名到白名单（持久化保存）
 pub fn add_whitelist_process(name: String) -> Result<(), String> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
@@ -409,260 +411,46 @@ pub fn add_whitelist_process(name: String) -> Result<(), String> {
         return Err("进程名必须包含文件后缀，例如 cmd.exe、taskmgr.exe".to_string());
     }
     let mut mgr = get_whitelist_manager();
-    mgr.add_name(trimmed.to_string());
+    mgr.add_process(trimmed.to_string());
     mgr.save_to_file()
 }
 
-/// 从白名单移除进程名（持久化保存并同步到 EDRWhitelist.txt）
+/// 从白名单移除进程名（持久化保存）
 pub fn remove_whitelist_process(name: &str) -> Result<(), String> {
     let mut mgr = get_whitelist_manager();
-    mgr.remove_name(name);
+    mgr.remove_process(name);
     mgr.save_to_file()
 }
 
 /// 获取所有白名单进程名
 pub fn get_whitelist_processes() -> Vec<String> {
-    get_whitelist_manager().get_names()
+    get_whitelist_manager().get_processes()
 }
 
-/// 扫描规则文件夹并加载所有规则文件
-/// 规则文件命名格式: whitelist_v1.0.0_2025-01-15.json
-/// 返回: (总哈希数, 最新版本号, 加载的文件数量)
-pub fn scan_and_load_rules() -> Result<(usize, String, usize), String> {
-    let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".to_string());
-    let rules_dir = format!("{}/XIGUASecurity/rules", local_app_data);
-    
-    if !Path::new(&rules_dir).exists() {
-        return Ok((0, "0.0.0".to_string(), 0));
+// ========== 网页域名白名单（用户管理，持久化，netproxy 热加载） ==========
+
+/// 添加域名到白名单（持久化保存；netproxy 检测到文件变更后自动热加载）
+pub fn add_whitelist_domain(domain: String) -> Result<(), String> {
+    let trimmed = domain.trim();
+    if trimmed.is_empty() {
+        return Err("域名不能为空".to_string());
     }
-    
-    let mut total_hashes = 0;
-    let mut latest_version = "0.0.0".to_string();
-    let mut loaded_files = 0;
-    let mut all_files: Vec<(String, String)> = Vec::new(); // (文件路径, 版本号)
-    
-    // 第一步：扫描规则文件夹中的所有 JSON 文件
-    if let Ok(entries) = fs::read_dir(&rules_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if let Some(ext) = path.extension() {
-                if ext == "json" {
-                    if let Some(filename) = path.file_stem().and_then(|s| s.to_str()) {
-                        // 解析文件名格式: whitelist_v1.0.0_2025-01-15
-                        if filename.starts_with("whitelist_v") {
-                            let parts: Vec<&str> = filename.split('_').collect();
-                            if parts.len() >= 3 {
-                                let version = parts[1].trim_start_matches('v');
-                                let file_path = path.to_string_lossy().to_string();
-                                all_files.push((file_path, version.to_string()));
-                                
-                                // 跟踪最新版本号
-                                if is_newer_version(version, &latest_version) {
-                                    latest_version = version.to_string();
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    if trimmed.contains('/') && !trimmed.starts_with("http") {
+        return Err("请输入域名，例如 example.com，不要包含路径".to_string());
     }
-    
-    // 第二步：加载所有规则文件
-    let mut manager = get_whitelist_manager();
-    let mut latest_updated_at = String::new();
-    
-    for (file_path, version) in &all_files {
-        match fs::read_to_string(&file_path) {
-            Ok(content) => {
-                match serde_json::from_str::<WhitelistData>(&content) {
-                    Ok(data) => {
-                        // 合并新规则到现有规则
-                        for hash in &data.file_hashes {
-                            manager.add_hash(hash.clone());
-                        }
-                        for name in &data.file_names {
-                            manager.add_name(name.clone());
-                        }
-                        
-                        // 如果这是最新版本，记录更新时间
-                        if version == &latest_version {
-                            latest_updated_at = data.updated_at.clone();
-                        }
-                        
-                        loaded_files += 1;
-                        println!("[Whitelist] - Loaded rules from {} (v{}): {} hashes", 
-                            file_path, version, data.file_hashes.len());
-                    }
-                    Err(e) => {
-                        println!("[Whitelist] - Failed to parse {}: {}", file_path, e);
-                    }
-                }
-            }
-            Err(e) => {
-                println!("[Whitelist] - Failed to read {}: {}", file_path, e);
-            }
-        }
-    }
-    
-    // 第三步：保存合并后的规则
-    if loaded_files > 0 {
-        manager.data.version = latest_version.clone();
-        manager.data.updated_at = latest_updated_at.clone();
-        manager.save_to_file()?;
-        
-        total_hashes = manager.get_hash_count();
-        println!("[Whitelist] - Total loaded {} files, {} hashes, latest version {}", 
-            loaded_files, total_hashes, latest_version);
-        
-        // 更新规则库信息文件
-        update_rules_info(&latest_version, &latest_updated_at, loaded_files, total_hashes)?;
-    }
-    
-    Ok((total_hashes, latest_version, loaded_files))
+    let mut mgr = get_whitelist_manager();
+    mgr.add_domain(trimmed.to_string());
+    mgr.save_to_file()
 }
 
-/// 从程序所在目录的 Driver 文件夹复制内置规则文件到用户数据目录
-/// 安装包自带的规则文件放在此目录，安装后自动复制到 %LOCALAPPDATA%/XIGUASecurity/rules/
-/// 然后由 scan_and_load_rules() 统一加载
-/// 返回: 复制的文件数量
-pub fn copy_rules_from_driver_folder() -> usize {
-    let local_app_data = match std::env::var("LOCALAPPDATA") {
-        Ok(val) => val,
-        Err(_) => {
-            println!("[Whitelist] - Cannot get LOCALAPPDATA");
-            return 0;
-        }
-    };
-    let target_dir = std::path::PathBuf::from(&local_app_data)
-        .join("XIGUASecurity")
-        .join("rules");
-    
-    // 从 exe 路径开始向上搜索最多 5 层父目录来找 Driver 文件夹
-    let exe_path = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(_) => return 0,
-    };
-    
-    let mut current_dir = exe_path.parent();
-    let mut driver_dir = None;
-    
-    for _ in 0..5 {
-        if let Some(dir) = current_dir {
-            let test_path = dir.join("Driver");
-            if test_path.exists() && test_path.is_dir() {
-                driver_dir = Some(test_path);
-                break;
-            }
-            current_dir = dir.parent();
-        } else {
-            break;
-        }
-    }
-    
-    let driver_dir = match driver_dir {
-        Some(dir) => dir,
-        None => {
-            println!("[Whitelist] - Driver directory not found (searched 5 levels from exe)");
-            return 0;
-        }
-    };
-    
-    // 确保目标目录存在
-    if let Err(e) = fs::create_dir_all(&target_dir) {
-        println!("[Whitelist] - Failed to create rules directory: {}", e);
-        return 0;
-    }
-    
-    // 收集 Driver 目录下的 whitelist_v*.json 文件
-    let mut copied_count = 0;
-    
-    if let Ok(entries) = fs::read_dir(&driver_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().map_or(false, |ext| ext == "json") {
-                let filename = match path.file_name().and_then(|s| s.to_str()) {
-                    Some(name) => name.to_string(),
-                    None => continue,
-                };
-                // 只复制 whitelist_v 开头的规则文件
-                if filename.starts_with("whitelist_v") {
-                    let dest = target_dir.join(&filename);
-                    // 如果目标已存在且相同版本则跳过（比较文件名即可，因为版本在文件名中）
-                    if dest.exists() {
-                        println!("[Whitelist] - Rule file already exists, skipping: {}", filename);
-                        continue;
-                    }
-                    match fs::copy(&path, &dest) {
-                        Ok(_) => {
-                            copied_count += 1;
-                            println!("[Whitelist] - Copied built-in rule: {} -> {:?}", filename, dest);
-                        }
-                        Err(e) => {
-                            println!("[Whitelist] - Failed to copy {}: {}", filename, e);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
-    if copied_count > 0 {
-        println!("[Whitelist] - Copied {} built-in rule files from Driver to rules directory", copied_count);
-    } else {
-        println!("[Whitelist] - No new rule files to copy from Driver");
-    }
-    
-    copied_count
+/// 从白名单移除域名（持久化保存）
+pub fn remove_whitelist_domain(domain: &str) -> Result<(), String> {
+    let mut mgr = get_whitelist_manager();
+    mgr.remove_domain(domain);
+    mgr.save_to_file()
 }
 
-/// 更新规则库信息文件
-fn update_rules_info(version: &str, updated_at: &str, file_count: usize, hash_count: usize) -> Result<(), String> {
-    let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".to_string());
-    let config_dir = std::path::PathBuf::from(&local_app_data).join("XIGUASecurity");
-    
-    std::fs::create_dir_all(&config_dir)
-        .map_err(|e| format!("Failed to create config dir: {}", e))?;
-    
-    let info_path = config_dir.join("rules_info.json");
-    
-    let info = serde_json::json!({
-        "version": version,
-        "updated_at": updated_at,
-        "last_check": chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-        "file_count": file_count,
-        "hash_count": hash_count,
-    });
-    
-    let content = serde_json::to_string_pretty(&info)
-        .map_err(|e| format!("Failed to serialize rules info: {}", e))?;
-    
-    std::fs::write(&info_path, content)
-        .map_err(|e| format!("Failed to write rules info: {}", e))?;
-    
-    println!("[Whitelist] - Updated rules info: version={}, updated_at={}, files={}, hashes={}", version, updated_at, file_count, hash_count);
-    Ok(())
-}
-
-/// 比较版本号
-fn is_newer_version(new: &str, current: &str) -> bool {
-    let new_parts: Vec<u32> = new.split('.')
-        .filter_map(|s| s.parse().ok())
-        .collect();
-    let current_parts: Vec<u32> = current.split('.')
-        .filter_map(|s| s.parse().ok())
-        .collect();
-    
-    for i in 0..new_parts.len().max(current_parts.len()) {
-        let new_val = new_parts.get(i).copied().unwrap_or(0);
-        let current_val = current_parts.get(i).copied().unwrap_or(0);
-        
-        if new_val > current_val {
-            return true;
-        } else if new_val < current_val {
-            return false;
-        }
-    }
-    
-    false
+/// 获取所有白名单域名
+pub fn get_whitelist_domains() -> Vec<String> {
+    get_whitelist_manager().get_domains()
 }

@@ -63,6 +63,7 @@ class ThemeManager {
     this.currentTheme = theme;
     this.applyTheme();
     localStorage.setItem('theme', theme);
+    this.broadcastThemeChange();
   }
 
   getTheme(): string {
@@ -78,6 +79,7 @@ class ThemeManager {
       this.currentThemeMode = mode;
       this.applyTheme();
       localStorage.setItem('themeMode', mode);
+      this.broadcastThemeChange();
     }
   }
 
@@ -94,6 +96,15 @@ class ThemeManager {
     document.documentElement.setAttribute('data-theme', this.currentTheme);
     // 设置主题模式
     document.documentElement.setAttribute('data-theme-mode', this.currentThemeMode);
+  }
+
+  private broadcastThemeChange() {
+    const theme = this.currentTheme;
+    const themeMode = this.currentThemeMode;
+    const backdrop = localStorage.getItem('windowBackdrop') || 'none';
+    import('@tauri-apps/api/event').then(({ emit }) => {
+      emit('theme-changed', { theme, themeMode, backdrop });
+    }).catch(() => {});
   }
 }
 
@@ -1430,47 +1441,6 @@ class FileProtectionManager {
   }
 }
 
-// Infector Detection Manager - 感染型病毒检测管理
-class InfectorDetectionManager {
-  private enabled: boolean = true;
-  private storageKey: string = 'infector_detection_enabled';
-
-  constructor() {
-    this.loadState();
-  }
-
-  private loadState(): void {
-    try {
-      const stored = localStorage.getItem(this.storageKey);
-      if (stored !== null) {
-        this.enabled = stored === 'true';
-      }
-    } catch (e) {
-      console.error('Failed to load infector detection state:', e);
-      this.enabled = true;
-    }
-  }
-
-  async setEnabled(enabled: boolean): Promise<void> {
-    this.enabled = enabled;
-    try {
-      localStorage.setItem(this.storageKey, String(enabled));
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('set_infector_detection_enabled', { enabled }).catch(() => {});
-    } catch (e) {
-      console.error('Failed to set infector detection:', e);
-    }
-  }
-
-  isEnabled(): boolean {
-    return this.enabled;
-  }
-
-  refreshState(): void {
-    this.loadState();
-  }
-}
-
 // Script Protection Manager - 脚本防护管理
 class ScriptProtectionManager {
   private enabled: boolean = false;
@@ -1620,13 +1590,9 @@ class ScriptScanManager {
   }
 }
 
-// Protection Type Manager - 防护类型管理（引导扇区、注册表、勒索软件、进程、内存）
+// Protection Type Manager - 防护类型管理（勒索软件）
 class ProtectionTypeManager {
-  private bootEnabled: boolean = true;
-  private registryEnabled: boolean = true;
   private ransomwareEnabled: boolean = false; // 勒索软件防护默认关闭（误报率高）
-  private processEnabled: boolean = true;
-  private memoryEnabled: boolean = true;
 
   constructor() {
     this.loadState();
@@ -1636,51 +1602,18 @@ class ProtectionTypeManager {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       const config: ProtectionConfig = await invoke('get_protection_config');
-      this.bootEnabled = config.boot ?? true;
-      this.registryEnabled = config.registry ?? true;
-      this.ransomwareEnabled = config.ransomware ?? false; // 默认关闭
-      this.processEnabled = config.process ?? true;
-      this.memoryEnabled = config.memory ?? true;
+      this.ransomwareEnabled = config.ransomware ?? false;
     } catch (e) {
       console.error('Failed to load protection config:', e);
-      // 默认设置：勒索软件防护关闭，其他开启
-      this.bootEnabled = true;
-      this.registryEnabled = true;
-      this.ransomwareEnabled = false; // 默认关闭
-      this.processEnabled = true;
-      this.memoryEnabled = true;
-    }
-  }
-
-  async setBootEnabled(enabled: boolean): Promise<void> {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('set_protection_config', { 
-        config: { boot: enabled } 
-      });
-      this.bootEnabled = enabled;
-    } catch (e) {
-      console.error('Failed to set boot protection:', e);
-    }
-  }
-
-  async setRegistryEnabled(enabled: boolean): Promise<void> {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('set_protection_config', { 
-        config: { registry: enabled } 
-      });
-      this.registryEnabled = enabled;
-    } catch (e) {
-      console.error('Failed to set registry protection:', e);
+      this.ransomwareEnabled = false;
     }
   }
 
   async setRansomwareEnabled(enabled: boolean): Promise<void> {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('set_protection_config', { 
-        config: { ransomware: enabled } 
+      await invoke('set_protection_config', {
+        config: { ransomware: enabled }
       });
       this.ransomwareEnabled = enabled;
     } catch (e) {
@@ -1688,48 +1621,8 @@ class ProtectionTypeManager {
     }
   }
 
-  async setProcessEnabled(enabled: boolean): Promise<void> {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('set_protection_config', { 
-        config: { process: enabled } 
-      });
-      this.processEnabled = enabled;
-    } catch (e) {
-      console.error('Failed to set process protection:', e);
-    }
-  }
-
-  async setMemoryEnabled(enabled: boolean): Promise<void> {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('set_protection_config', { 
-        config: { memory: enabled } 
-      });
-      this.memoryEnabled = enabled;
-    } catch (e) {
-      console.error('Failed to set memory protection:', e);
-    }
-  }
-
-  isBootEnabled(): boolean {
-    return this.bootEnabled;
-  }
-
-  isRegistryEnabled(): boolean {
-    return this.registryEnabled;
-  }
-
   isRansomwareEnabled(): boolean {
     return this.ransomwareEnabled;
-  }
-
-  isProcessEnabled(): boolean {
-    return this.processEnabled;
-  }
-
-  isMemoryEnabled(): boolean {
-    return this.memoryEnabled;
   }
 
   async refreshState(): Promise<void> {
@@ -1836,14 +1729,9 @@ class NetworkProtectionManager {
 
 // 防护配置接口
 interface ProtectionConfig {
-  boot?: boolean;
-  registry?: boolean;
   ransomware?: boolean;
-  process?: boolean;
-  memory?: boolean;
 }
 
-// Scan Batch Size Manager - 扫描批处理大小管理
 // Sidebar Shadow Manager - 侧边栏阴影管理
 class SidebarShadowManager {
   private enabled: boolean = true;
@@ -1959,45 +1847,6 @@ class EdrModeManager {
     } catch (e) {
       console.error('[EDR] Failed to update backend state:', e);
     }
-  }
-}
-
-class ScanBatchSizeManager {
-  private batchSize: number = 25;
-  private storageKey: string = 'scan_batch_size';
-
-  constructor() {
-    this.loadState();
-  }
-
-  private loadState(): void {
-    try {
-      const stored = localStorage.getItem(this.storageKey);
-      if (stored !== null) {
-        const size = parseInt(stored, 10);
-        if (!isNaN(size) && size >= 5 && size <= 100) {
-          this.batchSize = size;
-        }
-      }
-    } catch (e) {
-      console.error('Failed to load batch size state:', e);
-      this.batchSize = 25; // 默认25
-    }
-  }
-
-  setBatchSize(size: number): void {
-    if (size >= 5 && size <= 100) {
-      this.batchSize = size;
-      try {
-        localStorage.setItem(this.storageKey, String(size));
-      } catch (e) {
-        console.error('Failed to save batch size state:', e);
-      }
-    }
-  }
-
-  getBatchSize(): number {
-    return this.batchSize;
   }
 }
 
@@ -2814,6 +2663,12 @@ class AnimeStyleManager {
         console.error('[Backdrop] Failed:', e);
       });
     });
+    // 广播 backdrop 变更给拦截窗口
+    import('@tauri-apps/api/event').then(({ emit }) => {
+      const theme = localStorage.getItem('theme') || 'blue';
+      const themeMode = localStorage.getItem('themeMode') || 'colorful';
+      emit('theme-changed', { theme, themeMode, backdrop });
+    }).catch(() => {});
   }
 
   getBackdrop(): 'none' | 'acrylic' | 'mica' | 'micaAlt' {
@@ -3247,10 +3102,8 @@ class App {
   public autoStartEnabled: boolean = false; // 开机自启动
   private silentModeManager: SilentModeManager;
   private notificationModeManager: NotificationModeManager;
-  private infectorDetectionManager: InfectorDetectionManager;
   private scriptProtectionManager: ScriptProtectionManager;
   private virusFamilyAnalysisManager: VirusFamilyAnalysisManager;
-  private scanBatchSizeManager: ScanBatchSizeManager;
 
   private isMsStore: boolean = false; // MS Store 版本标志
 
@@ -3370,10 +3223,8 @@ class App {
     this.auxiliaryCloudScanManager = new AuxiliaryCloudScanManager();
     this.silentModeManager = new SilentModeManager();
     this.notificationModeManager = new NotificationModeManager();
-    this.infectorDetectionManager = new InfectorDetectionManager();
     this.scriptProtectionManager = new ScriptProtectionManager();
     this.virusFamilyAnalysisManager = new VirusFamilyAnalysisManager();
-    this.scanBatchSizeManager = new ScanBatchSizeManager();
 
     this.scriptScanManager = new ScriptScanManager();
     this.protectionTypeManager = new ProtectionTypeManager();
@@ -4581,17 +4432,6 @@ class App {
               const currentlyEnabled = this.driverProtectionManager.isEnabled();
               if (!currentlyEnabled) {
                 try {
-                  const { invoke } = await import('@tauri-apps/api/core');
-                  // Windows 版本检测：
-                  // - Win11：自动启用，无弹窗
-                  // - Win10 及以下：弹出兼容性警告弹窗，让用户决定
-                  const autoStart = await invoke('get_driver_auto_start_decision');
-                  if (!autoStart) {
-                    console.log('[Startup] User declined driver protection on Win10 warning');
-                    // 用户选择不启用，保存配置为禁用
-                    await this.driverProtectionManager.saveConfig(false);
-                    return;
-                  }
                   await this.driverProtectionManager.setEnabled(true, false);
                   this.addLog('INFO', 'Driver protection auto-started on startup');
                   this.updateDriverProtectionToggle();
@@ -7659,10 +7499,6 @@ class App {
 
     // 同时更新防护类型选项的禁用状态（勒索软件防护改为 R3 级，不依赖驱动）
     const protectionCheckboxes = [
-      'boot-protection-checkbox',
-      'registry-protection-checkbox',
-      'process-protection-checkbox',
-      'memory-protection-checkbox',
       'new-intercept-window-checkbox'
     ];
     protectionCheckboxes.forEach(id => {
@@ -8218,31 +8054,53 @@ class App {
     });
   }
 
-  // 白名单管理弹窗（进程名白名单，同步到 EDR 驱动白名单）
+  // 白名单管理弹窗（v2：进程白名单 + 网页白名单双标签）
+  // 决策完全由主程序处理：进程/路径命中直接放行，域名白名单由 netproxy 热加载生效，保存即生效。
   private async showWhitelistDialog(): Promise<void> {
     const { invoke } = await import('@tauri-apps/api/core');
 
-    // 加载当前白名单进程名
+    // 加载当前白名单数据
     let processes: string[] = [];
+    let paths: string[] = [];
+    let domains: string[] = [];
     try {
-      processes = await invoke('get_whitelist_processes_command');
+      [processes, paths, domains] = await Promise.all([
+        invoke('get_whitelist_processes_command'),
+        invoke('get_whitelist_paths_command'),
+        invoke('get_whitelist_domains_command'),
+      ]);
     } catch (e) {
-      console.error('[Whitelist] Failed to load processes:', e);
+      console.error('[Whitelist] Failed to load data:', e);
     }
 
-    const renderList = (): string => {
-      if (processes.length === 0) {
+    let activeTab: 'process' | 'web' = 'process';
+
+    const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+    const listItem = (value: string, cls: string, idx: number): string => `
+      <div style="display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid #f0f0f0;">
+        <span style="flex: 1; font-size: 13px; color: #333; word-break: break-all; line-height: 1.4;">${esc(value)}</span>
+        <button class="${cls}" data-index="${idx}" style="padding: 4px 10px; border: 1px solid rgba(0,0,0,0.1); background: #fff; border-radius: 4px; font-size: 12px; color: #D13438; cursor: pointer; flex-shrink: 0; font-family: inherit;">${this.t('whitelistRemove')}</button>
+      </div>`;
+
+    const renderProcessList = (): string => {
+      if (processes.length === 0 && paths.length === 0) {
         return `<div style="text-align: center; padding: 32px 0; color: #999; font-size: 14px;">${this.t('whitelistEmpty')}</div>`;
       }
-      return processes.map((p, i) => `
-        <div style="display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid #f0f0f0;">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style="flex-shrink: 0;">
-            <path d="M8 1C4.68629 1 2 3.68629 2 7C2 10.3137 4.68629 13 8 13C11.3137 13 14 10.3137 14 7C14 3.68629 11.3137 1 8 1ZM8 2C10.7614 2 13 4.23858 13 7C13 9.76142 10.7614 12 8 12C5.23858 12 3 9.76142 3 7C3 4.23858 5.23858 2 8 2Z" fill="#666"/>
-          </svg>
-          <span style="flex: 1; font-size: 13px; color: #333; word-break: break-all; line-height: 1.4;">${p.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</span>
-          <button class="whitelist-remove-btn" data-index="${i}" style="padding: 4px 10px; border: 1px solid rgba(0,0,0,0.1); background: #fff; border-radius: 4px; font-size: 12px; color: #D13438; cursor: pointer; flex-shrink: 0; font-family: inherit;">${this.t('whitelistRemove')}</button>
-        </div>
-      `).join('');
+      const processSection = processes.length > 0
+        ? `<div style="font-size: 12px; color: #8A8A8A; margin: 8px 0 4px 0;">${this.t('whitelistGroupProcess')}</div>${processes.map((p, i) => listItem(p, 'whitelist-remove-process', i)).join('')}`
+        : '';
+      const pathSection = paths.length > 0
+        ? `<div style="font-size: 12px; color: #8A8A8A; margin: 8px 0 4px 0;">${this.t('whitelistGroupPath')}</div>${paths.map((p, i) => listItem(p, 'whitelist-remove-path', i)).join('')}`
+        : '';
+      return processSection + pathSection;
+    };
+
+    const renderWebList = (): string => {
+      if (domains.length === 0) {
+        return `<div style="text-align: center; padding: 32px 0; color: #999; font-size: 14px;">${this.t('whitelistDomainEmpty')}</div>`;
+      }
+      return domains.map((d, i) => listItem(d, 'whitelist-remove-domain', i)).join('');
     };
 
     const modal = document.createElement('div');
@@ -8263,19 +8121,42 @@ class App {
         <div style="padding: 24px 24px 0 24px;">
           <div style="font-size: 18px; font-weight: 600; color: #1C1C1C; margin-bottom: 4px;">${this.t('whitelistDialogTitle')}</div>
           <div style="font-size: 14px; color: #5F5F5F; margin-bottom: 16px;">${this.t('whitelistMgmtDesc')}</div>
-          <div style="display: flex; gap: 8px; margin-bottom: 8px;">
-            <input id="whitelist-process-input" type="text" placeholder="${this.t('whitelistProcessPlaceholder')}" style="flex: 1; padding: 6px 12px; border: 1px solid rgba(0,0,0,0.1); border-radius: 4px; font-size: 14px; font-family: inherit; outline: none;" />
-            <button id="whitelist-add-process" style="padding: 6px 16px; border: 1px solid rgba(0,0,0,0.1); background: #fff; border-radius: 4px; font-size: 14px; color: #1C1C1C; cursor: pointer; font-family: inherit; display: flex; align-items: center; gap: 6px; transition: all 0.15s; white-space: nowrap;">
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1C7.27614 1 7.5 1.22386 7.5 1.5V6.5H12.5C12.7761 6.5 13 6.72386 13 7C13 7.27614 12.7761 7.5 12.5 7.5H7.5V12.5C7.5 12.7761 7.27614 13 7 13C6.72386 13 6.5 12.7761 6.5 12.5V7.5H1.5C1.22386 7.5 1 7.27614 1 7C1 6.72386 1.22386 6.5 1.5 6.5H6.5V1.5C6.5 1.22386 6.72386 1 7 1Z" fill="#666"/></svg>
-              ${this.t('whitelistAddProcess')}
-            </button>
+          <div style="display: flex; gap: 4px; background: #F3F3F3; border-radius: 6px; padding: 3px; margin-bottom: 16px;">
+            <button id="wl-tab-process" style="flex: 1; padding: 6px 0; border: none; border-radius: 4px; font-size: 13px; cursor: pointer; font-family: inherit; background: #fff; color: #1C1C1C; box-shadow: 0 1px 2px rgba(0,0,0,0.08); transition: all 0.15s;">${this.t('whitelistTabProcess')}</button>
+            <button id="wl-tab-web" style="flex: 1; padding: 6px 0; border: none; border-radius: 4px; font-size: 13px; cursor: pointer; font-family: inherit; background: transparent; color: #5F5F5F; transition: all 0.15s;">${this.t('whitelistTabWeb')}</button>
           </div>
-          <div style="font-size: 12px; color: #D13438; margin-bottom: 4px; line-height: 1.4;">${this.t('whitelistProcessHint')}</div>
-          <div style="font-size: 12px; color: #8A8A8A; margin-bottom: 12px; line-height: 1.4;">${this.t('whitelistRestartHint')}</div>
         </div>
-        <div style="flex: 1; overflow-y: auto; padding: 0 24px; min-height: 60px;" id="whitelist-list-container">
-          ${renderList()}
+
+        <div id="wl-panel-process" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
+          <div style="padding: 0 24px;">
+            <div style="display: flex; gap: 8px; margin-bottom: 4px;">
+              <input id="whitelist-process-input" type="text" placeholder="${this.t('whitelistProcessPlaceholder')}" style="flex: 1; padding: 6px 12px; border: 1px solid rgba(0,0,0,0.1); border-radius: 4px; font-size: 14px; font-family: inherit; outline: none;" />
+              <button id="whitelist-add-process" style="padding: 6px 16px; border: 1px solid rgba(0,0,0,0.1); background: #fff; border-radius: 4px; font-size: 14px; color: #1C1C1C; cursor: pointer; font-family: inherit; transition: all 0.15s; white-space: nowrap;">${this.t('whitelistAddProcess')}</button>
+            </div>
+            <div style="display: flex; gap: 8px; margin-bottom: 4px;">
+              <input id="whitelist-path-input" type="text" placeholder="${this.t('whitelistPathPlaceholder')}" style="flex: 1; padding: 6px 12px; border: 1px solid rgba(0,0,0,0.1); border-radius: 4px; font-size: 14px; font-family: inherit; outline: none;" />
+              <button id="whitelist-add-path" style="padding: 6px 16px; border: 1px solid rgba(0,0,0,0.1); background: #fff; border-radius: 4px; font-size: 14px; color: #1C1C1C; cursor: pointer; font-family: inherit; transition: all 0.15s; white-space: nowrap;">${this.t('whitelistAddPath')}</button>
+            </div>
+            <div style="font-size: 12px; color: #8A8A8A; margin-bottom: 12px; line-height: 1.6;">${this.t('whitelistProcessHint')}<br>${this.t('whitelistPathHint')}<br><span style="color: #005FB8;">${this.t('whitelistRestartHint')}</span></div>
+          </div>
+          <div style="flex: 1; overflow-y: auto; padding: 0 24px 8px 24px; min-height: 60px;" id="whitelist-list-container">
+            ${renderProcessList()}
+          </div>
         </div>
+
+        <div id="wl-panel-web" style="display: none; flex-direction: column; flex: 1; min-height: 0;">
+          <div style="padding: 0 24px;">
+            <div style="display: flex; gap: 8px; margin-bottom: 4px;">
+              <input id="whitelist-domain-input" type="text" placeholder="${this.t('whitelistDomainPlaceholder')}" style="flex: 1; padding: 6px 12px; border: 1px solid rgba(0,0,0,0.1); border-radius: 4px; font-size: 14px; font-family: inherit; outline: none;" />
+              <button id="whitelist-add-domain" style="padding: 6px 16px; border: 1px solid rgba(0,0,0,0.1); background: #fff; border-radius: 4px; font-size: 14px; color: #1C1C1C; cursor: pointer; font-family: inherit; transition: all 0.15s; white-space: nowrap;">${this.t('whitelistAddDomain')}</button>
+            </div>
+            <div style="font-size: 12px; color: #8A8A8A; margin-bottom: 12px; line-height: 1.6;">${this.t('whitelistDomainHint')}<br><span style="color: #005FB8;">${this.t('whitelistRestartHint')}</span></div>
+          </div>
+          <div style="flex: 1; overflow-y: auto; padding: 0 24px 8px 24px; min-height: 60px;" id="whitelist-domain-list-container">
+            ${renderWebList()}
+          </div>
+        </div>
+
         <div style="display: flex; justify-content: flex-end; padding: 16px 24px 24px 24px; background: #F3F3F3; border-top: 1px solid rgba(0,0,0,0.05);">
           <button id="whitelist-dialog-close" style="padding: 6px 16px; border: none; background: #005FB8; border-radius: 4px; font-size: 14px; font-weight: 400; color: white; cursor: pointer; font-family: inherit; min-width: 80px; box-shadow: 0 1px 2px rgba(0,0,0,0.1);">${this.t('complete')}</button>
         </div>
@@ -8290,31 +8171,87 @@ class App {
 
     document.body.appendChild(modal);
 
-    // 刷新列表
-    const refreshList = async () => {
+    // Tab 切换
+    const styleTabs = () => {
+      const tp = document.getElementById('wl-tab-process');
+      const tw = document.getElementById('wl-tab-web');
+      const pp = document.getElementById('wl-panel-process');
+      const pw = document.getElementById('wl-panel-web');
+      if (!tp || !tw || !pp || !pw) return;
+      if (activeTab === 'process') {
+        tp.style.background = '#fff'; tp.style.color = '#1C1C1C'; tp.style.boxShadow = '0 1px 2px rgba(0,0,0,0.08)';
+        tw.style.background = 'transparent'; tw.style.color = '#5F5F5F'; tw.style.boxShadow = 'none';
+        pp.style.display = 'flex'; pw.style.display = 'none';
+      } else {
+        tw.style.background = '#fff'; tw.style.color = '#1C1C1C'; tw.style.boxShadow = '0 1px 2px rgba(0,0,0,0.08)';
+        tp.style.background = 'transparent'; tp.style.color = '#5F5F5F'; tp.style.boxShadow = 'none';
+        pw.style.display = 'flex'; pp.style.display = 'none';
+      }
+    };
+    document.getElementById('wl-tab-process')?.addEventListener('click', () => { activeTab = 'process'; styleTabs(); });
+    document.getElementById('wl-tab-web')?.addEventListener('click', () => { activeTab = 'web'; styleTabs(); });
+
+    // 刷新进程列表
+    const refreshProcessList = async () => {
       try {
-        processes = await invoke('get_whitelist_processes_command');
+        [processes, paths] = await Promise.all([
+          invoke('get_whitelist_processes_command'),
+          invoke('get_whitelist_paths_command'),
+        ]);
       } catch (_) {}
       const container = document.getElementById('whitelist-list-container');
-      if (container) container.innerHTML = renderList();
+      if (container) container.innerHTML = renderProcessList();
+      bindRemoveButtons();
+    };
+
+    // 刷新网页列表
+    const refreshWebList = async () => {
+      try {
+        domains = await invoke('get_whitelist_domains_command');
+      } catch (_) {}
+      const container = document.getElementById('whitelist-domain-list-container');
+      if (container) container.innerHTML = renderWebList();
       bindRemoveButtons();
     };
 
     // 绑定移除按钮
     const bindRemoveButtons = () => {
-      document.querySelectorAll('.whitelist-remove-btn').forEach(btn => {
+      document.querySelectorAll('.whitelist-remove-process').forEach(btn => {
         btn.addEventListener('click', async () => {
           const idx = parseInt((btn as HTMLElement).dataset.index || '0');
-          const processName = processes[idx];
-          if (!processName) return;
+          const name = processes[idx];
+          if (!name) return;
           if (!confirm(this.t('whitelistConfirmRemove'))) return;
           try {
-            await invoke('remove_whitelist_process_command', { name: processName });
-            await refreshList();
+            await invoke('remove_whitelist_process_command', { name });
+            await refreshProcessList();
             this.basicProtectionManager.reloadWhitelistedProcesses();
-          } catch (e) {
-            console.error('[Whitelist] Failed to remove:', e);
-          }
+          } catch (e) { console.error('[Whitelist] Failed to remove process:', e); }
+        });
+      });
+      document.querySelectorAll('.whitelist-remove-path').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const idx = parseInt((btn as HTMLElement).dataset.index || '0');
+          const path = paths[idx];
+          if (!path) return;
+          if (!confirm(this.t('whitelistConfirmRemove'))) return;
+          try {
+            await invoke('remove_whitelist_path_command', { path });
+            await refreshProcessList();
+            this.basicProtectionManager.reloadWhitelistedProcesses();
+          } catch (e) { console.error('[Whitelist] Failed to remove path:', e); }
+        });
+      });
+      document.querySelectorAll('.whitelist-remove-domain').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const idx = parseInt((btn as HTMLElement).dataset.index || '0');
+          const domain = domains[idx];
+          if (!domain) return;
+          if (!confirm(this.t('whitelistConfirmRemoveDomain'))) return;
+          try {
+            await invoke('remove_whitelist_domain_command', { domain });
+            await refreshWebList();
+          } catch (e) { console.error('[Whitelist] Failed to remove domain:', e); }
         });
       });
     };
@@ -8324,33 +8261,52 @@ class App {
       const input = document.getElementById('whitelist-process-input') as HTMLInputElement;
       const name = input?.value.trim();
       if (!name) return;
-      if (!name.includes('.')) {
-        alert(this.t('whitelistProcessHint'));
-        return;
-      }
+      if (!name.includes('.')) { alert(this.t('whitelistProcessHint')); return; }
       try {
         await invoke('add_whitelist_process_command', { name });
         if (input) input.value = '';
-        await refreshList();
+        await refreshProcessList();
         this.basicProtectionManager.reloadWhitelistedProcesses();
-      } catch (e) {
-        console.error('[Whitelist] Failed to add process:', e);
-      }
+      } catch (e) { console.error('[Whitelist] Failed to add process:', e); }
+    };
+
+    // 添加路径
+    const addPath = async () => {
+      const input = document.getElementById('whitelist-path-input') as HTMLInputElement;
+      const path = input?.value.trim();
+      if (!path) return;
+      try {
+        await invoke('add_whitelist_path_command', { path });
+        if (input) input.value = '';
+        await refreshProcessList();
+        this.basicProtectionManager.reloadWhitelistedProcesses();
+      } catch (e) { console.error('[Whitelist] Failed to add path:', e); }
+    };
+
+    // 添加域名
+    const addDomain = async () => {
+      const input = document.getElementById('whitelist-domain-input') as HTMLInputElement;
+      const domain = input?.value.trim();
+      if (!domain) return;
+      try {
+        await invoke('add_whitelist_domain_command', { domain });
+        if (input) input.value = '';
+        await refreshWebList();
+      } catch (e) { console.error('[Whitelist] Failed to add domain:', e); }
     };
 
     document.getElementById('whitelist-add-process')?.addEventListener('click', addProcess);
-    document.getElementById('whitelist-process-input')?.addEventListener('keydown', (e) => {
-      if ((e as KeyboardEvent).key === 'Enter') addProcess();
-    });
+    document.getElementById('whitelist-process-input')?.addEventListener('keydown', (e) => { if ((e as KeyboardEvent).key === 'Enter') addProcess(); });
+    document.getElementById('whitelist-add-path')?.addEventListener('click', addPath);
+    document.getElementById('whitelist-path-input')?.addEventListener('keydown', (e) => { if ((e as KeyboardEvent).key === 'Enter') addPath(); });
+    document.getElementById('whitelist-add-domain')?.addEventListener('click', addDomain);
+    document.getElementById('whitelist-domain-input')?.addEventListener('keydown', (e) => { if ((e as KeyboardEvent).key === 'Enter') addDomain(); });
 
     // 关闭
-    document.getElementById('whitelist-dialog-close')?.addEventListener('click', () => {
-      modal.remove();
-    });
-    modal.addEventListener('click', (e) => {
-      if (e.target === modal) modal.remove();
-    });
+    document.getElementById('whitelist-dialog-close')?.addEventListener('click', () => { modal.remove(); });
+    modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
 
+    styleTabs();
     bindRemoveButtons();
   }
 
@@ -10014,8 +9970,11 @@ class App {
 
         <div class="settings-list">
           <!-- 防护设置组 -->
-          <div class="setting-group">
-            <div class="setting-group-title">${this.t('protectionSettings')}</div>
+          <div class="setting-group" data-group-id="protection">
+            <div class="setting-group-header">
+              <span class="setting-group-title">${this.t('protectionSettings')}</span>
+              <svg class="setting-group-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </div>
             ${this.isMsStore ? '' : `
             <div class="setting-item">
               <div class="setting-info">
@@ -10084,42 +10043,10 @@ class App {
             ${this.isMsStore ? '' : `
             <div class="setting-item">
               <div class="setting-info">
-                <div class="setting-title">${this.t('bootSectorProtection')}</div>
-                <div class="setting-desc">${this.t('bootSectorProtectionDesc')}</div>
-              </div>
-              <input type="checkbox" class="setting-checkbox" id="boot-protection-checkbox" ${this.protectionTypeManager.isBootEnabled() ? 'checked' : ''} ${!this.driverProtectionManager.isEnabled() ? 'disabled' : ''}>
-            </div>
-
-            <div class="setting-item">
-              <div class="setting-info">
-                <div class="setting-title">${this.t('registryProtection')}</div>
-                <div class="setting-desc">${this.t('registryProtectionDesc')}</div>
-              </div>
-              <input type="checkbox" class="setting-checkbox" id="registry-protection-checkbox" ${this.protectionTypeManager.isRegistryEnabled() ? 'checked' : ''} ${!this.driverProtectionManager.isEnabled() ? 'disabled' : ''}>
-            </div>
-
-            <div class="setting-item">
-              <div class="setting-info">
                 <div class="setting-title">${this.t('ransomwareProtection')}</div>
                 <div class="setting-desc">${this.t('ransomwareProtectionDesc')}</div>
               </div>
               <input type="checkbox" class="setting-checkbox" id="ransomware-protection-checkbox" ${this.protectionTypeManager.isRansomwareEnabled() ? 'checked' : ''}>
-            </div>
-
-            <div class="setting-item">
-              <div class="setting-info">
-                <div class="setting-title">${this.t('processProtection')}</div>
-                <div class="setting-desc">${this.t('processProtectionDesc')}</div>
-              </div>
-              <input type="checkbox" class="setting-checkbox" id="process-protection-checkbox" ${this.protectionTypeManager.isProcessEnabled() ? 'checked' : ''} ${!this.driverProtectionManager.isEnabled() ? 'disabled' : ''}>
-            </div>
-
-            <div class="setting-item">
-              <div class="setting-info">
-                <div class="setting-title">${this.t('memoryProtection')}</div>
-                <div class="setting-desc">${this.t('memoryProtectionDesc')}</div>
-              </div>
-              <input type="checkbox" class="setting-checkbox" id="memory-protection-checkbox" ${this.protectionTypeManager.isMemoryEnabled() ? 'checked' : ''} ${!this.driverProtectionManager.isEnabled() ? 'disabled' : ''}>
             </div>
 
             <div class="setting-item">
@@ -10211,8 +10138,11 @@ class App {
           </div>
 
           <!-- 个性化设置 -->
-          <div class="setting-group">
-            <div class="setting-group-title">个性化</div>
+          <div class="setting-group" data-group-id="personalization">
+            <div class="setting-group-header">
+              <span class="setting-group-title">个性化</span>
+              <svg class="setting-group-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </div>
             <div class="setting-item">
               <div class="setting-info">
                 <div class="setting-title">桌面宠物</div>
@@ -10223,8 +10153,11 @@ class App {
           </div>
 
           <!-- 扫描设置组 -->
-          <div class="setting-group">
-            <div class="setting-group-title">${this.t('scanSettings')}</div>
+          <div class="setting-group" data-group-id="scan">
+            <div class="setting-group-header">
+              <span class="setting-group-title">${this.t('scanSettings')}</span>
+              <svg class="setting-group-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </div>
             <div class="setting-item">
               <div class="setting-info">
                 <div class="setting-title">${this.t('scanSensitivity')}</div>
@@ -10244,14 +10177,6 @@ class App {
 
             <div class="setting-item">
               <div class="setting-info">
-                <div class="setting-title">${this.t('infectorDetection')}</div>
-                <div class="setting-desc">${this.t('infectorDetectionDesc')}</div>
-              </div>
-              <input type="checkbox" class="setting-checkbox" id="infector-detection-checkbox" ${this.infectorDetectionManager.isEnabled() ? 'checked' : ''}>
-            </div>
-
-            <div class="setting-item">
-              <div class="setting-info">
                 <div class="setting-title">${this.t('skipLocalRules')}</div>
                 <div class="setting-desc">${this.t('skipLocalRulesDesc')}</div>
               </div>
@@ -10264,17 +10189,6 @@ class App {
                 <div class="setting-desc">${this.t('virusFamilyAnalysisDesc')}</div>
               </div>
               <input type="checkbox" class="setting-checkbox" id="virus-family-checkbox" ${this.virusFamilyAnalysisManager.isEnabled() ? 'checked' : ''}>
-            </div>
-
-            <div class="setting-item">
-              <div class="setting-info">
-                <div class="setting-title">${this.t('scanBatchSize')}</div>
-                <div class="setting-desc">${this.t('scanBatchSizeDesc')}</div>
-              </div>
-              <div style="display: flex; align-items: center; gap: 10px;">
-                <input type="range" class="setting-slider" id="scan-batch-size-slider" min="5" max="100" value="${this.scanBatchSizeManager.getBatchSize()}" style="width: 120px;">
-                <span id="scan-batch-size-value" style="font-size: 14px; color: var(--text-primary); min-width: 30px;">${this.scanBatchSizeManager.getBatchSize()}</span>
-              </div>
             </div>
 
             <div class="setting-item">
@@ -10335,8 +10249,11 @@ class App {
           </div>
 
           <!-- 外观设置组 -->
-          <div class="setting-group">
-            <div class="setting-group-title">${this.t('appearanceSettings')}</div>
+          <div class="setting-group" data-group-id="appearance">
+            <div class="setting-group-header">
+              <span class="setting-group-title">${this.t('appearanceSettings')}</span>
+              <svg class="setting-group-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </div>
             <div class="setting-item">
               <div class="setting-info">
                 <div class="setting-title">${this.t('themeMode')}</div>
@@ -10488,8 +10405,11 @@ class App {
           </div>
 
           <!-- 更新设置组 -->
-          <div class="setting-group">
-            <div class="setting-group-title">${this.t('updateSettings')}</div>
+          <div class="setting-group" data-group-id="update">
+            <div class="setting-group-header">
+              <span class="setting-group-title">${this.t('updateSettings')}</span>
+              <svg class="setting-group-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </div>
             <div class="setting-item">
               <div class="setting-info">
                 <div class="setting-title">${this.t('softwareUpdate')}</div>
@@ -10525,8 +10445,11 @@ class App {
           </div>
 
           <!-- 赞助设置组 -->
-          <div class="setting-group">
-            <div class="setting-group-title">${this.t('sponsorSettings')}</div>
+          <div class="setting-group" data-group-id="sponsor">
+            <div class="setting-group-header">
+              <span class="setting-group-title">${this.t('sponsorSettings')}</span>
+              <svg class="setting-group-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </div>
             <div class="setting-item">
               <div class="setting-info">
                 <div class="setting-title">${this.t('sponsorDeveloper')}</div>
@@ -10540,8 +10463,11 @@ class App {
           </div>
 
           <!-- 问题反馈设置组 -->
-          <div class="setting-group">
-            <div class="setting-group-title">${this.t('feedbackSettings')}</div>
+          <div class="setting-group" data-group-id="feedback">
+            <div class="setting-group-header">
+              <span class="setting-group-title">${this.t('feedbackSettings')}</span>
+              <svg class="setting-group-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </div>
             <div class="setting-item">
               <div class="setting-info">
                 <div class="setting-title">${this.t('problemFeedback')}</div>
@@ -10555,8 +10481,11 @@ class App {
           </div>
 
           <!-- OOBE设置组 -->
-          <div class="setting-group">
-            <div class="setting-group-title">${this.t('oobeSettings')}</div>
+          <div class="setting-group" data-group-id="oobe">
+            <div class="setting-group-header">
+              <span class="setting-group-title">${this.t('oobeSettings')}</span>
+              <svg class="setting-group-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </div>
             <div class="setting-item">
               <div class="setting-info">
                 <div class="setting-title">${this.t('resetOptions')}</div>
@@ -12304,11 +12233,7 @@ class App {
 
       // 更新防护类型复选框的禁用状态
       const protectionCheckboxes = [
-        'boot-protection-checkbox',
-        'registry-protection-checkbox',
-        'ransomware-protection-checkbox',
-        'process-protection-checkbox',
-        'memory-protection-checkbox'
+        'ransomware-protection-checkbox'
       ];
       protectionCheckboxes.forEach(id => {
         const cb = document.getElementById(id) as HTMLInputElement;
@@ -12801,11 +12726,6 @@ class App {
       await this.silentModeManager.setEnabled(checkbox.checked);
     });
 
-    document.getElementById('infector-detection-checkbox')?.addEventListener('change', async (e) => {
-      const checkbox = e.target as HTMLInputElement;
-      await this.infectorDetectionManager.setEnabled(checkbox.checked);
-    });
-
     // 脚本防护开关
     document.getElementById('script-protection-checkbox')?.addEventListener('change', async (e) => {
       const checkbox = e.target as HTMLInputElement;
@@ -12963,16 +12883,6 @@ class App {
     });
 
     // 防护类型开关
-    document.getElementById('boot-protection-checkbox')?.addEventListener('change', async (e) => {
-      const checkbox = e.target as HTMLInputElement;
-      await this.protectionTypeManager.setBootEnabled(checkbox.checked);
-    });
-
-    document.getElementById('registry-protection-checkbox')?.addEventListener('change', async (e) => {
-      const checkbox = e.target as HTMLInputElement;
-      await this.protectionTypeManager.setRegistryEnabled(checkbox.checked);
-    });
-
     document.getElementById('ransomware-protection-checkbox')?.addEventListener('change', async (e) => {
       const checkbox = e.target as HTMLInputElement;
 
@@ -13009,16 +12919,6 @@ class App {
       }
 
       await this.protectionTypeManager.setRansomwareEnabled(checkbox.checked);
-    });
-
-    document.getElementById('process-protection-checkbox')?.addEventListener('change', async (e) => {
-      const checkbox = e.target as HTMLInputElement;
-      await this.protectionTypeManager.setProcessEnabled(checkbox.checked);
-    });
-
-    document.getElementById('memory-protection-checkbox')?.addEventListener('change', async (e) => {
-      const checkbox = e.target as HTMLInputElement;
-      await this.protectionTypeManager.setMemoryEnabled(checkbox.checked);
     });
 
     // 新拦截窗口开关
@@ -13114,16 +13014,6 @@ class App {
     document.getElementById('sidebar-shadow-checkbox')?.addEventListener('change', (e) => {
       const checkbox = e.target as HTMLInputElement;
       this.sidebarShadowManager.setEnabled(checkbox.checked);
-    });
-
-    const batchSizeSlider = document.getElementById('scan-batch-size-slider') as HTMLInputElement;
-    const batchSizeValue = document.getElementById('scan-batch-size-value');
-    batchSizeSlider?.addEventListener('input', (e) => {
-      const value = parseInt((e.target as HTMLInputElement).value, 10);
-      this.scanBatchSizeManager.setBatchSize(value);
-      if (batchSizeValue) {
-        batchSizeValue.textContent = String(value);
-      }
     });
 
     // 更新检查按钮
@@ -13545,6 +13435,43 @@ class App {
 
     // 通知中心事件监听
     this.attachNotificationEventListeners();
+
+    // 设置分组卡片折叠
+    this.initSettingGroupToggles();
+  }
+
+  private initSettingGroupToggles() {
+    document.querySelectorAll('.setting-group').forEach(group => {
+      const header = group.querySelector('.setting-group-header');
+      if (!header) return;
+
+      const content = document.createElement('div');
+      content.className = 'setting-group-content';
+      const inner = document.createElement('div');
+      inner.className = 'setting-group-content-inner';
+
+      while (header.nextElementSibling) {
+        inner.appendChild(header.nextElementSibling);
+      }
+
+      content.appendChild(inner);
+      group.appendChild(content);
+
+      const groupId = group.getAttribute('data-group-id');
+      if (groupId && localStorage.getItem(`setting-group-${groupId}`) === 'collapsed') {
+        group.classList.add('collapsed');
+      }
+
+      header.addEventListener('click', () => {
+        group.classList.toggle('collapsed');
+        if (groupId) {
+          localStorage.setItem(
+            `setting-group-${groupId}`,
+            group.classList.contains('collapsed') ? 'collapsed' : 'expanded'
+          );
+        }
+      });
+    });
   }
 
   private async loadVersionDisplay() {
@@ -14122,7 +14049,7 @@ class App {
     this.isTraversing = false;
 
     const cloudHashEnabled = this.cloudHashManager?.isEnabled() || false;
-    const batchSize = this.scanBatchSizeManager.getBatchSize();
+    const batchSize = 25;
 
     if (this.currentScanFileIndex >= SCAN_FILES.length) {
       // 等待所有后台扫描完成（YARA扫描等）
@@ -14502,8 +14429,7 @@ class App {
           }
 
           // 常规文件批量并行扫描（使用 Rayon 并行引擎）
-          // 使用用户设置的扫描批次大小（默认从设置中读取）
-          const fallbackBatchSize = this.scanBatchSizeManager.getBatchSize() || 50;
+          const fallbackBatchSize = 50;
           for (let i = 0; i < localFiles.length && this.isScanning; i += fallbackBatchSize) {
             if (!this.isScanning) break;
             const batch = localFiles.slice(i, i + fallbackBatchSize);
@@ -15691,17 +15617,17 @@ class App {
     const engines: {name:string;status:string;desc:string;version:string}[] = [];
 
     // 核心检测引擎（仅病毒分析相关）
-    engines.push({name:'Melix 深度学习引擎', status:'已加载', desc:'基于 ONNX 的恶意文件检测模型', version:'v10.2.33'});
-    engines.push({name:'本地特征码引擎', status:'已就绪', desc:'内置特征码规则库匹配', version:'v10.2.33'});
-    engines.push({name:'病毒家族分析引擎', status:'已就绪', desc:'家族分类', version:'v10.2.33'});
-    engines.push({name:'行为分析引擎', status:'已就绪', desc:'PE 导入表 + 字符串行为提取', version:'v10.2.33'});
+    engines.push({name:'Melix 深度学习引擎', status:'已加载', desc:'基于 ONNX 的恶意文件检测模型', version:'v10.2.34'});
+    engines.push({name:'本地特征码引擎', status:'已就绪', desc:'内置特征码规则库匹配', version:'v10.2.34'});
+    engines.push({name:'病毒家族分析引擎', status:'已就绪', desc:'家族分类', version:'v10.2.34'});
+    engines.push({name:'行为分析引擎', status:'已就绪', desc:'PE 导入表 + 字符串行为提取', version:'v10.2.34'});
 
     // 云端引擎
     const cloudHashOk = this.cloudHashManager ? await this.cloudHashManager.isConnected() : false;
-    engines.push({name:'云端哈希引擎', status:cloudHashOk?'已连接':'未就绪', desc:'云端 MD5 哈希数据库', version:'v10.2.33'});
+    engines.push({name:'云端哈希引擎', status:cloudHashOk?'已连接':'未就绪', desc:'云端 MD5 哈希数据库', version:'v10.2.34'});
 
     // 白名单引擎
-    engines.push({name:'白名单引擎', status:'已就绪', desc:'MD5 白名单过滤', version:'v10.2.33'});
+    engines.push({name:'白名单引擎', status:'已就绪', desc:'MD5 白名单过滤', version:'v10.2.34'});
 
     // 规则引擎数量
     try {

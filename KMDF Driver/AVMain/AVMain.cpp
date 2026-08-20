@@ -1188,13 +1188,58 @@ int wmain(int argc, wchar_t* argv[])
                 break;
             }
 
-            wprintf(L"[MAIN] Ransomware suspected notification: %u files affected, ID=%llu\n",
+            wprintf(L"[MAIN] Ransomware suspected notification: PID=%lu name=%ws score=%u "
+                    L"flags=0x%02X %u files affected, ID=%llu\n",
+                    notify->ProcessId,
+                    notify->ProcessName[0] ? notify->ProcessName : L"(unknown)",
+                    notify->ThreatScore, notify->DetectionFlags,
                     notify->FileCount, notify->NotificationId);
+
+            //
+            // 构建检测规则明细 (从 DetectionFlags 位掩码解析)
+            //
+            wchar_t ruleDetails[1024];
+            ruleDetails[0] = L'\0';
+            StringCchCatW(ruleDetails, ARRAYSIZE(ruleDetails), L"命中检测规则:\n");
+
+            if (notify->DetectionFlags & XGS_DETECT_EXT_CHANGE)
+                StringCchCatW(ruleDetails, ARRAYSIZE(ruleDetails),
+                              L"  - 扩展名变更 (+35/次, 勒索强特征)\n");
+            if (notify->DetectionFlags & XGS_DETECT_ENTROPY)
+                StringCchCatW(ruleDetails, ARRAYSIZE(ruleDetails),
+                              L"  - 高熵写入 (+15/次, 疑似加密)\n");
+            if (notify->DetectionFlags & XGS_DETECT_MASS_MODIFY)
+                StringCchCatW(ruleDetails, ARRAYSIZE(ruleDetails),
+                              L"  - 大量文件修改 (>10文件/60秒)\n");
+            if (notify->DetectionFlags & XGS_DETECT_MASS_DELETE)
+                StringCchCatW(ruleDetails, ARRAYSIZE(ruleDetails),
+                              L"  - 大量文件删除 (>8文件/60秒)\n");
+            if (notify->DetectionFlags & XGS_DETECT_MASS_RENAME)
+                StringCchCatW(ruleDetails, ARRAYSIZE(ruleDetails),
+                              L"  - 大量文件重命名 (>5文件/60秒)\n");
+            if (notify->DetectionFlags & XGS_DETECT_TYPE_DIVERSITY)
+                StringCchCatW(ruleDetails, ARRAYSIZE(ruleDetails),
+                              L"  - 文件类型多样性 (>5种/60秒)\n");
+            if (notify->DetectionFlags & XGS_DETECT_DIR_DIVERSITY)
+                StringCchCatW(ruleDetails, ARRAYSIZE(ruleDetails),
+                              L"  - 目录多样性 (>8个/60秒)\n");
+            if (notify->DetectionFlags & XGS_DETECT_RAPID_WRITES)
+                StringCchCatW(ruleDetails, ARRAYSIZE(ruleDetails),
+                              L"  - 快速连续写入 (>30次/60秒)\n");
+
+            if (notify->DetectionFlags == 0)
+                StringCchCatW(ruleDetails, ARRAYSIZE(ruleDetails), L"  (无)\n");
+
+            wchar_t scoreLine[128];
+            swprintf_s(scoreLine, ARRAYSIZE(scoreLine),
+                       L"威胁评分: %u / %u (阈值)\n\n", notify->ThreatScore,
+                       XGS_RANSOM_SCORE_THRESHOLD);
+            StringCchCatW(ruleDetails, ARRAYSIZE(ruleDetails), scoreLine);
 
             //
             // 构建文件列表消息 (最多显示 XGS_RANSOM_LIST_MAX 条)
             //
-            wchar_t fileList[12000];
+            wchar_t fileList[10000];
             fileList[0] = L'\0';
 
             UINT32 listCount = notify->FileCount;
@@ -1206,8 +1251,11 @@ int wmain(int argc, wchar_t* argv[])
             for (UINT32 i = 0; i < listCount; i++)
             {
                 const wchar_t* opDesc =
-                    (notify->Files[i].Operation == 2) ? L"删除" :
-                    (notify->Files[i].Operation == 1) ? L"修改" : L"操作";
+                    (notify->Files[i].Operation == XGS_OP_DELETE)     ? L"删除" :
+                    (notify->Files[i].Operation == XGS_OP_RENAME)     ? L"重命名" :
+                    (notify->Files[i].Operation == XGS_OP_EXT_CHANGE) ? L"扩展名变更" :
+                    (notify->Files[i].Operation == XGS_OP_MODIFY)     ? L"修改" :
+                                                                       L"操作";
 
                 if (notify->Files[i].OriginalPath[0] != L'\0')
                 {
@@ -1238,12 +1286,14 @@ int wmain(int argc, wchar_t* argv[])
 
             swprintf_s(message, ARRAYSIZE(message),
                 L"检测到疑似勒索软件行为!\n\n"
-                L"短时间内有 %u 个文档被修改或删除 (通知 ID: %llu)\n\n"
-                L"以下文件已在修改前自动备份到:\n"
-                L"C:\\Windows\\Temp\\XGS\\Backup\\\n\n"
+                L"触发进程: %ws (PID: %lu)\n\n"
+                L"%ls"
+                L"受影响文件 (已自动备份):\n"
                 L"%ls\n"
                 L"请选择处理方式:",
-                notify->FileCount, notify->NotificationId, fileList);
+                notify->ProcessName[0] ? notify->ProcessName : L"(未知进程)",
+                notify->ProcessId,
+                ruleDetails, fileList);
 
             TASKDIALOG_BUTTON taskButtons[] = {
                 { 200, L"放行继续" },
@@ -1272,6 +1322,7 @@ int wmain(int argc, wchar_t* argv[])
             AV_PIPE_RANSOM_DECISION_DATA decision;
             ZeroMemory(&decision, sizeof(decision));
             decision.NotificationId = notify->NotificationId;
+            decision.ProcessId = notify->ProcessId;
             decision.Decision = XGS_DECISION_STAY_BLOCK;   // 默认: 关闭/取消 -> 保持阻断
             switch (taskButton)
             {

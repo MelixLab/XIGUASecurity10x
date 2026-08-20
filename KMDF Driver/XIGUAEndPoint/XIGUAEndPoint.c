@@ -44,38 +44,32 @@ ZwTerminateProcess(
 NTKERNELAPI
 NTSTATUS
 NTAPI
-ZwOpenThread(
-    _Out_ PHANDLE ThreadHandle,
-    _In_ ACCESS_MASK DesiredAccess,
-    _In_ POBJECT_ATTRIBUTES ObjectAttributes,
-    _In_opt_ PCLIENT_ID ClientId
-    );
-
-NTKERNELAPI
-NTSTATUS
-NTAPI
-ZwSuspendThread(
-    _In_ HANDLE ThreadHandle,
-    _Out_opt_ PULONG PreviousSuspendCount
-    );
-
-NTKERNELAPI
-NTSTATUS
-NTAPI
-ZwResumeThread(
-    _In_ HANDLE ThreadHandle,
-    _Out_opt_ PULONG PreviousSuspendCount
-    );
-
-NTKERNELAPI
-NTSTATUS
-NTAPI
 ZwQueryInformationProcess(
     _In_ HANDLE ProcessHandle,
     _In_ ULONG ProcessInformationClass,
     _Out_ PVOID ProcessInformation,
     _In_ ULONG ProcessInformationLength,
     _Out_opt_ PULONG ReturnLength
+    );
+
+//
+// ZwOpenThread / ZwSuspendThread / ZwResumeThread
+// Win10 ntoskrnl.exe 不导出 (Win11 才导出), 静态链接会导致驱动在 Win10
+// 加载时报 ERROR_PROC_NOT_FOUND (127), 必须动态解析。
+//
+typedef NTSTATUS (NTAPI *EP_PF_ZW_OPEN_THREAD)(
+    _Out_ PHANDLE ThreadHandle,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ POBJECT_ATTRIBUTES ObjectAttributes,
+    _In_opt_ PCLIENT_ID ClientId
+    );
+typedef NTSTATUS (NTAPI *EP_PF_ZW_SUSPEND_THREAD)(
+    _In_ HANDLE ThreadHandle,
+    _Out_opt_ PULONG PreviousSuspendCount
+    );
+typedef NTSTATUS (NTAPI *EP_PF_ZW_RESUME_THREAD)(
+    _In_ HANDLE ThreadHandle,
+    _Out_opt_ PULONG PreviousSuspendCount
     );
 
 //
@@ -101,6 +95,9 @@ typedef NTSTATUS (NTAPI *EP_NT_RESUME_PROCESS)(_In_ HANDLE ProcessHandle);
 static EP_NT_GET_NEXT_THREAD  g_pNtGetNextThread  = NULL;
 static EP_NT_SUSPEND_PROCESS  g_pNtSuspendProcess = NULL;
 static EP_NT_RESUME_PROCESS   g_pNtResumeProcess  = NULL;
+static EP_PF_ZW_OPEN_THREAD   g_pZwOpenThread     = NULL;
+static EP_PF_ZW_SUSPEND_THREAD g_pZwSuspendThread  = NULL;
+static EP_PF_ZW_RESUME_THREAD  g_pZwResumeThread   = NULL;
 
 NTKERNELAPI
 PCHAR
@@ -1480,10 +1477,12 @@ EpSuspendProcess(
                 tid.UniqueProcess = NULL;
                 tid.UniqueThread = (HANDLE)PsGetThreadId(hThread);
 
-                if (NT_SUCCESS(ZwOpenThread(&hOpen, THREAD_SUSPEND_RESUME,
+                if (g_pZwOpenThread != NULL &&
+                    NT_SUCCESS(g_pZwOpenThread(&hOpen, THREAD_SUSPEND_RESUME,
                                             &toa, &tid)))
                 {
-                    if (ZwSuspendThread(hOpen, NULL) == STATUS_SUCCESS)
+                    if (g_pZwSuspendThread != NULL &&
+                        g_pZwSuspendThread(hOpen, NULL) == STATUS_SUCCESS)
                     {
                         suspect->ThreadHandles[suspect->ThreadCount++] = hOpen;
                     }
@@ -1543,7 +1542,8 @@ EpResumeProcess(
         ULONG i;
         for (i = 0; i < suspect->ThreadCount; i++)
         {
-            ZwResumeThread(suspect->ThreadHandles[i], NULL);
+            if (g_pZwResumeThread != NULL)
+                g_pZwResumeThread(suspect->ThreadHandles[i], NULL);
             ZwClose(suspect->ThreadHandles[i]);
             suspect->ThreadHandles[i] = NULL;
         }
@@ -1854,7 +1854,181 @@ EpWorkerRoutine(
 }
 
 //=============================================================================
-// HMAC-SHA256 (BCrypt)
+// 内联 SHA-256 + HMAC-SHA256 (无 BCrypt/cng.sys 依赖, FIPS 180-4)
+//=============================================================================
+
+#define SHA256_ROTR(x,n)  (((x) >> (n)) | ((x) << (32 - (n))))
+#define SHA256_SHR(x,n)   ((x) >> (n))
+#define SHA256_CH(x,y,z)  (((x) & (y)) ^ (~(x) & (z)))
+#define SHA256_MAJ(x,y,z) (((x) & (y)) ^ ((x) & (z)) ^ ((y) & (z)))
+#define SHA256_BSIG0(x)   (SHA256_ROTR(x,2) ^ SHA256_ROTR(x,13) ^ SHA256_ROTR(x,22))
+#define SHA256_BSIG1(x)   (SHA256_ROTR(x,6) ^ SHA256_ROTR(x,11) ^ SHA256_ROTR(x,25))
+#define SHA256_SSIG0(x)   (SHA256_ROTR(x,7) ^ SHA256_ROTR(x,18) ^ SHA256_SHR(x,3))
+#define SHA256_SSIG1(x)   (SHA256_ROTR(x,17) ^ SHA256_ROTR(x,19) ^ SHA256_SHR(x,10))
+
+typedef struct _SHA256_CTX {
+    ULONG       state[8];
+    ULONGLONG   bitlen;
+    ULONG       datalen;
+    UCHAR       data[64];
+} SHA256_CTX;
+
+static const ULONG sha256_k[64] = {
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
+    0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+    0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
+    0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+    0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+    0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
+    0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
+    0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+    0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+};
+
+static void sha256_transform(SHA256_CTX *ctx, const UCHAR *data)
+{
+    ULONG w[64];
+    ULONG a, b, c, d, e, f, g, h, t1, t2;
+    int i;
+
+    for (i = 0; i < 16; i++)
+        w[i] = ((ULONG)data[i*4] << 24) | ((ULONG)data[i*4+1] << 16) |
+               ((ULONG)data[i*4+2] << 8) | (ULONG)data[i*4+3];
+
+    for (i = 16; i < 64; i++)
+        w[i] = SHA256_SSIG1(w[i-2]) + w[i-7] + SHA256_SSIG0(w[i-15]) + w[i-16];
+
+    a = ctx->state[0]; b = ctx->state[1]; c = ctx->state[2]; d = ctx->state[3];
+    e = ctx->state[4]; f = ctx->state[5]; g = ctx->state[6]; h = ctx->state[7];
+
+    for (i = 0; i < 64; i++) {
+        t1 = h + SHA256_BSIG1(e) + SHA256_CH(e,f,g) + sha256_k[i] + w[i];
+        t2 = SHA256_BSIG0(a) + SHA256_MAJ(a,b,c);
+        h = g; g = f; f = e; e = d + t1;
+        d = c; c = b; b = a; a = t1 + t2;
+    }
+
+    ctx->state[0] += a; ctx->state[1] += b; ctx->state[2] += c; ctx->state[3] += d;
+    ctx->state[4] += e; ctx->state[5] += f; ctx->state[6] += g; ctx->state[7] += h;
+}
+
+static void sha256_init(SHA256_CTX *ctx)
+{
+    ctx->datalen = 0;
+    ctx->bitlen = 0;
+    ctx->state[0] = 0x6a09e667;
+    ctx->state[1] = 0xbb67ae85;
+    ctx->state[2] = 0x3c6ef372;
+    ctx->state[3] = 0xa54ff53a;
+    ctx->state[4] = 0x510e527f;
+    ctx->state[5] = 0x9b05688c;
+    ctx->state[6] = 0x1f83d9ab;
+    ctx->state[7] = 0x5be0cd19;
+}
+
+static void sha256_update(SHA256_CTX *ctx, const UCHAR *data, ULONG len)
+{
+    ULONG i;
+    for (i = 0; i < len; i++) {
+        ctx->data[ctx->datalen++] = data[i];
+        if (ctx->datalen == 64) {
+            sha256_transform(ctx, ctx->data);
+            ctx->bitlen += 512;
+            ctx->datalen = 0;
+        }
+    }
+}
+
+static void sha256_final(SHA256_CTX *ctx, UCHAR *hash)
+{
+    ULONG i = ctx->datalen;
+
+    ctx->data[i++] = 0x80;
+
+    if (ctx->datalen < 56) {
+        while (i < 56) ctx->data[i++] = 0;
+    } else {
+        while (i < 64) ctx->data[i++] = 0;
+        sha256_transform(ctx, ctx->data);
+        RtlZeroMemory(ctx->data, 56);
+    }
+
+    ctx->bitlen += (ULONGLONG)ctx->datalen * 8;
+    ctx->data[63] = (UCHAR)(ctx->bitlen);
+    ctx->data[62] = (UCHAR)(ctx->bitlen >> 8);
+    ctx->data[61] = (UCHAR)(ctx->bitlen >> 16);
+    ctx->data[60] = (UCHAR)(ctx->bitlen >> 24);
+    ctx->data[59] = (UCHAR)(ctx->bitlen >> 32);
+    ctx->data[58] = (UCHAR)(ctx->bitlen >> 40);
+    ctx->data[57] = (UCHAR)(ctx->bitlen >> 48);
+    ctx->data[56] = (UCHAR)(ctx->bitlen >> 56);
+
+    sha256_transform(ctx, ctx->data);
+
+    for (i = 0; i < 8; i++) {
+        hash[i*4]   = (UCHAR)(ctx->state[i] >> 24);
+        hash[i*4+1] = (UCHAR)(ctx->state[i] >> 16);
+        hash[i*4+2] = (UCHAR)(ctx->state[i] >> 8);
+        hash[i*4+3] = (UCHAR)(ctx->state[i]);
+    }
+
+    RtlZeroMemory(ctx, sizeof(*ctx));
+}
+
+static void hmac_sha256(
+    const UCHAR *Key, ULONG KeyLen,
+    const UCHAR *Data, ULONG DataLen,
+    UCHAR *Hmac)
+{
+    UCHAR k_ipad[64];
+    UCHAR k_opad[64];
+    UCHAR tk[32];
+    UCHAR inner_hash[32];
+    SHA256_CTX ctx;
+    ULONG i;
+
+    if (KeyLen > 64) {
+        sha256_init(&ctx);
+        sha256_update(&ctx, Key, KeyLen);
+        sha256_final(&ctx, tk);
+        Key = tk;
+        KeyLen = 32;
+    }
+
+    RtlZeroMemory(k_ipad, 64);
+    RtlZeroMemory(k_opad, 64);
+    RtlCopyMemory(k_ipad, Key, KeyLen);
+    RtlCopyMemory(k_opad, Key, KeyLen);
+
+    for (i = 0; i < 64; i++) {
+        k_ipad[i] ^= 0x36;
+        k_opad[i] ^= 0x5c;
+    }
+
+    sha256_init(&ctx);
+    sha256_update(&ctx, k_ipad, 64);
+    sha256_update(&ctx, Data, DataLen);
+    sha256_final(&ctx, inner_hash);
+
+    sha256_init(&ctx);
+    sha256_update(&ctx, k_opad, 64);
+    sha256_update(&ctx, inner_hash, 32);
+    sha256_final(&ctx, Hmac);
+
+    RtlZeroMemory(k_ipad, 64);
+    RtlZeroMemory(k_opad, 64);
+    RtlZeroMemory(inner_hash, 32);
+}
+
+//=============================================================================
+// EpHmac - HMAC-SHA256 (内联实现, 无 cng.sys 依赖)
 //=============================================================================
 static
 NTSTATUS
@@ -1864,35 +2038,8 @@ EpHmac(
     _Out_writes_bytes_(AV_HASH_SIZE) UCHAR* out
     )
 {
-    BCRYPT_ALG_HANDLE alg = NULL;
-    BCRYPT_HASH_HANDLE hash = NULL;
-    NTSTATUS st;
-
-    st = BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, NULL,
-                                     BCRYPT_ALG_HANDLE_HMAC_FLAG);
-    if (!NT_SUCCESS(st))
-    {
-        return st;
-    }
-    st = BCryptCreateHash(alg, &hash, NULL, 0,
-                          (PUCHAR)AV_SHARED_KEY, AV_SHARED_KEY_SIZE, 0);
-    if (!NT_SUCCESS(st))
-    {
-        BCryptCloseAlgorithmProvider(alg, 0);
-        return st;
-    }
-    st = BCryptHashData(hash, (PUCHAR)data, dataLen, 0);
-    if (!NT_SUCCESS(st))
-    {
-        BCryptDestroyHash(hash);
-        BCryptCloseAlgorithmProvider(alg, 0);
-        return st;
-    }
-    st = BCryptFinishHash(hash, out, AV_HASH_SIZE, 0);
-
-    BCryptDestroyHash(hash);
-    BCryptCloseAlgorithmProvider(alg, 0);
-    return st;
+    hmac_sha256(AV_SHARED_KEY, AV_SHARED_KEY_SIZE, data, dataLen, out);
+    return STATUS_SUCCESS;
 }
 
 //=============================================================================
@@ -1924,7 +2071,9 @@ EpIoctlAuthInit(
     AV_AUTH_CHALLENGE* out = (AV_AUTH_CHALLENGE*)systemBuffer;
     NTSTATUS st;
     KIRQL irql;
-    BCRYPT_ALG_HANDLE hRng = NULL;
+    LARGE_INTEGER sysTime;
+    ULONG seed;
+    ULONG i;
 
     *info = 0;
 
@@ -1933,17 +2082,20 @@ EpIoctlAuthInit(
         return STATUS_BUFFER_TOO_SMALL;
     }
 
-    st = BCryptOpenAlgorithmProvider(&hRng, BCRYPT_RNG_ALGORITHM, NULL, 0);
-    if (!NT_SUCCESS(st))
-    {
-        KdPrint(("XGSEndPoint: BCryptOpenAlgorithmProvider(RNG) failed 0x%08lX\n", st));
-        return st;
-    }
-    st = BCryptGenRandom(hRng, g_Ep.Challenge, AV_CHALLENGE_SIZE, 0);
-    BCryptCloseAlgorithmProvider(hRng, 0);
-    if (!NT_SUCCESS(st))
-    {
-        return st;
+    //
+    // 内联随机数生成 (无 BCryptGenRandom/cng.sys 依赖)
+    //
+    KeQuerySystemTime(&sysTime);
+    seed = sysTime.LowPart ^
+           (ULONG)(ULONG_PTR)PsGetCurrentProcessId() ^
+           (ULONG)(ULONG_PTR)&g_Ep.Challenge;
+
+    for (i = 0; i < AV_CHALLENGE_SIZE; i += sizeof(ULONG)) {
+        seed = seed * 1103515245 + 12345;
+        ULONG rand = (seed >> 16) & 0x7FFF;
+        rand |= (seed & 0xFFFF) << 15;
+        ULONG copyLen = (AV_CHALLENGE_SIZE - i < sizeof(ULONG)) ? (AV_CHALLENGE_SIZE - i) : sizeof(ULONG);
+        RtlCopyMemory(g_Ep.Challenge + i, &rand, copyLen);
     }
 
     KeAcquireSpinLock(&g_Ep.Lock, &irql);
@@ -2588,8 +2740,21 @@ DriverEntry(
         g_pNtResumeProcess = (EP_NT_RESUME_PROCESS)
             MmGetSystemRoutineAddress(&apiName);
 
-        KdPrint(("XGSEndPoint: Suspend APIs - NtSuspendProcess=%p NtResumeProcess=%p NtGetNextThread=%p\n",
-                 g_pNtSuspendProcess, g_pNtResumeProcess, g_pNtGetNextThread));
+        RtlInitUnicodeString(&apiName, L"ZwOpenThread");
+        g_pZwOpenThread = (EP_PF_ZW_OPEN_THREAD)
+            MmGetSystemRoutineAddress(&apiName);
+
+        RtlInitUnicodeString(&apiName, L"ZwSuspendThread");
+        g_pZwSuspendThread = (EP_PF_ZW_SUSPEND_THREAD)
+            MmGetSystemRoutineAddress(&apiName);
+
+        RtlInitUnicodeString(&apiName, L"ZwResumeThread");
+        g_pZwResumeThread = (EP_PF_ZW_RESUME_THREAD)
+            MmGetSystemRoutineAddress(&apiName);
+
+        KdPrint(("XGSEndPoint: DynAPI - NtSuspendProcess=%p NtResumeProcess=%p NtGetNextThread=%p ZwOpenThread=%p ZwSuspendThread=%p ZwResumeThread=%p\n",
+                 g_pNtSuspendProcess, g_pNtResumeProcess, g_pNtGetNextThread,
+                 g_pZwOpenThread, g_pZwSuspendThread, g_pZwResumeThread));
     }
 
     DriverObject->DriverUnload = EpUnload;

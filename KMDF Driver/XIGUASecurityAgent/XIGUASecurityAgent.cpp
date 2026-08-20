@@ -12,7 +12,9 @@
 #include <strsafe.h>
 #include <commctrl.h>
 #include <tlhelp32.h>
+#include <sddl.h>
 #pragma comment(lib, "comctl32.lib")
+#pragma comment(lib, "advapi32.lib")
 //
 // 启用 ComCtl32 v6 以使用 TaskDialogIndirect (4 按钮弹窗)
 //
@@ -1003,6 +1005,30 @@ RunPipeServer(
         return FALSE;
     }
 
+    //
+    // 构建管道安全描述符: SYSTEM 完全控制 + Admins 完全控制 + Everyone 读写
+    // (普通用户权限的 AVMain 也可连接, 不再报 ERROR_ACCESS_DENIED)
+    //
+    SECURITY_ATTRIBUTES  sa;
+    SECURITY_DESCRIPTOR* pSD = NULL;
+    ZeroMemory(&sa, sizeof(sa));
+    if (ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;WD)",
+            SDDL_REVISION_1,
+            (PSECURITY_DESCRIPTOR*)&pSD,
+            NULL))
+    {
+        sa.nLength = sizeof(sa);
+        sa.lpSecurityDescriptor = pSD;
+        sa.bInheritHandle = FALSE;
+        printf("[AVSystem] Pipe SD initialized (Everyone read/write allowed)\n");
+    }
+    else
+    {
+        printf("[AVSystem] ConvertStringSecurityDescriptor failed (error: %lu), using NULL SD\n",
+               GetLastError());
+    }
+
     while (TRUE)
     {
         //
@@ -1022,7 +1048,7 @@ RunPipeServer(
             AV_PIPE_BUFFER_SIZE,
             AV_PIPE_BUFFER_SIZE,
             AV_PIPE_TIMEOUT,
-            NULL
+            (pSD != NULL) ? &sa : NULL
         );
 
         if (hPipe == INVALID_HANDLE_VALUE)
@@ -1136,6 +1162,11 @@ RunPipeServer(
 
 shutdown_exit:
     CloseHandle(hConnectEvent);
+    if (pSD != NULL)
+    {
+        LocalFree(pSD);
+        pSD = NULL;
+    }
     return TRUE;
 }
 
@@ -3267,7 +3298,8 @@ ConnectToXgsDriver(
 //=============================================================================
 // 勒索防护监控线程
 //
-// 轮询 XGS 驱动获取勒索触发通知 (60 秒窗口内文档改动 >= 20 次),
+// 轮询 XGS 驱动获取勒索触发通知 (多维评分: 进程级跟踪+熵分析+扩展名变更+
+// 文件操作多样性, 评分达到阈值 100 触发阻断),
 // 转发 AVMain 弹窗决策, 决策通过 IOCTL 送回 XGS 驱动:
 //   1=放行继续 2=保持阻断 3=仅恢复
 // AVMain 未连接或决策超时 -> 默认保持阻断 (驱动 60 秒无决策自动放行兜底)
@@ -3317,15 +3349,22 @@ RansomMonitorThread(
         }
 
         lastNotifId = notification.NotificationId;
-        printf("[AVRansom] Ransomware suspected! %u files affected, ID=%llu\n",
+        printf("[AVRansom] Ransomware suspected! PID=%lu name=%ws score=%u flags=0x%02X "
+               "%u files affected, ID=%llu\n",
+               notification.ProcessId,
+               notification.ProcessName[0] ? notification.ProcessName : L"(unknown)",
+               notification.ThreatScore, notification.DetectionFlags,
                notification.FileCount, notification.NotificationId);
 
         for (UINT32 i = 0; i < notification.FileCount; i++)
         {
-            printf("[AVRansom]   [%u] op=%u %ls\n",
-                   i,
-                   notification.Files[i].Operation,
-                   notification.Files[i].OriginalPath);
+            const char* opDesc =
+                (notification.Files[i].Operation == XGS_OP_DELETE)    ? "DEL" :
+                (notification.Files[i].Operation == XGS_OP_RENAME)    ? "REN" :
+                (notification.Files[i].Operation == XGS_OP_EXT_CHANGE) ? "EXT" :
+                                                                        "MOD";
+            printf("[AVRansom]   [%u] %s %ls\n",
+                   i, opDesc, notification.Files[i].OriginalPath);
         }
 
         EnterCriticalSection(&g_MainPipeLock);
@@ -3335,6 +3374,10 @@ RansomMonitorThread(
         AV_PIPE_RANSOM_NOTIFY_DATA notifyMsg;
         ZeroMemory(&notifyMsg, sizeof(notifyMsg));
         notifyMsg.NotificationId = notification.NotificationId;
+        notifyMsg.ProcessId = notification.ProcessId;
+        CopyMemory(notifyMsg.ProcessName, notification.ProcessName, sizeof(notifyMsg.ProcessName));
+        notifyMsg.ThreatScore = notification.ThreatScore;
+        notifyMsg.DetectionFlags = notification.DetectionFlags;
         notifyMsg.FileCount = notification.FileCount;
         CopyMemory(notifyMsg.Files, notification.Files, sizeof(notifyMsg.Files));
 
@@ -3378,6 +3421,7 @@ RansomMonitorThread(
         ZeroMemory(&decisionMsg, sizeof(decisionMsg));
         decisionMsg.NotificationId = notification.NotificationId;
         decisionMsg.Decision = decision;
+        decisionMsg.ProcessId = notification.ProcessId;
 
         if (!DeviceIoControl(
                 hXgs,
@@ -4832,9 +4876,13 @@ RunService(VOID)
     }
 
     //
-    // 自动安装并启动 XGS 勒索防护驱动
+    // XGS 勒索防护驱动 — 已禁用 (临时关闭, 修复误报后取消注释即可恢复)
+    // 取消下方注释并删除 "DISABLED" 行即可恢复勒索防护
     //
+    // DISABLED: EnsureXgsDriverRunning / ConnectToXgsDriver
     HANDLE hXgs = INVALID_HANDLE_VALUE;
+    printf("[AVSystem] XGS ransomware protection DISABLED (skipped driver init)\n");
+#if 0
     if (!EnsureXgsDriverRunning())
     {
         printf("[AVSystem] XGS driver init failed, continuing without ransomware protection\n");
@@ -4844,6 +4892,7 @@ RunService(VOID)
         printf("[AVSystem] XGS driver connection failed, continuing without ransomware protection\n");
         hXgs = INVALID_HANDLE_VALUE;
     }
+#endif
 
     //
     // 自动安装并启动 EndPoint 端点防护驱动
@@ -5067,6 +5116,22 @@ wmain(
     _In_reads_(argc) LPWSTR* argv
 )
 {
+    //
+    // SubSystem=Windows 下默认无控制台窗口。
+    // 命令行带参数时 (如 -install/-diag) 附加到父进程控制台, 方便看到输出。
+    // 无参数直接运行 (服务模式/双击启动) 不创建控制台, 完全静默。
+    //
+    BOOL hasParentConsole = FALSE;
+    if (argc > 1)
+    {
+        if (AttachConsole(ATTACH_PARENT_PROCESS))
+        {
+            hasParentConsole = TRUE;
+            freopen("CONOUT$", "w", stdout);
+            freopen("CONOUT$", "w", stderr);
+        }
+    }
+
     // 带参数时按命令处理
     if (argc > 1)
     {

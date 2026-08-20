@@ -16,36 +16,39 @@
 //=============================================================================
 // 手动声明的内核 API
 //
-// ZwOpenThread/ZwSuspendThread/ZwResumeThread 为 Zw* 导出, 当前 WDK 头文件
-// 未声明 (仅能用于 PASSIVE_LEVEL, 不能在回调中调用);
+// ZwSuspendProcess / ZwResumeProcess: 进程级挂起/恢复
+// 未文档化 API, 不在 ntoskrnl.lib 导入库中, 必须动态解析
+// 一次性冻结/恢复整个进程的所有线程, 消除竞态窗口
+//
+// ZwOpenThread / ZwSuspendThread / ZwResumeThread
+// Win10 ntoskrnl.exe 不导出 (Win11 才导出), 静态链接会导致驱动在 Win10
+// 加载时报 ERROR_PROC_NOT_FOUND (127), 必须动态解析。
 // PROCESS_TERMINATE/THREAD_SUSPEND_RESUME/THREAD_ALL_ACCESS 内核头文件
 // 未定义 (值来自 winnt.h)
 //=============================================================================
-NTKERNELAPI
-NTSTATUS
-NTAPI
-ZwOpenThread(
+typedef NTSTATUS (NTAPI *PFN_ZwSuspendProcess)(_In_ HANDLE ProcessHandle);
+typedef NTSTATUS (NTAPI *PFN_ZwResumeProcess)(_In_ HANDLE ProcessHandle);
+
+typedef NTSTATUS (NTAPI *PFN_ZwOpenThread)(
     _Out_ PHANDLE ThreadHandle,
     _In_ ACCESS_MASK DesiredAccess,
     _In_ POBJECT_ATTRIBUTES ObjectAttributes,
     _In_opt_ PCLIENT_ID ClientId
     );
-
-NTKERNELAPI
-NTSTATUS
-NTAPI
-ZwSuspendThread(
+typedef NTSTATUS (NTAPI *PFN_ZwSuspendThread)(
+    _In_ HANDLE ThreadHandle,
+    _Out_opt_ PULONG PreviousSuspendCount
+    );
+typedef NTSTATUS (NTAPI *PFN_ZwResumeThread)(
     _In_ HANDLE ThreadHandle,
     _Out_opt_ PULONG PreviousSuspendCount
     );
 
-NTKERNELAPI
-NTSTATUS
-NTAPI
-ZwResumeThread(
-    _In_ HANDLE ThreadHandle,
-    _Out_opt_ PULONG PreviousSuspendCount
-    );
+static PFN_ZwSuspendProcess g_pZwSuspendProcess = NULL;
+static PFN_ZwResumeProcess  g_pZwResumeProcess  = NULL;
+static PFN_ZwOpenThread     g_pZwOpenThread     = NULL;
+static PFN_ZwSuspendThread  g_pZwSuspendThread  = NULL;
+static PFN_ZwResumeThread   g_pZwResumeThread   = NULL;
 
 #ifndef PROCESS_TERMINATE
 #define PROCESS_TERMINATE  0x0001
@@ -53,6 +56,10 @@ ZwResumeThread(
 
 #ifndef THREAD_SUSPEND_RESUME
 #define THREAD_SUSPEND_RESUME 0x0002
+#endif
+
+#ifndef PROCESS_SUSPEND_RESUME
+#define PROCESS_SUSPEND_RESUME 0x0800
 #endif
 
 #ifndef THREAD_ALL_ACCESS
@@ -82,7 +89,7 @@ AV_NON_PAGED UINT32           g_ProtectedDirCount = 0;
 //
 AV_NON_PAGED static WCHAR      g_AllowList[AV_ALLOW_LIST_MAX][AV_MAX_PROCESS_PATH_LEN];
 AV_NON_PAGED static UINT32     g_AllowListCount = 0;
-static WDFWAITLOCK g_AllowListLock = NULL;
+static KSPIN_LOCK g_AllowListLock;
 
 //
 // 黑名单路径数组 (受 WDFWAITLOCK 保护, 仅 PASSIVE_LEVEL 写; 回调 APC_LEVEL 读)
@@ -90,7 +97,7 @@ static WDFWAITLOCK g_AllowListLock = NULL;
 //
 AV_NON_PAGED static WCHAR      g_DenyList[AV_ALLOW_LIST_MAX][AV_MAX_PROCESS_PATH_LEN];
 AV_NON_PAGED static UINT32     g_DenyListCount = 0;
-static WDFWAITLOCK g_DenyListLock = NULL;
+static KSPIN_LOCK g_DenyListLock;
 
 //
 // 待处理通知 (单条目, 受 KSPIN_LOCK 保护, 回调在 APC_LEVEL 访问)
@@ -130,7 +137,7 @@ typedef struct _AV_BEHAVIOR_RULE
 AV_NON_PAGED static const AV_BEHAVIOR_RULE g_BehaviorRules[] =
 {
     //
-    // 计划任务 / 服务 / 用户管理
+    // ===== 计划任务 / 服务 / 用户管理 =====
     //
     { L"schtasks /create", NULL, L"Create scheduled task" },
     { L"schtasks /change", NULL, L"Modify scheduled task" },
@@ -140,28 +147,103 @@ AV_NON_PAGED static const AV_BEHAVIOR_RULE g_BehaviorRules[] =
     { L"net localgroup administrators /add", NULL, L"Add user to administrators group" },
 
     //
-    // 恶意删除 / 格式化
+    // ===== 恶意删除 / 格式化 / 破坏性操作 =====
     //
     { L"del c:\\",         NULL, L"Delete files on C:\\ (malicious delete)" },
     { L"format c:",        NULL, L"Format C: drive" },
+    { L"diskshadow",       NULL, L"Disk shadow operation (ransomware/disk wipe)" },
+    { L"vssadmin delete shadows", NULL, L"Delete volume shadow copies (ransomware prep)" },
+    { L"wbadmin delete",   NULL, L"Delete backup catalog (ransomware prep)" },
+    { L"bcdedit /set safeboot", NULL, L"Force safe mode boot (ransomware)" },
+    { L"cipher /w",        NULL, L"Disk wipe via cipher (destructive)" },
+    { L"diskpart",         L"clean", L"Disk wipe via diskpart clean" },
 
     //
-    // 启动配置
+    // ===== 启动配置 / UAC 关闭 =====
     //
     { L"bcdedit /set",     NULL, L"Modify boot configuration" },
-
-    //
-    // 关闭用户账户控制 (UAC)
-    // 恶意软件重启后无管理员权限无法配置自启动,
-    // 常通过注册表关闭 UAC (EnableLUA=0) 实现无提示自启动。
-    // Context 限定为写入动作 (reg add / Set-ItemProperty),
-    // 避免 reg query 等读取操作误报。
-    //
     { L"EnableLUA",                  L"reg add",         L"Disable UAC (EnableLUA=0)" },
     { L"EnableLUA",                  L"Set-ItemProperty", L"Disable UAC via PowerShell (EnableLUA=0)" },
     { L"ConsentPromptBehaviorAdmin", L"reg add",         L"Disable UAC consent prompt" },
     { L"PromptOnSecureDesktop",      L"reg add",         L"Disable UAC secure desktop" },
     { L"EnableInstallerDetection",   L"reg add",         L"Disable UAC installer detection" },
+
+    //
+    // ===== PowerShell 恶意下载器 (银狐核心投递手法) =====
+    // 银狐木马大量使用 PowerShell 下载执行恶意载荷, 以下覆盖常见变体
+    //
+    { L"iex",              L"Net.WebClient",   L"PowerShell download cradle (IEX+WebClient)" },
+    { L"Invoke-Expression",L"DownloadString",  L"PowerShell download cradle (IEX+DownloadString)" },
+    { L"Net.WebClient",    L"DownloadFile",    L"PowerShell file download (WebClient)" },
+    { L"Invoke-WebRequest",L"http",            L"PowerShell web request to remote URL" },
+    { L"Invoke-RestMethod",L"http",            L"PowerShell REST request to remote URL" },
+    { L"Start-BitsTransfer", L"http",          L"PowerShell BitsTransfer download" },
+    { L"curl",             L"http",            L"curl download from remote URL" },
+    { L"wget",             L"http",            L"wget download from remote URL" },
+
+    //
+    // ===== PowerShell 隐蔽执行 (银狐常用绕过手法) =====
+    //
+    { L"-WindowStyle Hidden",   L"powershell",  L"PowerShell hidden window execution" },
+    { L"-w hidden",             L"powershell",  L"PowerShell hidden window (short flag)" },
+    { L"-ExecutionPolicy Bypass", NULL,          L"PowerShell execution policy bypass" },
+    { L"-ep bypass",            L"powershell",  L"PowerShell execution policy bypass (short)" },
+    { L"-enc ",                 NULL,           L"PowerShell encoded command (base64 obfuscation)" },
+    { L"-encodedcommand",       NULL,           L"PowerShell encoded command (full flag)" },
+
+    //
+    // ===== 安全软件终止 (银狐对抗安全软件) =====
+    // 银狐木马植入后会终止安全软件进程, 阻断查杀
+    //
+    { L"taskkill",         L"/f",              L"Force kill process (potential AV termination)" },
+    { L"taskkill",         L"360",             L"Attempt to terminate 360 security software" },
+    { L"taskkill",         L"huorong",         L"Attempt to terminate Huorong security software" },
+    { L"taskkill",         L"avp",             L"Attempt to terminate Kaspersky AV" },
+    { L"taskkill",         L"tmnsrv",          L"Attempt to terminate Trend Micro" },
+    { L"taskkill",         L"msmpeng",         L"Attempt to terminate Windows Defender" },
+    { L"taskkill",         L"avgsvc",          L"Attempt to terminate AVG antivirus" },
+    { L"taskkill",         L"avira",           L"Attempt to terminate Avira antivirus" },
+    { L"net stop",         L"WinDefend",       L"Stop Windows Defender service" },
+    { L"net stop",         L"MsMpSvc",         L"Stop Microsoft Antimalware service" },
+    { L"net stop",         L"360",             L"Stop 360 security service" },
+    { L"sc stop",          L"WinDefend",       L"Stop Windows Defender via sc" },
+    { L"sc config",        L"WinDefend",       L"Modify Windows Defender service config" },
+    { L"sc config",        L"start= disabled", L"Disable service via sc config" },
+
+    //
+    // ===== 系统工具滥用 (LotL - Living off the Land) =====
+    // 银狐利用系统自带工具下载/执行恶意代码, 绕过特征检测
+    //
+    { L"certutil",         L"-urlcache",       L"Certutil file download (LotL)" },
+    { L"certutil",         L"-decode",         L"Certutil base64 decode (payload extraction)" },
+    { L"bitsadmin",        L"/transfer",       L"Bitsadmin file download (LotL)" },
+    { L"bitsadmin",        L"/create",         L"Bitsadmin job creation (download)" },
+    { L"mshta",            L"http",            L"MSHTA remote HTA execution (LotL)" },
+    { L"regsvr32",         L"/u /i:",          L"Regsvr32 remote scriptlet execution (LotL)" },
+    { L"regsvr32",         L"/s /u /i:",       L"Regsvr32 silent remote scriptlet (LotL)" },
+    { L"wmic process call create", NULL,        L"WMI remote process creation" },
+    { L"installutil",      L"/logfile=",       L"InstallUtil abuse (LotL code execution)" },
+    { L"msbuild",          L"/c",              L"MSBuild abuse (inline task execution)" },
+
+    //
+    // ===== 远程桌面工具静默安装 (银狐×AnyDesk 核心手法) =====
+    // 银狐木马静默部署 AnyDesk/ToDesk 等合法远控工具作为后门
+    //
+    { L"anydesk",          L"/silent",         L"AnyDesk silent installation (SilverFox backdoor)" },
+    { L"anydesk",          L"/install",        L"AnyDesk installation (potential backdoor)" },
+    { L"anydesk",          L"--start-with-win", L"AnyDesk auto-start config" },
+    { L"todesk",           L"--silent",        L"ToDesk silent installation" },
+
+    //
+    // ===== 可疑进程链 (银狐常见父进程) =====
+    // 这些命令行模式通常出现在从钓鱼文档/白加黑载荷派生的恶意进程链中
+    //
+    { L"cmd /c",           L"powershell",      L"CMD spawning PowerShell (suspicious chain)" },
+    { L"cmd /k",           L"powershell",      L"CMD spawning PowerShell (suspicious chain)" },
+    { L"rundll32",         L"\\Temp\\",        L"Rundll32 loading DLL from Temp directory" },
+    { L"rundll32",         L"\\Downloads\\",   L"Rundll32 loading DLL from Downloads" },
+    { L"regasm",           L"\\Temp\\",        L"Regasm loading assembly from Temp" },
+    { L"regsvcs",          L"\\Temp\\",        L"Regsvcs loading assembly from Temp" },
 };
 AV_NON_PAGED static const UINT32 g_BehaviorRuleCount =
     sizeof(g_BehaviorRules) / sizeof(g_BehaviorRules[0]);
@@ -214,6 +296,7 @@ typedef struct _AV_SUSPEND_ENTRY
     UINT32  ThreadCount;
     AV_TID_STATE ThreadState[AV_MAX_TRACKED_THREADS];
     HANDLE  ThreadIds[AV_MAX_TRACKED_THREADS];
+    BOOLEAN ProcessSuspended;       // 是否已执行 ZwSuspendProcess (进程级挂起)
 } AV_SUSPEND_ENTRY;
 
 AV_NON_PAGED static AV_SUSPEND_ENTRY g_SuspendList[AV_SUSPEND_LIST_MAX];
@@ -225,6 +308,11 @@ AV_NON_PAGED static BOOLEAN          g_ThreadNotifyRegistered = FALSE;
 // 计数为 0 时直接短路返回, 避免无谓的全局自旋锁竞争)
 //
 AV_NON_PAGED static volatile LONG    g_SuspendListActiveCount = 0;
+
+//
+// 事件: 有新线程待挂起时立即唤醒工作线程 (替代 2ms 轮询)
+//
+AV_NON_PAGED static KEVENT           g_SuspendWorkerEvent;
 
 //
 // 挂起工作线程 (PASSIVE_LEVEL)
@@ -435,6 +523,11 @@ AvpThreadNotifyCallback(
                 KdPrint(("AVProcess: Too many threads for PID %u, TID %lu untracked\n",
                          pid, (ULONG)(ULONG_PTR)ThreadId));
             }
+
+            //
+            // 立即唤醒挂起工作线程 (不再等 2ms 轮询)
+            //
+            KeSetEvent(&g_SuspendWorkerEvent, IO_NO_INCREMENT, FALSE);
             break;
         }
     }
@@ -456,35 +549,58 @@ AvpSuspendWorkerRoutine(
     _In_ PVOID Context
     )
 {
-    LARGE_INTEGER delay;
+    LARGE_INTEGER timeout;
     UNREFERENCED_PARAMETER(Context);
 
     //
-    // 轮询间隔 2ms
+    // 兜底超时 1ms (事件未触发时的最长等待)
     //
-    delay.QuadPart = -20000;   // 100ns 单位
+    timeout.QuadPart = -10000;   // 100ns 单位, 1ms
 
     while (!g_SuspendWorkerStop)
     {
         HANDLE  pendingTids[AV_MAX_TRACKED_THREADS];
         UINT32  pendingCount = 0;
+        UINT32  processPids[AV_SUSPEND_LIST_MAX];   // 需要进程级挂起的 PID
+        UINT32  processPidCount = 0;
         KIRQL   irql;
         UINT32  i, j;
+
+        //
+        // 等待事件或超时 (事件由线程创建回调触发)
+        //
+        KeWaitForSingleObject(&g_SuspendWorkerEvent, Executive, KernelMode,
+                              FALSE, &timeout);
+        KeClearEvent(&g_SuspendWorkerEvent);
 
         KeAcquireSpinLock(&g_SuspendListLock, &irql);
 
         //
-        // Phase 1: 认领所有 AvTidPending 的线程 (置 AvTidSuspending)
+        // Phase 1: 收集需要进程级挂起的条目 + 认领所有 AvTidPending 的线程
         //
         if (g_SuspendListActiveCount > 0)
         {
-            for (i = 0; i < AV_SUSPEND_LIST_MAX && pendingCount < AV_MAX_TRACKED_THREADS; i++)
+            for (i = 0; i < AV_SUSPEND_LIST_MAX; i++)
             {
                 if (!g_SuspendList[i].Active)
                 {
                     continue;
                 }
 
+                //
+                // 进程级挂起: 还没执行过的条目优先执行
+                // ZwSuspendProcess 一次性冻结整个进程, 消除竞态窗口
+                //
+                if (!g_SuspendList[i].ProcessSuspended &&
+                    processPidCount < AV_SUSPEND_LIST_MAX)
+                {
+                    processPids[processPidCount++] = g_SuspendList[i].ProcessId;
+                    g_SuspendList[i].ProcessSuspended = TRUE;
+                }
+
+                //
+                // 同时认领待挂起的线程 (作为进程级挂起的补充)
+                //
                 for (j = 0; j < g_SuspendList[i].ThreadCount && pendingCount < AV_MAX_TRACKED_THREADS; j++)
                 {
                     if (g_SuspendList[i].ThreadState[j] == AvTidPending)
@@ -499,7 +615,39 @@ AvpSuspendWorkerRoutine(
         KeReleaseSpinLock(&g_SuspendListLock, irql);
 
         //
-        // Phase 2: 逐个挂起 (PASSIVE_LEVEL, Zw* 安全)
+        // Phase 2: 进程级挂起 (最高优先级, 立即执行)
+        // ZwSuspendProcess 会原子性地冻结进程的所有线程,
+        // 包括尚未被线程回调记录的新线程
+        //
+        for (i = 0; i < processPidCount; i++)
+        {
+            HANDLE hProcess = NULL;
+            OBJECT_ATTRIBUTES oa;
+            CLIENT_ID cid;
+
+            InitializeObjectAttributes(&oa, NULL, 0, NULL, NULL);
+            cid.UniqueProcess = (HANDLE)(ULONG_PTR)processPids[i];
+            cid.UniqueThread = NULL;
+
+            if (g_pZwSuspendProcess != NULL &&
+                NT_SUCCESS(ZwOpenProcess(&hProcess, PROCESS_SUSPEND_RESUME, &oa, &cid)))
+            {
+                NTSTATUS st = g_pZwSuspendProcess(hProcess);
+                if (NT_SUCCESS(st))
+                {
+                    KdPrint(("AVProcess: Process-level suspend PID %u (worker)\n", processPids[i]));
+                }
+                else
+                {
+                    KdPrint(("AVProcess: SuspendProcess(PID %u) failed 0x%08X, falling back to thread suspend\n",
+                             processPids[i], st));
+                }
+                ZwClose(hProcess);
+            }
+        }
+
+        //
+        // Phase 3: 逐线程挂起 (补充进程级挂起未覆盖的线程)
         //
         for (i = 0; i < pendingCount; i++)
         {
@@ -512,9 +660,11 @@ AvpSuspendWorkerRoutine(
             cid.UniqueProcess = NULL;
             cid.UniqueThread = pendingTids[i];
 
-            if (NT_SUCCESS(ZwOpenThread(&hThread, THREAD_SUSPEND_RESUME, &oa, &cid)))
+            if (g_pZwOpenThread != NULL &&
+                NT_SUCCESS(g_pZwOpenThread(&hThread, THREAD_SUSPEND_RESUME, &oa, &cid)))
             {
-                if (NT_SUCCESS(ZwSuspendThread(hThread, NULL)))
+                if (g_pZwSuspendThread != NULL &&
+                    NT_SUCCESS(g_pZwSuspendThread(hThread, NULL)))
                 {
                     suspended = TRUE;
                 }
@@ -522,7 +672,7 @@ AvpSuspendWorkerRoutine(
             }
 
             //
-            // Phase 3: 回写状态
+            // Phase 4: 回写状态
             // 若条目已被移除 (用户已选"允许"并恢复了进程), 撤销本次挂起
             //
             KeAcquireSpinLock(&g_SuspendListLock, &irql);
@@ -558,13 +708,22 @@ AvpSuspendWorkerRoutine(
                 //
                 // 条目已被移除 (允许先到): 撤销挂起, 避免线程永久冻结
                 //
-                ZwResumeThread(pendingTids[i], NULL);
+                if (g_pZwOpenThread != NULL && g_pZwResumeThread != NULL)
+                {
+                    hThread = NULL;
+                    InitializeObjectAttributes(&oa, NULL, 0, NULL, NULL);
+                    cid.UniqueProcess = NULL;
+                    cid.UniqueThread = pendingTids[i];
+                    if (NT_SUCCESS(g_pZwOpenThread(&hThread, THREAD_SUSPEND_RESUME, &oa, &cid)))
+                    {
+                        g_pZwResumeThread(hThread, NULL);
+                        ZwClose(hThread);
+                    }
+                }
                 KdPrint(("AVProcess: Undid late suspend of TID %lu\n",
                          (ULONG)(ULONG_PTR)pendingTids[i]));
             }
         }
-
-        KeDelayExecutionThread(KernelMode, FALSE, &delay);
     }
 
     PsTerminateSystemThread(STATUS_SUCCESS);
@@ -573,6 +732,12 @@ AvpSuspendWorkerRoutine(
 //
 // AvpResumeSuspendedThreads - 恢复进程的所有挂起线程
 // 用户选择"允许"时由决策处理调用, IRQL: PASSIVE_LEVEL
+//
+// 恢复策略:
+//   1. 若已执行进程级挂起 (ZwSuspendProcess), 用 ZwResumeProcess 恢复
+//   2. 逐线程恢复所有已挂起的线程 (ZwResumeThread)
+//   3. 对于 Pending/Suspending 状态的线程 (尚未被挂起), 也尝试恢复
+//      (防止竞态: 线程刚被认领但还未真正挂起)
 //
 static
 VOID
@@ -584,6 +749,7 @@ AvpResumeSuspendedThreads(
     UINT32 i;
     HANDLE tids[AV_MAX_TRACKED_THREADS];
     UINT32 tidCount = 0;
+    BOOLEAN needProcessResume = FALSE;
 
     KeAcquireSpinLock(&g_SuspendListLock, &irql);
 
@@ -593,20 +759,21 @@ AvpResumeSuspendedThreads(
         {
             UINT32 j;
 
+            needProcessResume = g_SuspendList[i].ProcessSuspended;
+
             //
-            // 只收集真正已挂起 (AvTidSuspended) 的线程
+            // 收集所有线程 (不管什么状态), 全部尝试恢复
+            // 包括 Pending/Suspending 状态的线程 (可能有刚被认领但未完成的挂起)
             //
             for (j = 0; j < g_SuspendList[i].ThreadCount && tidCount < AV_MAX_TRACKED_THREADS; j++)
             {
-                if (g_SuspendList[i].ThreadState[j] == AvTidSuspended)
-                {
-                    tids[tidCount++] = g_SuspendList[i].ThreadIds[j];
-                }
+                tids[tidCount++] = g_SuspendList[i].ThreadIds[j];
             }
 
             g_SuspendList[i].Active = FALSE;
             g_SuspendList[i].ProcessId = 0;
             g_SuspendList[i].ThreadCount = 0;
+            g_SuspendList[i].ProcessSuspended = FALSE;
             InterlockedDecrement(&g_SuspendListActiveCount);
             break;
         }
@@ -615,7 +782,31 @@ AvpResumeSuspendedThreads(
     KeReleaseSpinLock(&g_SuspendListLock, irql);
 
     //
-    // 恢复所有已挂起的线程 (线程可能已退出, 忽略失败)
+    // 进程级恢复 (若执行过 ZwSuspendProcess)
+    // ZwResumeProcess 会恢复所有被进程级挂起冻结的线程
+    //
+    if (needProcessResume)
+    {
+        HANDLE hProcess = NULL;
+        OBJECT_ATTRIBUTES oa;
+        CLIENT_ID cid;
+
+        InitializeObjectAttributes(&oa, NULL, 0, NULL, NULL);
+        cid.UniqueProcess = (HANDLE)(ULONG_PTR)ProcessId;
+        cid.UniqueThread = NULL;
+
+        if (g_pZwResumeProcess != NULL &&
+            NT_SUCCESS(ZwOpenProcess(&hProcess, PROCESS_SUSPEND_RESUME, &oa, &cid)))
+        {
+            g_pZwResumeProcess(hProcess);
+            ZwClose(hProcess);
+            KdPrint(("AVProcess: Process-level resume PID %u\n", ProcessId));
+        }
+    }
+
+    //
+    // 逐线程恢复 (补充进程级恢复 + 处理线程级挂起)
+    // 线程可能已退出, 忽略失败
     //
     for (i = 0; i < tidCount; i++)
     {
@@ -627,16 +818,18 @@ AvpResumeSuspendedThreads(
         cid.UniqueProcess = NULL;
         cid.UniqueThread = tids[i];
 
-        if (NT_SUCCESS(ZwOpenThread(&hThread, THREAD_SUSPEND_RESUME, &oa, &cid)))
+        if (g_pZwOpenThread != NULL && g_pZwResumeThread != NULL &&
+            NT_SUCCESS(g_pZwOpenThread(&hThread, THREAD_SUSPEND_RESUME, &oa, &cid)))
         {
-            ZwResumeThread(hThread, NULL);
+            g_pZwResumeThread(hThread, NULL);
             ZwClose(hThread);
         }
     }
 
-    if (tidCount > 0)
+    if (tidCount > 0 || needProcessResume)
     {
-        KdPrint(("AVProcess: Resumed %u threads of PID %u\n", tidCount, ProcessId));
+        KdPrint(("AVProcess: Resumed PID %u (%u threads, processResume=%d)\n",
+                 ProcessId, tidCount, needProcessResume));
     }
 }
 
@@ -690,6 +883,24 @@ AvpContainsSubstring(
     _In_ const UNICODE_STRING* Haystack,
     _In_ PCWSTR Needle,
     _In_ SIZE_T NeedleChars
+    );
+
+//
+// AvpIsSystemImagePath 定义在文件后部, 此处前向声明
+//
+static
+BOOLEAN
+AvpIsSystemImagePath(
+    _In_ const UNICODE_STRING* ImageFileName
+    );
+
+//
+// AvpIsFastPathWhitelisted 定义在文件后部, 此处前向声明
+//
+static
+BOOLEAN
+AvpIsFastPathWhitelisted(
+    _In_ const UNICODE_STRING* ImageFileName
     );
 
 //
@@ -820,10 +1031,25 @@ AvpProcessNotifyCallback(
 
     //
     // 忽略受信任的系统进程 (如 smss.exe 的子进程)
-    // CreatingThreadId.UniqueProcess == NULL 表示是系统创建的进程
     //
-    if (CreateInfo->CreatingThreadId.UniqueProcess == NULL ||
-        CreateInfo->ImageFileName == NULL)
+    // 注意: CreatingThreadId.UniqueProcess == NULL 表示系统上下文创建的进程,
+    //       它包含两类截然不同的进程:
+    //         1. 系统早期引导组件 (smss -> csrss/wininit 等), 镜像在 \Windows\ 下
+    //         2. UAC 提权进程 (AppInfo 服务跨会话创建, 如 setup.exe 提权后实例),
+    //            镜像通常在用户/应用目录 — 这类进程必须拦截!
+    //
+    // 因此不能简单地因 UniqueProcess == NULL 就放行, 需按镜像路径区分:
+    //   系统目录 (\Windows\System32 等) 的进程放行;
+    //   非系统目录的进程 (UAC 提权) 继续走拦截流程。
+    //
+    if (CreateInfo->ImageFileName == NULL ||
+        CreateInfo->ImageFileName->Buffer == NULL)
+    {
+        return;
+    }
+
+    if (CreateInfo->CreatingThreadId.UniqueProcess == NULL &&
+        AvpIsSystemImagePath(CreateInfo->ImageFileName))
     {
         return;
     }
@@ -833,6 +1059,19 @@ AvpProcessNotifyCallback(
     // (用户态已退出/未连接, 无人处理决策, 拦截会导致进程创建卡 30 秒)
     //
     if (!AvProcessIsClientActive())
+    {
+        return;
+    }
+
+    //
+    // 对速度敏感的系统进程文件名白名单:
+    //   进程全拦截会把所有进程交给主程序扫描, 但 SearchHost.exe 等
+    //   系统组件启动频繁且对延迟敏感, 挂起等待弹窗会导致开始菜单搜索
+    //   卡死、右键管理员运行报文件系统错误 (0x142 等)。
+    //   只按"文件名"精确放行这些组件 (不放开整个系统目录),
+    //   且要求镜像位于 \Windows\ 下, 防止恶意程序伪装同名绕过。
+    //
+    if (AvpIsFastPathWhitelisted(CreateInfo->ImageFileName))
     {
         return;
     }
@@ -893,6 +1132,8 @@ AvpProcessNotifyCallback(
     //
     // 全拦截模式: 所有进程启动都通知用户态裁决
     // (主程序引擎自行决策, 驱动仅负责挂起并询问)
+    // 未命中任何规则时也进入拦截流程, 由用户态主程序扫描裁决。
+    // 注意: 对速度敏感的系统进程 (SearchHost 等) 已由文件名白名单放行。
     //
     if (blockReason == AvBlockReasonNone)
     {
@@ -973,11 +1214,75 @@ AvpProcessNotifyCallback(
     KeReleaseSpinLock(&g_NotifyLock, oldIrql);
 
     //
-    // 加入挂起列表: 线程创建回调会立刻挂起该进程的每一个线程
-    // (在它们运行第一条指令之前), 进程从出生起完全冻结,
-    // 窗口不可能出现, 等待用户决策
+    // 加入挂起列表: 线程创建回调会记录该进程的每个新线程 TID
+    // (作为进程级挂起的补充, 防止进程级挂起遗漏新线程)
     //
     AvpAddToSuspendList((UINT32)(ULONG_PTR)ProcessId);
+
+    //
+    // 同步进程级挂起 (在回调中直接执行, 消除竞态窗口)
+    //
+    // PsSetCreateProcessNotifyRoutineEx 回调运行在 PASSIVE_LEVEL,
+    // 可以直接调用 Zw* 系统 API。
+    //
+    // 关键: 必须在回调返回前就挂起进程!
+    // 回调返回后系统才会恢复主线程调度, 此时进程已被冻结,
+    // 主线程一行代码都执行不了, 窗口不可能出现。
+    //
+    // 异步工作线程的 ZwSuspendProcess 存在竞态窗口:
+    //   回调返回 -> 系统恢复主线程 -> 进程运行 -> 工作线程才挂起
+    // 同步挂起彻底消除这个窗口。
+    //
+    {
+        HANDLE hProcess = NULL;
+        OBJECT_ATTRIBUTES oa;
+        CLIENT_ID cid;
+        NTSTATUS suspendStatus;
+
+        InitializeObjectAttributes(&oa, NULL, 0, NULL, NULL);
+        cid.UniqueProcess = (HANDLE)(ULONG_PTR)ProcessId;
+        cid.UniqueThread = NULL;
+
+        suspendStatus = ZwOpenProcess(&hProcess, PROCESS_SUSPEND_RESUME, &oa, &cid);
+        if (NT_SUCCESS(suspendStatus) && g_pZwSuspendProcess != NULL)
+        {
+            suspendStatus = g_pZwSuspendProcess(hProcess);
+            if (NT_SUCCESS(suspendStatus))
+            {
+                //
+                // 标记已执行进程级挂起, 工作线程不会重复挂起
+                //
+                KIRQL irql2;
+                UINT32 idx;
+
+                KeAcquireSpinLock(&g_SuspendListLock, &irql2);
+                for (idx = 0; idx < AV_SUSPEND_LIST_MAX; idx++)
+                {
+                    if (g_SuspendList[idx].Active &&
+                        g_SuspendList[idx].ProcessId == (UINT32)(ULONG_PTR)ProcessId)
+                    {
+                        g_SuspendList[idx].ProcessSuspended = TRUE;
+                        break;
+                    }
+                }
+                KeReleaseSpinLock(&g_SuspendListLock, irql2);
+
+                KdPrint(("AVProcess: Synchronous suspend PID %lu (in callback)\n",
+                         (ULONG)(ULONG_PTR)ProcessId));
+            }
+            else
+            {
+                KdPrint(("AVProcess: ZwSuspendProcess(PID %lu) failed 0x%08X in callback\n",
+                         (ULONG)(ULONG_PTR)ProcessId, suspendStatus));
+            }
+            ZwClose(hProcess);
+        }
+        else
+        {
+            KdPrint(("AVProcess: ZwOpenProcess(PID %lu) failed 0x%08X in callback\n",
+                     (ULONG)(ULONG_PTR)ProcessId, suspendStatus));
+        }
+    }
 
     //
     // 统计拦截尝试次数
@@ -988,9 +1293,10 @@ AvpProcessNotifyCallback(
              (ULONG)(ULONG_PTR)ProcessId, CreateInfo->ImageFileName));
 
     //
-    // 注意: 回调不阻塞进程创建, 立即返回。
-    // 该进程已被加入挂起列表, 其所有线程由挂起工作线程在出生后立即冻结,
-    // 等待用户态通过 IOCTL 送来决策 (允许=恢复, 拒绝=ZwTerminateProcess)
+    // 回调返回后, 系统恢复主线程调度, 但进程已被 ZwSuspendProcess 冻结,
+    // 主线程无法执行任何指令。等待用户态通过 IOCTL 送来决策:
+    //   允许 = ZwResumeProcess 恢复
+    //   拒绝 = ZwTerminateProcess 终止
     //
     return;
 }
@@ -1006,11 +1312,38 @@ AvProcessNotifyInitialize(
     )
 {
     NTSTATUS status;
-    WDF_OBJECT_ATTRIBUTES wdfAttributes;
+    UNICODE_STRING suspendName, resumeName;
 
     PAGED_CODE();
 
     KdPrint(("AVProcess: Initializing process notification\n"));
+
+    //
+    // 动态解析未文档化的进程级挂起/恢复 API
+    // ZwSuspendProcess / ZwResumeProcess 不在 ntoskrnl.lib 导入库中
+    //
+    RtlInitUnicodeString(&suspendName, L"ZwSuspendProcess");
+    RtlInitUnicodeString(&resumeName,  L"ZwResumeProcess");
+    g_pZwSuspendProcess = (PFN_ZwSuspendProcess)MmGetSystemRoutineAddress(&suspendName);
+    g_pZwResumeProcess  = (PFN_ZwResumeProcess)MmGetSystemRoutineAddress(&resumeName);
+
+    //
+    // 动态解析 Win10 不导出的线程 API
+    // ZwOpenThread / ZwSuspendThread / ZwResumeThread: Win11 导出, Win10 不导出
+    //
+    {
+        UNICODE_STRING name;
+        RtlInitUnicodeString(&name, L"ZwOpenThread");
+        g_pZwOpenThread = (PFN_ZwOpenThread)MmGetSystemRoutineAddress(&name);
+        RtlInitUnicodeString(&name, L"ZwSuspendThread");
+        g_pZwSuspendThread = (PFN_ZwSuspendThread)MmGetSystemRoutineAddress(&name);
+        RtlInitUnicodeString(&name, L"ZwResumeThread");
+        g_pZwResumeThread = (PFN_ZwResumeThread)MmGetSystemRoutineAddress(&name);
+    }
+
+    KdPrint(("AVProcess: DynAPI SuspendProc=%p ResumeProc=%p OpenThread=%p SuspendThread=%p ResumeThread=%p\n",
+             g_pZwSuspendProcess, g_pZwResumeProcess,
+             g_pZwOpenThread, g_pZwSuspendThread, g_pZwResumeThread));
 
     //
     // 初始化受保护目录
@@ -1033,27 +1366,22 @@ AvProcessNotifyInitialize(
     RtlZeroMemory(g_SuspendList, sizeof(g_SuspendList));
 
     //
-    // 创建白名单锁
+    // 初始化事件 (用于即时唤醒挂起工作线程)
     //
-    status = WdfWaitLockCreate(WDF_NO_OBJECT_ATTRIBUTES, &g_AllowListLock);
-    if (!NT_SUCCESS(status))
-    {
-        KdPrint(("AVProcess: WdfWaitLockCreate failed 0x%08X\n", status));
-        return status;
-    }
+    KeInitializeEvent(&g_SuspendWorkerEvent, NotificationEvent, FALSE);
+
+    //
+    // 初始化白名单锁
+    //
+    KeInitializeSpinLock(&g_AllowListLock);
 
     g_AllowListCount = 0;
     RtlZeroMemory(g_AllowList, sizeof(g_AllowList));
 
     //
-    // 创建黑名单锁
+    // 初始化黑名单锁
     //
-    status = WdfWaitLockCreate(WDF_NO_OBJECT_ATTRIBUTES, &g_DenyListLock);
-    if (!NT_SUCCESS(status))
-    {
-        KdPrint(("AVProcess: WdfWaitLockCreate(DenyList) failed 0x%08X\n", status));
-        return status;
-    }
+    KeInitializeSpinLock(&g_DenyListLock);
 
     g_DenyListCount = 0;
     RtlZeroMemory(g_DenyList, sizeof(g_DenyList));
@@ -1144,6 +1472,7 @@ AvProcessNotifyUninitialize(
     // (工作线程可能正在 PASSIVE_LEVEL 执行 Zw* 挂起, 必须等它结束)
     //
     g_SuspendWorkerStop = TRUE;
+    KeSetEvent(&g_SuspendWorkerEvent, IO_NO_INCREMENT, FALSE);  // 唤醒工作线程使其检查停止标志
     if (g_SuspendWorkerHandle != NULL)
     {
         KeWaitForSingleObject(g_SuspendWorkerHandle, Executive, KernelMode, FALSE, NULL);
@@ -1238,6 +1567,149 @@ AvpContainsSubstring(
 }
 
 //=============================================================================
+// AvpIsSystemImagePath - 判断镜像路径是否位于系统目录
+// IRQL: APC_LEVEL
+//
+// 用于区分"系统上下文创建的进程"的两类:
+//   - 系统早期引导组件 (smss -> csrss/wininit): 镜像在 \Windows\System32 等
+//   - UAC 提权进程: 镜像通常在用户/应用目录 (如 setup.exe)
+// 系统目录判定通过子串匹配实现, 大小写不敏感。
+//=============================================================================
+
+static
+BOOLEAN
+AvpIsSystemImagePath(
+    _In_ const UNICODE_STRING* ImageFileName
+    )
+{
+    if (ImageFileName == NULL || ImageFileName->Buffer == NULL ||
+        ImageFileName->Length == 0)
+    {
+        return FALSE;
+    }
+
+    return
+        AvpContainsSubstring(ImageFileName,
+                             L"\\Windows\\System32\\",
+                             (sizeof(L"\\Windows\\System32\\") / sizeof(WCHAR)) - 1) ||
+        AvpContainsSubstring(ImageFileName,
+                             L"\\Windows\\SysWOW64\\",
+                             (sizeof(L"\\Windows\\SysWOW64\\") / sizeof(WCHAR)) - 1) ||
+        AvpContainsSubstring(ImageFileName,
+                             L"\\Windows\\WinSxS\\",
+                             (sizeof(L"\\Windows\\WinSxS\\") / sizeof(WCHAR)) - 1) ||
+        AvpContainsSubstring(ImageFileName,
+                             L"\\Windows\\servicing\\",
+                             (sizeof(L"\\Windows\\servicing\\") / sizeof(WCHAR)) - 1) ||
+        AvpContainsSubstring(ImageFileName,
+                             L"\\Windows\\assembly\\",
+                             (sizeof(L"\\Windows\\assembly\\") / sizeof(WCHAR)) - 1);
+}
+
+//=============================================================================
+// AvpIsFastPathWhitelisted - 速度敏感的系统进程文件名白名单
+// IRQL: APC_LEVEL
+//
+// 进程全拦截会把所有进程交给用户态主程序扫描, 但以下系统组件启动频繁、
+// 对延迟高度敏感, 挂起等待弹窗会导致 UI 卡死 (开始菜单搜索弹不出、
+// 右键管理员运行报文件系统错误 0x142 等):
+//
+//   SearchHost.exe / SearchApp.exe  搜索菜单 (Windows 10/11)
+//   StartMenuExperienceHost.exe     开始菜单 (Windows 11)
+//   ShellExperienceHost.exe         开始菜单/搜索体验 (Windows 10)
+//   RuntimeBroker.exe               UWP 应用运行时代理 (频繁启动)
+//   TextInputHost.exe               文本输入/手写 (Windows 11)
+//   dllhost.exe                     COM 代理 (dllhost 挂起会拖垮 Explorer)
+//   conhost.exe                     控制台宿主 (每个 cmd/powershell 都会启动)
+//   searchindexer.exe               搜索索引服务
+//   SearchProtocolHost.exe          搜索协议宿主 (挂起拖垮搜索)
+//   SearchFilterHost.exe            搜索过滤宿主
+//
+// 安全约束: 仅当镜像路径位于 \Windows\ 下才放行,
+//   防止恶意程序伪装同名 (如把木马改名 SearchHost.exe 放到临时目录)。
+//=============================================================================
+
+AV_NON_PAGED static const PCWSTR g_FastPathWhitelist[] =
+{
+    L"SearchHost.exe",
+    L"SearchApp.exe",
+    L"StartMenuExperienceHost.exe",
+    L"ShellExperienceHost.exe",
+    L"RuntimeBroker.exe",
+    L"TextInputHost.exe",
+    L"dllhost.exe",
+    L"conhost.exe",
+    L"searchindexer.exe",
+    L"SearchProtocolHost.exe",
+    L"SearchFilterHost.exe",
+};
+AV_NON_PAGED static const UINT32 g_FastPathWhitelistCount =
+    sizeof(g_FastPathWhitelist) / sizeof(g_FastPathWhitelist[0]);
+
+static
+BOOLEAN
+AvpIsFastPathWhitelisted(
+    _In_ const UNICODE_STRING* ImageFileName
+    )
+{
+    SIZE_T len;
+    SIZE_T lastSlash;
+    UINT32 i;
+
+    if (ImageFileName == NULL || ImageFileName->Buffer == NULL ||
+        ImageFileName->Length == 0)
+    {
+        return FALSE;
+    }
+
+    //
+    // 安全约束: 镜像必须位于 \Windows\ 下
+    // (System32 / SysWOW64 / SystemApps / 其他 Windows 子目录)
+    //
+    if (!AvpContainsSubstring(ImageFileName,
+                              L"\\Windows\\",
+                              (sizeof(L"\\Windows\\") / sizeof(WCHAR)) - 1))
+    {
+        return FALSE;
+    }
+
+    //
+    // 提取文件名 (最后一个 '\' 之后的部分)
+    //
+    len = ImageFileName->Length / sizeof(WCHAR);
+    lastSlash = len;
+    while (lastSlash > 0)
+    {
+        if (ImageFileName->Buffer[lastSlash - 1] == L'\\')
+        {
+            break;
+        }
+        lastSlash--;
+    }
+
+    if (lastSlash >= len)
+    {
+        return FALSE;
+    }
+
+    //
+    // 与白名单逐条比较 (大小写不敏感)
+    //
+    for (i = 0; i < g_FastPathWhitelistCount; i++)
+    {
+        SIZE_T nameLen = wcslen(g_FastPathWhitelist[i]);
+        if (len - lastSlash == nameLen &&
+            _wcsnicmp(ImageFileName->Buffer + lastSlash,
+                      g_FastPathWhitelist[i], nameLen) == 0)
+        {
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
+//=============================================================================
 // AvProcessIsPathProtected - 检查路径是否在受保护目录中
 // IRQL: APC_LEVEL (回调中) 或 PASSIVE_LEVEL
 //
@@ -1298,7 +1770,8 @@ AvProcessAddToAllowList(
         return STATUS_INVALID_PARAMETER;
     }
 
-    WdfWaitLockAcquire(g_AllowListLock, NULL);
+    KIRQL oldIrql;
+    oldIrql = KeAcquireSpinLockRaiseToDpc(&g_AllowListLock);
 
     //
     // 检查是否已存在
@@ -1308,7 +1781,7 @@ AvProcessAddToAllowList(
     {
         if (_wcsicmp(g_AllowList[i], ImagePath) == 0)
         {
-            WdfWaitLockRelease(g_AllowListLock);
+            KeReleaseSpinLock(&g_AllowListLock, oldIrql);
             return STATUS_SUCCESS; // 已存在
         }
     }
@@ -1318,7 +1791,7 @@ AvProcessAddToAllowList(
     //
     if (g_AllowListCount >= AV_ALLOW_LIST_MAX)
     {
-        WdfWaitLockRelease(g_AllowListLock);
+        KeReleaseSpinLock(&g_AllowListLock, oldIrql);
         return STATUS_TOO_MANY_SESSIONS;
     }
 
@@ -1333,7 +1806,7 @@ AvProcessAddToAllowList(
     KdPrint(("AVProcess: Added to allow list [%u]: %ws\n",
              g_AllowListCount - 1, ImagePath));
 
-    WdfWaitLockRelease(g_AllowListLock);
+    KeReleaseSpinLock(&g_AllowListLock, oldIrql);
     return STATUS_SUCCESS;
 }
 
@@ -1354,7 +1827,8 @@ AvProcessAddToDenyList(
         return STATUS_INVALID_PARAMETER;
     }
 
-    WdfWaitLockAcquire(g_DenyListLock, NULL);
+    KIRQL oldIrql;
+    oldIrql = KeAcquireSpinLockRaiseToDpc(&g_DenyListLock);
 
     //
     // 检查是否已存在
@@ -1364,7 +1838,7 @@ AvProcessAddToDenyList(
     {
         if (_wcsicmp(g_DenyList[i], ImagePath) == 0)
         {
-            WdfWaitLockRelease(g_DenyListLock);
+            KeReleaseSpinLock(&g_DenyListLock, oldIrql);
             return STATUS_SUCCESS; // 已存在
         }
     }
@@ -1374,7 +1848,7 @@ AvProcessAddToDenyList(
     //
     if (g_DenyListCount >= AV_ALLOW_LIST_MAX)
     {
-        WdfWaitLockRelease(g_DenyListLock);
+        KeReleaseSpinLock(&g_DenyListLock, oldIrql);
         return STATUS_TOO_MANY_SESSIONS;
     }
 
@@ -1389,7 +1863,7 @@ AvProcessAddToDenyList(
     KdPrint(("AVProcess: Added to deny list [%u]: %ws\n",
              g_DenyListCount - 1, ImagePath));
 
-    WdfWaitLockRelease(g_DenyListLock);
+    KeReleaseSpinLock(&g_DenyListLock, oldIrql);
     return STATUS_SUCCESS;
 }
 

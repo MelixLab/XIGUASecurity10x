@@ -17,7 +17,6 @@
 #include <fltkernel.h>
 #include <wdmsec.h>
 #include <ntstrsafe.h>
-#include <bcrypt.h>
 
 #include "../AVCommon/AVProtocol.h"
 

@@ -15,7 +15,7 @@
 //
 NTSTATUS
 AvSessionCreate(
-    _In_ WDFWAITLOCK SessionLock,
+    _In_ PKSPIN_LOCK SessionLock,
     _Inout_ AV_SESSION_ENTRY Sessions[],
     _In_ UINT32 MaxSessions,
     _Inout_ UINT32* SessionCount,
@@ -29,7 +29,7 @@ AvSessionCreate(
 //
 NTSTATUS
 AvSessionValidate(
-    _In_ WDFWAITLOCK SessionLock,
+    _In_ PKSPIN_LOCK SessionLock,
     _In_ AV_SESSION_ENTRY Sessions[],
     _In_ UINT32 MaxSessions,
     _In_ const UCHAR SessionId[AV_SESSION_ID_SIZE]
@@ -41,7 +41,7 @@ AvSessionValidate(
 //
 VOID
 AvSessionRemove(
-    _In_ WDFWAITLOCK SessionLock,
+    _In_ PKSPIN_LOCK SessionLock,
     _Inout_ AV_SESSION_ENTRY Sessions[],
     _In_ UINT32 MaxSessions,
     _Inout_ UINT32* SessionCount,
@@ -54,7 +54,7 @@ AvSessionRemove(
 //
 VOID
 AvSessionUpdateActivity(
-    _In_ WDFWAITLOCK SessionLock,
+    _In_ PKSPIN_LOCK SessionLock,
     _Inout_ AV_SESSION_ENTRY Sessions[],
     _In_ UINT32 MaxSessions,
     _In_ const UCHAR SessionId[AV_SESSION_ID_SIZE]

@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
@@ -319,7 +319,11 @@ fn start_sync(app: &AppHandle) -> Result<usize, String> {
         .arg("--backup")
         .arg(backup.to_string_lossy().to_string())
         .arg("--events")
-        .arg(events.to_string_lossy().to_string());
+        .arg(events.to_string_lossy().to_string())
+        // 网页域名白名单文件：与主程序 whitelist.rs 共用 %LOCALAPPDATA%\XIGUASecurity\user_whitelist.json，
+        // netproxy 按文件修改时间热重载，主程序增删域名后无需重启。
+        .arg("--whitelist")
+        .arg(data_dir().join("user_whitelist.json").to_string_lossy().to_string());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -393,6 +397,11 @@ fn start_sync(app: &AppHandle) -> Result<usize, String> {
     state.child = Some(child);
     state.rules_count = rules_count;
     state.last_error = None;
+    // ★关键：从事件文件末尾开始消费。events 文件累积了历史上所有拦截记录，
+    // 若偏移从 0 开始，启用瞬间会把全部历史事件重放为通知/日志（用户感知"一启动就狂弹通知"）。
+    if let Ok(meta) = std::fs::metadata(&events) {
+        state.event_offset = meta.len();
+    }
     drop(state);
 
     write_state_file(true);
@@ -595,8 +604,21 @@ fn category_label(category: &str) -> &'static str {
     }
 }
 
+/// 全局通知节流（毫秒）：同一时刻连续命中多个域名时，最多每 2 秒弹一条，
+/// 避免用户被通知轰炸
+const NOTIFY_INTERVAL_MS: u64 = 2000;
+static LAST_NOTIFY_TS: AtomicU64 = AtomicU64::new(0);
+
 /// 通过程序现有通知系统（Windows 原生 Toast）提示拦截事件
 fn show_block_notification(app: &AppHandle, ev: &NetworkBlockEvent) {
+    // 全局节流
+    let now = chrono::Local::now().timestamp_millis() as u64;
+    let last = LAST_NOTIFY_TS.load(Ordering::Relaxed);
+    if now.saturating_sub(last) < NOTIFY_INTERVAL_MS {
+        return;
+    }
+    LAST_NOTIFY_TS.store(now, Ordering::Relaxed);
+
     let title = "XIGUASecurity 网络防护已阻止危险连接";
     let mut body = format!(
         "域名: {}\n类别: {}\n进程: {}",

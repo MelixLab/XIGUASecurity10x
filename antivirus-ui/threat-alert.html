@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>安全警告</title>
+    <link rel="stylesheet" href="intercept-theme.css">
     <style>
         * {
             margin: 0;
@@ -13,7 +14,7 @@
         
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            background: #ffffff;
+            background: var(--bg-primary);
             height: 100vh;
             display: flex;
             align-items: center;
@@ -28,7 +29,7 @@
             display: flex;
             flex-direction: column;
             justify-content: space-between;
-            background: #ffffff;
+            background: var(--bg-primary);
             border-radius: 8px;
             overflow: hidden;
         }
@@ -63,7 +64,7 @@
         .alert-title {
             font-size: 14px;
             font-weight: 600;
-            color: #1a1a1a;
+            color: var(--text-primary);
             line-height: 1.4;
             white-space: nowrap;
             flex: 1;
@@ -71,7 +72,7 @@
         
         .alert-body {
             font-size: 12px;
-            color: #666;
+            color: var(--text-secondary);
             line-height: 1.5;
             margin-bottom: 12px;
             flex: 1;
@@ -102,22 +103,22 @@
         }
         
         .btn-ignore {
-            background: #f0f0f0;
-            color: #333;
-            border: 1px solid #d0d0d0;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
         }
         
         .btn-ignore:hover {
-            background: #e0e0e0;
+            background: var(--bg-hover);
         }
         
         .btn-kill {
-            background: #dc3545;
+            background: var(--danger);
             color: white;
         }
         
         .btn-kill:hover {
-            background: #c82333;
+            background: var(--danger);
         }
         
         /* 拖拽区域 */
@@ -132,6 +133,34 @@
             z-index: 10;
         }
     </style>
+    <script>
+        (function() {
+            var theme = localStorage.getItem('theme') || 'blue';
+            var themeMode = localStorage.getItem('themeMode') || 'colorful';
+            var backdrop = localStorage.getItem('windowBackdrop') || 'none';
+            document.documentElement.setAttribute('data-theme', theme);
+            document.documentElement.setAttribute('data-theme-mode', themeMode);
+            document.documentElement.setAttribute('data-backdrop', backdrop);
+            if (backdrop !== 'none' && window.__TAURI__ && window.__TAURI__.core) {
+                window.__TAURI__.core.invoke('set_window_backdrop', { backdrop: backdrop, themeMode: themeMode }).catch(function(){});
+            }
+        })();
+        document.addEventListener('DOMContentLoaded', function() {
+            var listen = window.__TAURI__ && window.__TAURI__.event && window.__TAURI__.event.listen;
+            if (!listen) return;
+            listen('theme-changed', function(event) {
+                var d = event.payload || {};
+                if (d.theme) document.documentElement.setAttribute('data-theme', d.theme);
+                if (d.themeMode) document.documentElement.setAttribute('data-theme-mode', d.themeMode);
+                if (d.backdrop) {
+                    document.documentElement.setAttribute('data-backdrop', d.backdrop);
+                    if (d.backdrop !== 'none' && window.__TAURI__ && window.__TAURI__.core) {
+                        window.__TAURI__.core.invoke('set_window_backdrop', { backdrop: d.backdrop, themeMode: d.themeMode || 'colorful' }).catch(function(){});
+                    }
+                }
+            });
+        });
+    </script>
 </head>
 <body>
     <div class="drag-region"></div>
