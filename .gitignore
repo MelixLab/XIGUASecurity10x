@@ -1,5 +1,6 @@
-# Cloud service - rules server (contains admin keys & credentials, NEVER commit)
+# Cloud services - contains admin keys, passwords & credentials, NEVER commit
 rules_server/
+log-server/
 
 # Dependencies
 node_modules/
