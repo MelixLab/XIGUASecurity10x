@@ -8,6 +8,8 @@ export const translations = {
     appSubtitle: '全方位保护您的设备安全',
     limitedMode: '受限模式',
     support: '客服支持',
+    testVersionBadge: '测试版',
+    testVersionNotice: '当前测试版本不代表最终品质，部分驱动功能可能会得到限制，但这不代表此版本不稳定，您可以放心的使用此程序并等待下一版本的最新版推送',
 
     // Sidebar
     home: '首页',
@@ -102,6 +104,8 @@ export const translations = {
     sandboxSecurityDesc: '反调试、反逆向、检测沙箱环境',
     quickScan: '快速扫描',
     quickScanDesc: '扫描关键系统区域，约需 1-2 分钟',
+    memScanPhase: '正在扫描内存活动模块...',
+    memThreatCategory: '内存活动威胁',
     fullScan: '全盘扫描',
     fullScanDesc: '深度扫描所有文件，约需 15-30 分钟',
     customScan: '自定义扫描',
@@ -507,6 +511,7 @@ export const translations = {
     quarantined: '已隔离',
     quarantineFailed: '隔离失败',
     quarantineError: '隔离错误',
+    quarantineAccessDenied: '文件被占用，已弹出活动威胁清除窗口',
     failed: '失败',
     cleanedMaliciousCode: '已清除恶意代码',
     threatProcessingResult: '威胁处理结果',
@@ -791,6 +796,8 @@ export const translations = {
     appSubtitle: 'Comprehensive device security protection',
     limitedMode: 'Limited Mode',
     support: 'Support',
+    testVersionBadge: 'Test Build',
+    testVersionNotice: 'This test build does not represent final quality. Some driver features may be limited, but this does not mean the build is unstable. You can use this program with confidence and wait for the next release.',
 
     // Sidebar
     home: 'Home',
@@ -885,6 +892,8 @@ export const translations = {
     sandboxSecurityDesc: 'Anti-debug, anti-reverse, sandbox detection',
     quickScan: 'Quick Scan',
     quickScanDesc: 'Scan critical system areas, takes 1-2 minutes',
+    memScanPhase: 'Scanning active memory modules...',
+    memThreatCategory: 'Active Memory Threat',
     fullScan: 'Full Scan',
     fullScanDesc: 'Deep scan all files, takes 15-30 minutes',
     customScan: 'Custom Scan',
@@ -1288,6 +1297,7 @@ export const translations = {
     quarantined: 'Quarantined',
     quarantineFailed: 'Quarantine failed',
     quarantineError: 'Quarantine error',
+    quarantineAccessDenied: 'File is locked; active threat removal window opened',
     failed: 'Failed',
     cleanedMaliciousCode: 'Malicious code cleaned',
     threatProcessingResult: 'Threat Processing Result',
@@ -1573,6 +1583,8 @@ export const translations = {
     appSubtitle: '全方位保護您的裝置安全',
     limitedMode: '受限模式',
     support: '客服支持',
+    testVersionBadge: '測試版',
+    testVersionNotice: '當前測試版本不代表最終品質，部分驅動功能可能會受到限制，但這不代表此版本不穩定，您可以放心的使用此程式並等待下一版本的最新版推送',
 
     // Sidebar
     home: '首頁',
@@ -1667,6 +1679,8 @@ export const translations = {
     sandboxSecurityDesc: '反除錯、反逆向、偵測沙箱環境',
     quickScan: '快速掃描',
     quickScanDesc: '掃描關鍵系統區域，約需 1-2 分鐘',
+    memScanPhase: '正在掃描記憶體活動模組...',
+    memThreatCategory: '記憶體活動威脅',
     fullScan: '全盤掃描',
     fullScanDesc: '深度掃描所有檔案，約需 15-30 分鐘',
     customScan: '自訂掃描',
@@ -2072,6 +2086,7 @@ export const translations = {
     quarantined: '已隔離',
     quarantineFailed: '隔離失敗',
     quarantineError: '隔離錯誤',
+    quarantineAccessDenied: '檔案被佔用，已彈出活動威脅清除視窗',
     failed: '失敗',
     cleanedMaliciousCode: '已清除惡意代碼',
     threatProcessingResult: '威脅處理結果',

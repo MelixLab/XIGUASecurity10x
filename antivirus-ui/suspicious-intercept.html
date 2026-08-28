@@ -204,24 +204,39 @@
             document.documentElement.setAttribute('data-theme', theme);
             document.documentElement.setAttribute('data-theme-mode', themeMode);
             document.documentElement.setAttribute('data-backdrop', backdrop);
-            if (backdrop !== 'none' && window.__TAURI__ && window.__TAURI__.core) {
-                window.__TAURI__.core.invoke('set_window_backdrop', { backdrop: backdrop, themeMode: themeMode }).catch(function(){});
-            }
         })();
         document.addEventListener('DOMContentLoaded', function() {
-            var listen = window.__TAURI__ && window.__TAURI__.event && window.__TAURI__.event.listen;
-            if (!listen) return;
-            listen('theme-changed', function(event) {
-                var d = event.payload || {};
-                if (d.theme) document.documentElement.setAttribute('data-theme', d.theme);
-                if (d.themeMode) document.documentElement.setAttribute('data-theme-mode', d.themeMode);
-                if (d.backdrop) {
-                    document.documentElement.setAttribute('data-backdrop', d.backdrop);
-                    if (d.backdrop !== 'none' && window.__TAURI__ && window.__TAURI__.core) {
-                        window.__TAURI__.core.invoke('set_window_backdrop', { backdrop: d.backdrop, themeMode: d.themeMode || 'colorful' }).catch(function(){});
+            function applyBackdrop(backdrop, themeMode) {
+                if (backdrop === 'none') {
+                    document.documentElement.removeAttribute('data-backdrop-applied');
+                    return;
+                }
+                function tryInvoke(retries) {
+                    if (window.__TAURI__ && window.__TAURI__.core) {
+                        window.__TAURI__.core.invoke('set_window_backdrop', { backdrop: backdrop, themeMode: themeMode })
+                            .then(function() { document.documentElement.setAttribute('data-backdrop-applied', 'true'); })
+                            .catch(function(e) { console.error('[Theme] backdrop apply failed:', e); });
+                    } else if (retries > 0) {
+                        setTimeout(function() { tryInvoke(retries - 1); }, 100);
                     }
                 }
-            });
+                tryInvoke(20);
+            }
+            var backdrop = localStorage.getItem('windowBackdrop') || 'none';
+            var themeMode = localStorage.getItem('themeMode') || 'colorful';
+            applyBackdrop(backdrop, themeMode);
+            var listen = window.__TAURI__ && window.__TAURI__.event && window.__TAURI__.event.listen;
+            if (listen) {
+                listen('theme-changed', function(event) {
+                    var d = event.payload || {};
+                    if (d.theme) document.documentElement.setAttribute('data-theme', d.theme);
+                    if (d.themeMode) document.documentElement.setAttribute('data-theme-mode', d.themeMode);
+                    if (d.backdrop !== undefined) {
+                        document.documentElement.setAttribute('data-backdrop', d.backdrop);
+                        applyBackdrop(d.backdrop, d.themeMode || 'colorful');
+                    }
+                });
+            }
         });
     </script>
 </head>

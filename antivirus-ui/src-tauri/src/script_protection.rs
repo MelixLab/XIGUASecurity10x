@@ -226,6 +226,84 @@ fn poll_script_processes(
             );
 
             notified_pids.insert(pid);
+        } else {
+            // 危险模式未命中时，通过AMSI和行为引擎做深度检测
+            let proc_name = proc.Name.as_deref().unwrap_or("");
+
+            // AMSI 扫描脚本内容
+            let (amsi_result, amsi_msg) =
+                crate::amsi_protection::scan_script_command(proc_name, &cmdline);
+            let amsi_blocked = matches!(
+                amsi_result,
+                crate::amsi_protection::AmsiResult::Blocked
+                    | crate::amsi_protection::AmsiResult::DetectedByAV
+            );
+
+            // EDR 行为规则引擎
+            let ctx = crate::behavior_engine::ProcessContext {
+                pid,
+                parent_pid: 0,
+                process_name: proc_name.into(),
+                parent_name: String::new(),
+                command_line: cmdline.clone(),
+                image_path: String::new(),
+                creation_time: chrono::Local::now().timestamp() as u64,
+            };
+            let edr_hits = crate::behavior_engine::evaluate_process(ctx);
+            let edr_critical = edr_hits.iter().any(|r| {
+                matches!(
+                    r.response,
+                    crate::behavior_engine::ResponseAction::Terminate
+                )
+            });
+
+            // 防御规避 + 凭据访问检测
+            let evasion_hits =
+                crate::defense_evasion::check_process_creation(pid, proc_name, &cmdline);
+            let cred_hits =
+                crate::credential_access::check_process_creation(pid, proc_name, &cmdline);
+
+            let any_terminate = evasion_hits.iter().any(|d| d.should_terminate)
+                || cred_hits.iter().any(|d| d.should_terminate);
+
+            if amsi_blocked || edr_critical || any_terminate {
+                let reason = if amsi_blocked {
+                    amsi_msg.unwrap_or_else(|| "AMSI检测到恶意脚本".into())
+                } else if edr_critical {
+                    edr_hits
+                        .iter()
+                        .find(|r| matches!(r.response, crate::behavior_engine::ResponseAction::Terminate))
+                        .map(|r| format!("{}: {}", r.rule_name, r.matched_detail))
+                        .unwrap_or_else(|| "行为规则引擎检测到威胁".into())
+                } else if !evasion_hits.is_empty() {
+                    evasion_hits
+                        .iter()
+                        .find(|d| d.should_terminate)
+                        .map(|d| d.event.description())
+                        .unwrap_or_else(|| "防御规避行为".into())
+                } else {
+                    cred_hits
+                        .iter()
+                        .find(|d| d.should_terminate)
+                        .map(|d| d.event.description())
+                        .unwrap_or_else(|| "凭据访问行为".into())
+                };
+
+                println!(
+                    "[ScriptProtection] - EDR/AMSI detection: {} (PID={}) reason={}",
+                    proc_name, pid, reason
+                );
+
+                kill_process(pid);
+                send_native_notification(
+                    app,
+                    "EDR检测到威胁",
+                    &format!("{} (PID: {})", proc_name, pid),
+                    &truncate_cmdline(&cmdline, 200),
+                    &reason,
+                );
+                notified_pids.insert(pid);
+            }
         }
     }
 

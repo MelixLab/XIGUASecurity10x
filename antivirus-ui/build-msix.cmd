@@ -22,7 +22,7 @@ if exist "%BUILDDIR%\engines"    xcopy /e /i /q /y "%BUILDDIR%\engines"    "%APP
 if exist "%BUILDDIR%\rulers"     xcopy /e /i /q /y "%BUILDDIR%\rulers"     "%APPDIR%\rulers\"     >nul
 if exist "%BUILDDIR%\extensions" xcopy /e /i /q /y "%BUILDDIR%\extensions" "%APPDIR%\extensions\" >nul
 
-for %%f in (sandbox-monitor.html intercept-alert.html popup-prompt.html suspicious-intercept.html threat-alert.html tray-menu.html timeline.html edr-alert.html edr-behavior-chain.html file-protection-alert.html) do (
+for %%f in (sandbox-monitor.html intercept-alert.html popup-prompt.html suspicious-intercept.html threat-alert.html tray-menu.html timeline.html edr-alert.html edr-behavior-chain.html file-protection-alert.html intercept-theme.css) do (
   if exist "%PROJECTROOT%\%%f" copy "%PROJECTROOT%\%%f" "%APPDIR%\" >nul
 )
 

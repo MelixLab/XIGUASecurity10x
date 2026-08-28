@@ -306,26 +306,55 @@ fn generate_random_string(length: usize) -> String {
 }
 
 /// 处理威胁文件（隔离）
+///
+/// ★活动内存威胁接入★：若清除失败的原因是"拒绝访问"（病毒正在运行、文件被占用），
+/// 不再简单返回错误，而是：
+/// 1. 自动弹出卡巴斯基风格"发现活动内存威胁"处置窗口（开机时清除 / 不重启而清除）；
+/// 2. 返回结构化结果 {success:false, reason:"access_denied"}，前端据此分支处理，
+///    不再误报"已隔离"，也不再重复弹标准隔离告警。
 #[tauri::command]
 pub async fn quarantine_threat_file(
     file_path: String,
     threat_name: String,
     threat_level: String,
+    app: tauri::AppHandle,
 ) -> Result<serde_json::Value, String> {
     let manager = QuarantineManager::new()?;
     
-    let quarantined = manager.quarantine_file(&file_path, &threat_name, &threat_level)?;
-    
-    Ok(serde_json::json!({
-        "success": true,
-        "id": quarantined.id,
-        "original_path": quarantined.original_path,
-        "file_name": quarantined.file_name,
-        "quarantine_date": quarantined.quarantine_date,
-        "file_size": quarantined.file_size,
-        "threat_name": quarantined.threat_name,
-        "threat_level": quarantined.threat_level,
-    }))
+    match manager.quarantine_file(&file_path, &threat_name, &threat_level) {
+        Ok(quarantined) => Ok(serde_json::json!({
+            "success": true,
+            "id": quarantined.id,
+            "original_path": quarantined.original_path,
+            "file_name": quarantined.file_name,
+            "quarantine_date": quarantined.quarantine_date,
+            "file_size": quarantined.file_size,
+            "threat_name": quarantined.threat_name,
+            "threat_level": quarantined.threat_level,
+        })),
+        Err(e) if crate::active_threat::is_access_denied_error(&e) => {
+            eprintln!(
+                "[Quarantine] 清除失败（文件被活动进程占用）: {} - {}",
+                file_path, e
+            );
+
+            // 自动弹出"发现活动内存威胁"处置窗口（右下角，卡巴斯基风格）
+            crate::active_threat::trigger_active_threat_alert(
+                app,
+                file_path.clone(),
+                threat_name.clone(),
+            );
+
+            Ok(serde_json::json!({
+                "success": false,
+                "reason": "access_denied",
+                "error": e,
+                "file_path": file_path,
+                "threat_name": threat_name,
+            }))
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// 从隔离区恢复文件

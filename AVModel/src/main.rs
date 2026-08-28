@@ -8,11 +8,20 @@
 //! 2. TerminateThread — 枚举并终止所有线程（绕过进程级 hook）
 //! 3. CreateRemoteThread + ExitProcess — 远程线程注入（绕过 TerminateProcess hook）
 //! 4. NtTerminateProcess — 直接调用 ntdll（绕过用户态 hook / 部分 Ob 回调）
+//!
+//! 进程枚举（内存活动威胁扫描）：
+//! `list_processes` — 纯 R3 Toolhelp32Snapshot 枚举全部进程，
+//! 以提权 + SeDebugPrivilege 打开进程并 QueryFullProcessImageNameW 获取完整镜像路径，
+//! 覆盖主程序（普通权限）无法查询的提权进程。主程序据此逐个扫描镜像文件。
 
 #![cfg(windows)]
 
 use std::io;
 use std::ptr;
+
+// Melix HIPS 命名管道客户端（管理员桥接层）
+mod melix_ipc;
+use melix_ipc::{IpcMessageType, VerdictAction, MelixClient};
 
 use serde::{Deserialize, Serialize};
 use windows::core::PCWSTR;
@@ -67,8 +76,68 @@ enum Request {
     #[serde(rename = "kill_by_name")]
     KillByName { name: String },
 
+    #[serde(rename = "list_processes")]
+    ListProcesses { offset: u32, count: u32 },
+
     #[serde(rename = "shutdown")]
     Shutdown,
+
+    // ===== Melix HIPS 端点防护桥接命令（管理员中转，主程序非管理员无法直连 Melix.Control） =====
+    /// 查询 Melix.Service 是否运行（命名管道是否可用）
+    #[serde(rename = "melix_running")]
+    MelixRunning,
+
+    /// 获取防护规则列表
+    #[serde(rename = "melix_rules")]
+    MelixRules,
+
+    /// 新增防护规则
+    #[serde(rename = "melix_add_rule")]
+    MelixAddRule {
+        actor_path: Option<String>,
+        r#type: Option<String>,
+        target_pattern: Option<String>,
+        action: String,
+        note: Option<String>,
+    },
+
+    /// 删除防护规则
+    #[serde(rename = "melix_delete_rule")]
+    MelixDeleteRule { rule_id: String },
+
+    /// 获取运行时设置
+    #[serde(rename = "melix_settings_get")]
+    MelixSettingsGet,
+
+    /// 更新运行时设置
+    #[serde(rename = "melix_settings_set")]
+    MelixSettingsSet { settings: serde_json::Value },
+
+    /// 获取文件信任列表
+    #[serde(rename = "melix_trust_list")]
+    MelixTrustList,
+
+    /// 新增文件信任
+    #[serde(rename = "melix_add_trust")]
+    MelixAddTrust { actor_path: String, note: Option<String> },
+
+    /// 移除文件信任
+    #[serde(rename = "melix_remove_trust")]
+    MelixRemoveTrust { rule_id: String },
+
+    /// 用户裁决回复
+    #[serde(rename = "melix_prompt")]
+    MelixPrompt { event_id: String, action: String, remember: bool },
+}
+
+/// 进程条目（list_processes 响应）
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct ProcessInfo {
+    pid: u32,
+    parent_pid: u32,
+    name: String,
+    /// 镜像完整路径（无法打开/受保护进程为 None）
+    path: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -83,17 +152,29 @@ struct Response {
     failed: Option<Vec<u32>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     killed_pids: Option<Vec<u32>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    offset: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    processes: Option<Vec<ProcessInfo>>,
+    /// Melix 桥接响应数据（规则/设置/信任列表，由调用方解析）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<serde_json::Value>,
 }
 
 impl Response {
     fn ok(msg: &str) -> Self {
-        Self { ok: true, msg: msg.to_string(), method: None, killed: None, failed: None, killed_pids: None }
+        Self { ok: true, msg: msg.to_string(), method: None, killed: None, failed: None, killed_pids: None, total: None, offset: None, processes: None, data: None }
     }
     fn ok_with_method(msg: &str, method: &str) -> Self {
-        Self { ok: true, msg: msg.to_string(), method: Some(method.to_string()), killed: None, failed: None, killed_pids: None }
+        Self { ok: true, msg: msg.to_string(), method: Some(method.to_string()), killed: None, failed: None, killed_pids: None, total: None, offset: None, processes: None, data: None }
+    }
+    fn ok_with_data(msg: &str, data: serde_json::Value) -> Self {
+        Self { ok: true, msg: msg.to_string(), method: None, killed: None, failed: None, killed_pids: None, total: None, offset: None, processes: None, data: Some(data) }
     }
     fn err(msg: &str) -> Self {
-        Self { ok: false, msg: msg.to_string(), method: None, killed: None, failed: None, killed_pids: None }
+        Self { ok: false, msg: msg.to_string(), method: None, killed: None, failed: None, killed_pids: None, total: None, offset: None, processes: None, data: None }
     }
 }
 
@@ -122,6 +203,42 @@ fn log_to_file(msg: &str) {
 
 // ==================== 主函数 ====================
 
+/// 单实例保护：枚举所有 AVGuard 进程，杀掉除当前进程外的其他实例。
+/// 解决多 AVGuard 并发导致 Melix 单连接管道冲突(error 121)与同名事件管道创建失败的问题。
+fn ensure_single_instance() {
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+    };
+    use windows::Win32::Foundation::CloseHandle;
+    let my_pid = unsafe { GetCurrentProcessId() };
+    unsafe {
+        if let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) {
+            let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+            entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+            if Process32FirstW(snapshot, &mut entry).is_ok() {
+                loop {
+                    let name = String::from_utf16_lossy(&entry.szExeFile)
+                        .trim_end_matches('\0')
+                        .to_lowercase();
+                    let stem = std::path::Path::new(&name)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+                    if stem == "avguard" && entry.th32ProcessID != my_pid {
+                        log_to_file(&format!("[AVGuard] Single-instance: killing other AVGuard PID={}", entry.th32ProcessID));
+                        let _ = kill_process_multi(entry.th32ProcessID);
+                    }
+                    if Process32NextW(snapshot, &mut entry).is_err() {
+                        break;
+                    }
+                }
+            }
+            let _ = CloseHandle(snapshot);
+        }
+    }
+}
+
 fn main() {
     log_to_file(&format!("[AVGuard] Starting... PID={}", unsafe { GetCurrentProcessId() }));
 
@@ -131,8 +248,175 @@ fn main() {
         Err(e) => log_to_file(&format!("[AVGuard] WARNING: Failed to enable SeDebugPrivilege: {}", e)),
     }
 
+    // 单实例保护：杀掉其他 AVGuard 实例，避免多实例竞争 Melix 单连接管道与同名事件管道
+    ensure_single_instance();
+
+    // 启动 Melix 端点防护事件监听线程（后台，持续监听 PromptRequest/BlockNotification 并推送给主程序）
+    std::thread::spawn(spawn_melix_watcher);
+
     // 启动命名管道服务器
     run_pipe_server();
+}
+
+// ==================== Melix 单连接桥接 ====================
+// 主程序（普通权限）无法直连 Melix.Control。AVGuard 作为唯一客户端建立**一条**
+// 到 Melix.Service 的常驻连接（Melix.Service 管道实例数 = 1，不能并发多连接，
+// 否则第二个连接 WaitNamedPipe 会超时 error 121）。
+//
+// 模型参考 Melix.UI 的 IpcClient：单连接 + 后台读取循环分发。
+//  - worker 线程：持锁短超时读取事件(PromptRequest/BlockNotification)并推送给主程序；
+//  - melix 请求(rules/settings/trust/prompt)：通过同一连接发送并同步读取响应。
+// 读写共用一个 Mutex 串行化，避免管道数据交错。
+const MELIX_EVENT_PIPE_NAME: &str = r"\\.\pipe\AVGuardMelixEventPipe";
+
+use std::sync::{Mutex as StdMutex, OnceLock};
+
+// 全局共享的 Melix.Service 连接（单连接模型，串行使用）
+static MELIX_CONN: OnceLock<StdMutex<Option<MelixClient>>> = OnceLock::new();
+fn melix_conn() -> &'static StdMutex<Option<MelixClient>> {
+    MELIX_CONN.get_or_init(|| StdMutex::new(None))
+}
+
+/// 获取或建立 Melix.Service 连接。
+fn get_melix_conn() -> Result<std::sync::MutexGuard<'static, Option<MelixClient>>, String> {
+    let guard = melix_conn().lock().map_err(|e| e.to_string())?;
+    Ok(guard)
+}
+
+// HANDLE 不是 Send，用包装使其可在线程间共享
+struct SendH(HANDLE);
+unsafe impl Send for SendH {}
+
+// 全局事件推送管道 handle（在事件推送线程与读循环间共享）
+static MELIX_EVENT_PIPE: OnceLock<StdMutex<Option<SendH>>> = OnceLock::new();
+fn melix_event_pipe() -> &'static StdMutex<Option<SendH>> {
+    MELIX_EVENT_PIPE.get_or_init(|| StdMutex::new(None))
+}
+
+/// 后台线程：创建事件推送管道并等待主程序连接；断开后重建。
+fn spawn_event_pipe_host() {
+    loop {
+        let (sa, _sd) = build_null_dacl_security_attributes();
+        let pipe = unsafe {
+            let path: Vec<u16> = MELIX_EVENT_PIPE_NAME.encode_utf16().chain(Some(0)).collect();
+            let h = CreateNamedPipeW(
+                PCWSTR(path.as_ptr()),
+                FILE_FLAGS_AND_ATTRIBUTES(PIPE_ACCESS_DUPLEX),
+                PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+                1,
+                PIPE_BUFFER_SIZE,
+                PIPE_BUFFER_SIZE,
+                0,
+                Some(&sa),
+            );
+            h
+        };
+        if pipe == INVALID_HANDLE_VALUE {
+            log_to_file("[MelixEventsHost] create event pipe failed");
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            continue;
+        }
+        // 等待主程序连接（阻塞）。连接后存入全局供读循环推送。
+        unsafe { let _ = ConnectNamedPipe(pipe, None); }
+        log_to_file("[MelixEventsHost] event pipe connected by main program");
+        *melix_event_pipe().lock().unwrap() = Some(SendH(pipe));
+        // 持续等待主程序断开；断开后清空并重建
+        loop {
+            // 简单探测：读一字节，若返回 0/错误则主程序已断开
+            let mut b = [0u8; 1];
+            let mut read = 0u32;
+            let hr = unsafe { ReadFile(pipe, Some(&mut b), Some(&mut read), None) };
+            let closed = hr.is_err() || read == 0;
+            if closed {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        unsafe { let _ = CloseHandle(pipe); }
+        *melix_event_pipe().lock().unwrap() = None;
+        log_to_file("[MelixEventsHost] event pipe disconnected, rebuilding");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+}
+
+/// 后台 worker：保持 Melix 连接，持续读取事件并推送主程序。若连接断开则重连。
+/// 关键：连接后**立即进入读循环**（参考 Melix.UI：先启动读取再发 Hello），
+/// 避免服务端 SendAsync(Hello) 时因对端未读而 "Pipe is broken"。
+fn spawn_melix_watcher() {
+    log_to_file("[MelixWatcher] Starting melix event watcher thread");
+    // 先启动事件推送管道宿主（后台），再进入 Melix 读循环
+    std::thread::spawn(spawn_event_pipe_host);
+    loop {
+        // 连接 Melix.Service（唯一连接）
+        let mut client = match MelixClient::connect() {
+            Ok(c) => c,
+            Err(e) => {
+                if e == "MELIX_SERVICE_NOT_RUNNING" {
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                } else {
+                    log_to_file(&format!("[MelixWatcher] connect failed: {e}"));
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                }
+                continue;
+            }
+        };
+        // 存入全局共享连接
+        *melix_conn().lock().unwrap() = Some(client);
+        log_to_file("[MelixWatcher] connected to Melix.Service, listening for events");
+
+        // 立即进入读循环（持续消费服务端 Hello/事件/响应）
+        let mut broken = false;
+        while !broken {
+            let mut guard = match melix_conn().lock() {
+                Ok(g) => g,
+                Err(_) => { broken = true; break; }
+            };
+            if let Some(c) = guard.as_mut() {
+                match c.read_line_timeout(250) {
+                    Ok(msg) => {
+                        // 仅记录非刷屏类型，避免日志爆炸
+                        if msg.r#type != IpcMessageType::LogEntry
+                            && msg.r#type != IpcMessageType::EventStream
+                            && msg.r#type != IpcMessageType::Hello
+                        {
+                            log_to_file(&format!("[MelixWatcher] got msg type={}", msg.r#type.name()));
+                        }
+                        // 事件驱动：把收到的所有消息推送给主程序
+                        let payload = serde_json::json!({
+                            "type": msg.r#type.name(),
+                            "payload": msg.payload,
+                        });
+                        let line = payload.to_string();
+                        let mut buf = line.as_bytes().to_vec();
+                        buf.push(b'\n');
+                        let mut written = 0u32;
+                        let pipe = melix_event_pipe().lock().ok().and_then(|p| p.as_ref().map(|h| h.0)).unwrap_or(INVALID_HANDLE_VALUE);
+                        if pipe != INVALID_HANDLE_VALUE {
+                            let r = unsafe { WriteFile(pipe, Some(&buf), Some(&mut written), None) };
+                            if r.is_err() {
+                                log_to_file("[MelixWatcher] event pipe write failed");
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        if e == "read timeout" || e.starts_with("parse message:") {
+                            // 无事件或半包：继续
+                        } else {
+                            log_to_file(&format!("[MelixWatcher] read error: {e}, reconnecting"));
+                            broken = true;
+                        }
+                    }
+                }
+            } else {
+                broken = true;
+            }
+            drop(guard);
+        }
+        // 连接断开：清除共享连接并重连
+        *melix_conn().lock().unwrap() = None;
+        log_to_file("[MelixWatcher] reconnecting to Melix.Service");
+        std::thread::sleep(std::time::Duration::from_secs(3));
+    }
 }
 
 // ==================== 命名管道服务器 ====================
@@ -274,6 +558,10 @@ fn handle_client(pipe: HANDLE) -> bool {
                     killed: Some(killed),
                     failed: Some(failed),
                     killed_pids: None,
+                    total: None,
+                    offset: None,
+                    processes: None,
+                    data: None,
                 };
                 (resp, false)
             }
@@ -281,8 +569,55 @@ fn handle_client(pipe: HANDLE) -> bool {
                 let resp = kill_by_name_multi(&name);
                 (resp, false)
             }
+            Request::ListProcesses { offset, count } => {
+                let resp = list_processes_paginated(offset, count.min(200));
+                (resp, false)
+            }
             Request::Shutdown => {
                 (Response::ok("bye"), true)
+            }
+            // ===== Melix HIPS 桥接命令 =====
+            Request::MelixRunning => {
+                (melix_service_running(), false)
+            }
+            Request::MelixRules => {
+                (melix_handle("rules", None), false)
+            }
+            Request::MelixAddRule { actor_path, r#type, target_pattern, action, note } => {
+                let params = serde_json::json!({
+                    "actor_path": actor_path,
+                    "type": r#type,
+                    "target_pattern": target_pattern,
+                    "action": action,
+                    "note": note,
+                });
+                (melix_handle("add_rule", Some(params)), false)
+            }
+            Request::MelixDeleteRule { rule_id } => {
+                let params = serde_json::json!({ "rule_id": rule_id });
+                (melix_handle("delete_rule", Some(params)), false)
+            }
+            Request::MelixSettingsGet => {
+                (melix_handle("settings_get", None), false)
+            }
+            Request::MelixSettingsSet { settings } => {
+                let params = serde_json::json!({ "settings": settings });
+                (melix_handle("settings_set", Some(params)), false)
+            }
+            Request::MelixTrustList => {
+                (melix_handle("trust_list", None), false)
+            }
+            Request::MelixAddTrust { actor_path, note } => {
+                let params = serde_json::json!({ "actor_path": actor_path, "note": note });
+                (melix_handle("add_trust", Some(params)), false)
+            }
+            Request::MelixRemoveTrust { rule_id } => {
+                let params = serde_json::json!({ "rule_id": rule_id });
+                (melix_handle("remove_trust", Some(params)), false)
+            }
+            Request::MelixPrompt { event_id, action, remember } => {
+                let params = serde_json::json!({ "event_id": event_id, "action": action, "remember": remember });
+                (melix_handle("prompt", Some(params)), false)
             }
         };
 
@@ -294,6 +629,171 @@ fn handle_client(pipe: HANDLE) -> bool {
         if shutdown {
             return true;
         }
+    }
+}
+
+// ==================== Melix HIPS 桥接（管理员中转） ====================
+
+/// 判断 Melix.Service 是否已连接（worker 是否建立了共享连接）。
+fn melix_service_running() -> Response {
+    let running = match melix_conn().lock() {
+        Ok(g) => g.is_some(),
+        Err(_) => false,
+    };
+    Response::ok_with_data("melix running check", serde_json::json!({ "running": running }))
+}
+
+/// 解析裁决动作字符串。
+fn parse_verdict(s: &str) -> Result<VerdictAction, Response> {
+    match s.to_ascii_lowercase().as_str() {
+        "allow" => Ok(VerdictAction::Allow),
+        "block" => Ok(VerdictAction::Block),
+        "ask" => Ok(VerdictAction::Ask),
+        other => Err(Response::err(&format!("invalid verdict action: {other}"))),
+    }
+}
+
+/// 将 Melix 规则转成前端友好的 JSON。
+fn rule_to_json(r: &melix_ipc::DefenseRule) -> serde_json::Value {
+    serde_json::json!({
+        "id": r.id,
+        "actorPath": r.actor_path,
+        "type": r.r#type,
+        "targetPattern": r.target_pattern,
+        "commandLinePattern": r.command_line_pattern,
+        "actorHashes": r.actor_hashes,
+        "targetHashes": r.target_hashes,
+        "requireUnsigned": r.require_unsigned,
+        "action": r.action,
+        "note": r.note,
+        "createdUtc": r.created_utc,
+    })
+}
+
+/// 通用 Melix 命令处理入口，返回主程序可解析的 Response。
+/// 通过全局共享连接（单连接模型）执行，避免与 worker 争抢第二个连接（Melix 管道实例数=1）。
+fn melix_handle(cmd: &str, params: Option<serde_json::Value>) -> Response {
+    // 获取共享连接（worker 已建立的常驻连接）
+    let mut guard = match melix_conn().lock() {
+        Ok(g) => g,
+        Err(e) => return Response::err(&format!("共享连接锁失败: {e}")),
+    };
+    let client = match guard.as_mut() {
+        Some(c) => c,
+        None => return Response::err("端点防护服务未运行（Melix.Service 未连接）"),
+    };
+
+    match cmd {
+        // 参考 Melix.UI：请求只发送，响应由 worker 后台读循环推送（事件驱动），这里不读响应。
+        "rules" => {
+            match client.send(IpcMessageType::RulesRequest, &serde_json::json!({})) {
+                Ok(()) => Response::ok("规则请求已发送"),
+                Err(e) => Response::err(&format!("发送规则请求失败: {e}")),
+            }
+        }
+        "add_rule" => {
+            let p = params.unwrap_or_default();
+            let action = match parse_verdict(p.get("action").and_then(|v| v.as_str()).unwrap_or("")) {
+                Ok(a) => a,
+                Err(r) => return r,
+            };
+            let payload = melix_ipc::AddRulePayload {
+                actor_path: p.get("actor_path").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                r#type: p.get("type").and_then(|v| v.as_str()).map(|s| parse_ev_type(s)).flatten(),
+                target_pattern: p.get("target_pattern").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                action,
+                note: p.get("note").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            };
+            match client.send(IpcMessageType::AddRule, &payload) {
+                Ok(()) => Response::ok("已添加规则"),
+                Err(e) => Response::err(&format!("添加规则失败: {e}")),
+            }
+        }
+        "delete_rule" => {
+            let p = params.unwrap_or_default();
+            let rule_id = p.get("rule_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let payload = melix_ipc::DeleteRulePayload { rule_id };
+            match client.send(IpcMessageType::DeleteRule, &payload) {
+                Ok(()) => Response::ok("已删除规则"),
+                Err(e) => Response::err(&format!("删除规则失败: {e}")),
+            }
+        }
+        "settings_get" => {
+            match client.send(IpcMessageType::SettingsRequest, &serde_json::json!({})) {
+                Ok(()) => Response::ok("设置请求已发送"),
+                Err(e) => Response::err(&format!("发送设置请求失败: {e}")),
+            }
+        }
+        "settings_set" => {
+            let p = params.unwrap_or_default();
+            let settings = p.get("settings").cloned().unwrap_or(serde_json::json!({}));
+            match client.send_json(IpcMessageType::SettingsUpdate, &settings.to_string()) {
+                Ok(()) => Response::ok("已更新设置"),
+                Err(e) => Response::err(&format!("更新设置失败: {e}")),
+            }
+        }
+        "trust_list" => {
+            match client.send(IpcMessageType::TrustListRequest, &serde_json::json!({})) {
+                Ok(()) => Response::ok("信任列表请求已发送"),
+                Err(e) => Response::err(&format!("发送信任列表请求失败: {e}")),
+            }
+        }
+        "add_trust" => {
+            let p = params.unwrap_or_default();
+            let actor_path = p.get("actor_path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let note = p.get("note").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let payload = melix_ipc::AddTrustPayload { actor_path, note };
+            match client.send(IpcMessageType::AddTrust, &payload) {
+                Ok(()) => Response::ok("已添加信任"),
+                Err(e) => Response::err(&format!("添加信任失败: {e}")),
+            }
+        }
+        "remove_trust" => {
+            let p = params.unwrap_or_default();
+            let rule_id = p.get("rule_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let payload = melix_ipc::RemoveTrustPayload { rule_id };
+            match client.send(IpcMessageType::RemoveTrust, &payload) {
+                Ok(()) => Response::ok("已移除信任"),
+                Err(e) => Response::err(&format!("移除信任失败: {e}")),
+            }
+        }
+        "prompt" => {
+            let p = params.unwrap_or_default();
+            let action = match parse_verdict(p.get("action").and_then(|v| v.as_str()).unwrap_or("")) {
+                Ok(a) => a,
+                Err(r) => return r,
+            };
+            let payload = melix_ipc::PromptResponsePayload {
+                event_id: p.get("event_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                action,
+                remember: p.get("remember").and_then(|v| v.as_bool()).unwrap_or(false),
+            };
+            match client.send(IpcMessageType::PromptResponse, &payload) {
+                Ok(()) => Response::ok("已提交裁决"),
+                Err(e) => Response::err(&format!("提交裁决失败: {e}")),
+            }
+        }
+        other => Response::err(&format!("未知 melix 命令: {other}")),
+    }
+}
+
+/// 解析事件类型字符串。
+fn parse_ev_type(s: &str) -> Option<melix_ipc::EventType> {
+    use melix_ipc::EventType;
+    match s {
+        "ProcessCreate" => Some(EventType::ProcessCreate),
+        "ProcessTerminate" => Some(EventType::ProcessTerminate),
+        "RemoteThread" => Some(EventType::RemoteThread),
+        "ImageLoad" => Some(EventType::ImageLoad),
+        "FileWrite" => Some(EventType::FileWrite),
+        "FileDelete" => Some(EventType::FileDelete),
+        "RegistryWrite" => Some(EventType::RegistryWrite),
+        "NetworkConnect" => Some(EventType::NetworkConnect),
+        "SelfProtect" => Some(EventType::SelfProtect),
+        "MemoryAlloc" => Some(EventType::MemoryAlloc),
+        "OpenProcess" => Some(EventType::OpenProcess),
+        "WriteMemory" => Some(EventType::WriteMemory),
+        _ => None,
     }
 }
 
@@ -646,6 +1146,163 @@ fn kill_by_name_multi(target_name: &str) -> Response {
         killed: Some(killed),
         failed: Some(failed),
         killed_pids: Some(matched_pids),
+        total: None,
+        offset: None,
+        processes: None,
+        data: None,
+    }
+}
+
+// ==================== 进程列表枚举（内存活动威胁扫描） ====================
+
+/// 进程快照缓存：分页请求之间保持同一快照（5 秒 TTL），避免翻页时进程变化导致总数不一致
+static PROC_LIST_CACHE: std::sync::Mutex<Option<(std::time::Instant, Vec<ProcessInfo>)>> =
+    std::sync::Mutex::new(None);
+
+/// 枚举系统全部进程（纯 R3）：
+/// Toolhelp32Snapshot 遍历进程表，OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)
+/// + QueryFullProcessImageNameW 获取完整镜像路径。
+/// AVGuard 以管理员 + SeDebugPrivilege 运行，可打开并查询提权进程（PPL 除外），
+/// 覆盖主程序（普通权限）无法访问的进程。
+fn list_processes_snapshot() -> Vec<ProcessInfo> {
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW,
+        PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+    };
+    use windows::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW,
+        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_NAME_WIN32,
+    };
+
+    let mut out: Vec<ProcessInfo> = Vec::new();
+
+    unsafe {
+        let snapshot = match CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) {
+            Ok(h) => h,
+            Err(e) => {
+                log_to_file(&format!("[AVGuard] list_processes: CreateToolhelp32Snapshot failed: {}", e));
+                return out;
+            }
+        };
+
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+
+        if Process32FirstW(snapshot, &mut entry).is_err() {
+            let _ = CloseHandle(snapshot);
+            log_to_file("[AVGuard] list_processes: Process32FirstW failed");
+            return out;
+        }
+
+        loop {
+            let pid = entry.th32ProcessID;
+            let parent_pid = entry.th32ParentProcessID;
+            let name = String::from_utf16_lossy(&entry.szExeFile)
+                .trim_end_matches('\0')
+                .to_string();
+
+            // 获取完整镜像路径（PID 0 = System Idle Process 无法打开）
+            let mut path: Option<String> = None;
+            if pid != 0 {
+                if let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
+                    let mut buf = [0u16; 1024];
+                    let mut size = buf.len() as u32;
+                    if QueryFullProcessImageNameW(
+                        handle,
+                        PROCESS_NAME_WIN32,
+                        windows::core::PWSTR(buf.as_mut_ptr()),
+                        &mut size,
+                    ).is_ok() && size > 0 {
+                        path = Some(String::from_utf16_lossy(&buf[..size as usize]));
+                    }
+                    let _ = CloseHandle(handle);
+                }
+            }
+
+            out.push(ProcessInfo { pid, parent_pid, name, path });
+
+            if Process32NextW(snapshot, &mut entry).is_err() {
+                break;
+            }
+        }
+
+        let _ = CloseHandle(snapshot);
+    }
+
+    out
+}
+
+/// 分页返回进程列表。同一连接内多次翻页共享一个快照（5 秒 TTL）。
+/// 为保证消息不超过管道 64KB 缓冲，超长路径/进程名做字符边界安全截断，
+/// 序列化仍超限时逐条裁剪。
+fn list_processes_paginated(offset: u32, count: u32) -> Response {
+    let snapshot = {
+        let mut cache = PROC_LIST_CACHE.lock().unwrap();
+        match cache.as_ref() {
+            Some((t, v)) if t.elapsed() < std::time::Duration::from_secs(5) => v.clone(),
+            _ => {
+                let v = list_processes_snapshot();
+                *cache = Some((std::time::Instant::now(), v.clone()));
+                v
+            }
+        }
+    };
+
+    let total = snapshot.len() as u32;
+    let start = offset as usize;
+    if start >= snapshot.len() {
+        return Response {
+            ok: true,
+            msg: format!("total={} offset={} returned=0", total, offset),
+            method: None,
+            killed: None,
+            failed: None,
+            killed_pids: None,
+            total: Some(total),
+            offset: Some(offset),
+            processes: Some(Vec::new()),
+            data: None,
+        };
+    }
+
+    let mut page: Vec<ProcessInfo> = snapshot[start..]
+        .iter()
+        .take(count as usize)
+        .cloned()
+        .collect();
+
+    // 字符边界安全截断，防止超长路径撑爆管道消息
+    for p in page.iter_mut() {
+        if let Some(path) = p.path.as_mut() {
+            if path.chars().count() > 400 {
+                *path = path.chars().take(400).collect();
+            }
+        }
+        if p.name.chars().count() > 100 {
+            p.name = p.name.chars().take(100).collect();
+        }
+    }
+
+    // 序列化仍超 48KB（64KB 管道缓冲安全线）时逐条裁剪
+    loop {
+        let json_len = serde_json::to_vec(&page).map(|v| v.len()).unwrap_or(usize::MAX);
+        if json_len <= 48000 || page.len() <= 1 {
+            break;
+        }
+        page.pop();
+    }
+
+    Response {
+        ok: true,
+        msg: format!("total={} offset={} returned={}", total, offset, page.len()),
+        method: None,
+        killed: None,
+        failed: None,
+        killed_pids: None,
+        total: Some(total),
+        offset: Some(offset),
+        processes: Some(page),
+        data: None,
     }
 }
 

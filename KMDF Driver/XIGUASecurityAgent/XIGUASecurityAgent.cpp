@@ -1511,6 +1511,14 @@ PipeDecisionReaderThread(
             notifId = d->NotificationId;
             decision = d->Decision;
         }
+        else if (header->MessageType == AvPipeMsgInjectGuardDecision &&
+                 pData != NULL && dataSize >= sizeof(AV_PIPE_IG_DECISION_DATA))
+        {
+            AV_PIPE_IG_DECISION_DATA* d = (AV_PIPE_IG_DECISION_DATA*)pData;
+            msgType = AvPipeMsgInjectGuardDecision;
+            notifId = (UINT64)d->SequenceId;
+            decision = d->Decision;
+        }
 
         if (msgType == 0)
         {
@@ -4050,6 +4058,253 @@ EnsureSelfProtectDriverRunning(VOID)
 }
 
 //=============================================================================
+// InstallInjectGuardDriver - 安装/更新 XIGUAInjectGuard 注入防御驱动服务
+//
+// 传统型驱动 (非 minifilter), 使用 ObRegisterCallbacks
+// 无需 Instances 注册表, 与 XIGUASelfProtect 安装方式相同
+//=============================================================================
+BOOL
+InstallInjectGuardDriver(VOID)
+{
+    SC_HANDLE hSCM = NULL;
+    SC_HANDLE hSvc = NULL;
+    WCHAR sysPath[MAX_PATH];
+    WCHAR sourceDriverPath[MAX_PATH];
+    WCHAR targetDriverPath[MAX_PATH];
+    WCHAR targetNtPath[MAX_PATH];
+    WCHAR currentImagePath[MAX_PATH];
+    WCHAR systemRoot[MAX_PATH];
+    BOOL result = FALSE;
+    BOOL serviceExists = FALSE;
+
+    if (!GetModuleFileNameW(NULL, sysPath, MAX_PATH))
+    {
+        printf("[IGMgr] GetModuleFileNameW failed (error: %lu)\n", GetLastError());
+        return FALSE;
+    }
+
+    WCHAR* pSlash = wcsrchr(sysPath, L'\\');
+    if (pSlash == NULL)
+    {
+        printf("[IGMgr] Unable to parse path\n");
+        return FALSE;
+    }
+    *(pSlash + 1) = L'\0';
+
+    StringCbCopyW(sourceDriverPath, sizeof(sourceDriverPath), sysPath);
+    StringCbCatW(sourceDriverPath, sizeof(sourceDriverPath), L"XIGUAInjectGuard.sys");
+
+    printf("[IGMgr] ========================================\n");
+    printf("[IGMgr]   XIGUA InjectGuard Driver Manager\n");
+    printf("[IGMgr] ========================================\n");
+    printf("[IGMgr] Source driver: %ls\n", sourceDriverPath);
+
+    if (GetFileAttributesW(sourceDriverPath) == INVALID_FILE_ATTRIBUTES)
+    {
+        printf("[IGMgr] Driver file not found: %ls\n", sourceDriverPath);
+        return FALSE;
+    }
+
+    if (GetSystemDirectoryW(systemRoot, MAX_PATH) == 0)
+    {
+        printf("[IGMgr] GetSystemDirectory failed (error: %lu)\n", GetLastError());
+        return FALSE;
+    }
+
+    StringCbCopyW(targetDriverPath, sizeof(targetDriverPath), systemRoot);
+    StringCbCatW(targetDriverPath, sizeof(targetDriverPath), L"\\drivers\\XIGUAInjectGuard.sys");
+
+    StringCbCopyW(targetNtPath, sizeof(targetNtPath),
+                  L"\\SystemRoot\\System32\\drivers\\XIGUAInjectGuard.sys");
+
+    BOOL copyOk = CopyFileW(sourceDriverPath, targetDriverPath, FALSE);
+    if (!copyOk)
+    {
+        DWORD err = GetLastError();
+        printf("[IGMgr] CopyFile failed (error: %lu)\n", err);
+    }
+    else
+    {
+        printf("[IGMgr] Driver copied to system drivers directory\n");
+    }
+
+    hSCM = OpenSCManagerW(NULL, NULL, SC_MANAGER_CREATE_SERVICE);
+    if (hSCM == NULL)
+    {
+        printf("[IGMgr] OpenSCManager failed (error: %lu)\n", GetLastError());
+        return FALSE;
+    }
+
+    hSvc = OpenServiceW(hSCM, L"XIGUAInjectGuard", SERVICE_ALL_ACCESS);
+    if (hSvc != NULL)
+    {
+        serviceExists = TRUE;
+
+        if (GetDriverServiceImagePath(hSvc, currentImagePath, sizeof(currentImagePath)))
+        {
+            printf("[IGMgr] Service currently points to: %ls\n", currentImagePath);
+
+            if (_wcsicmp(currentImagePath, targetNtPath) != 0)
+            {
+                printf("[IGMgr] Path mismatch, updating service config...\n");
+                SERVICE_STATUS svcStatus;
+                ControlService(hSvc, SERVICE_CONTROL_STOP, &svcStatus);
+
+                if (ChangeServiceConfigW(hSvc,
+                        SERVICE_NO_CHANGE, SERVICE_NO_CHANGE, SERVICE_NO_CHANGE,
+                        targetNtPath, NULL, NULL, NULL, NULL, NULL, NULL))
+                {
+                    printf("[IGMgr] Service config updated\n");
+                }
+                else
+                {
+                    printf("[IGMgr] ChangeServiceConfig failed (error: %lu)\n", GetLastError());
+                    DeleteService(hSvc);
+                    CloseServiceHandle(hSvc);
+                    hSvc = NULL;
+                    serviceExists = FALSE;
+                }
+            }
+        }
+
+        if (hSvc != NULL)
+        {
+            printf("[IGMgr] Driver service ready\n");
+            result = TRUE;
+        }
+    }
+
+    if (!copyOk && !serviceExists)
+    {
+        printf("[IGMgr] Copy failed and no existing service, install aborted\n");
+        goto IG_Cleanup;
+    }
+
+    if (!serviceExists || hSvc == NULL)
+    {
+        hSvc = CreateServiceW(
+            hSCM,
+            L"XIGUAInjectGuard",
+            L"XIGUA InjectGuard Driver",
+            SERVICE_ALL_ACCESS,
+            SERVICE_KERNEL_DRIVER,
+            SERVICE_DEMAND_START,
+            SERVICE_ERROR_NORMAL,
+            targetNtPath,
+            NULL, NULL, NULL, NULL, NULL
+        );
+
+        if (hSvc == NULL)
+        {
+            DWORD err = GetLastError();
+            if (err == ERROR_SERVICE_EXISTS)
+            {
+                printf("[IGMgr] Driver service already exists\n");
+                hSvc = OpenServiceW(hSCM, L"XIGUAInjectGuard", SERVICE_ALL_ACCESS);
+                result = (hSvc != NULL);
+            }
+            else
+            {
+                printf("[IGMgr] CreateService failed (error: %lu)\n", err);
+                goto IG_Cleanup;
+            }
+        }
+        else
+        {
+            printf("[IGMgr] Driver service created\n");
+            result = TRUE;
+        }
+    }
+
+IG_Cleanup:
+    if (hSvc != NULL)
+    {
+        CloseServiceHandle(hSvc);
+    }
+    if (hSCM != NULL)
+    {
+        CloseServiceHandle(hSCM);
+    }
+
+    return result;
+}
+
+//=============================================================================
+// StartInjectGuardDriver - 启动注入防御驱动服务
+//=============================================================================
+BOOL
+StartInjectGuardDriver(VOID)
+{
+    SC_HANDLE hSCM = NULL;
+    SC_HANDLE hSvc = NULL;
+    BOOL result = FALSE;
+
+    hSCM = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
+    if (hSCM == NULL)
+    {
+        printf("[IGMgr] OpenSCManager failed (error: %lu)\n", GetLastError());
+        return FALSE;
+    }
+
+    hSvc = OpenServiceW(hSCM, L"XIGUAInjectGuard",
+                        SERVICE_START | SERVICE_QUERY_STATUS);
+    if (hSvc == NULL)
+    {
+        printf("[IGMgr] OpenService failed (error: %lu)\n", GetLastError());
+        CloseServiceHandle(hSCM);
+        return FALSE;
+    }
+
+    if (StartServiceW(hSvc, 0, NULL))
+    {
+        printf("[IGMgr] Driver started successfully\n");
+        result = TRUE;
+    }
+    else
+    {
+        DWORD err = GetLastError();
+        if (err == ERROR_SERVICE_ALREADY_RUNNING)
+        {
+            printf("[IGMgr] Driver already running\n");
+            result = TRUE;
+        }
+        else
+        {
+            printf("[IGMgr] StartService failed (error: %lu)\n", err);
+        }
+    }
+
+    CloseServiceHandle(hSvc);
+    CloseServiceHandle(hSCM);
+    return result;
+}
+
+//=============================================================================
+// EnsureInjectGuardDriverRunning - 确保注入防御驱动已安装并运行
+//=============================================================================
+BOOL
+EnsureInjectGuardDriverRunning(VOID)
+{
+    if (!InstallInjectGuardDriver())
+    {
+        printf("[IGMgr] Driver install failed!\n");
+        return FALSE;
+    }
+
+    printf("[IGMgr] Starting driver...\n");
+    if (!StartInjectGuardDriver())
+    {
+        printf("[IGMgr] Driver start failed!\n");
+        return FALSE;
+    }
+
+    printf("[IGMgr] ========================================\n");
+    printf("[IGMgr]   InjectGuard driver ready\n");
+    printf("[IGMgr] ========================================\n");
+    return TRUE;
+}
+
+//=============================================================================
 // RegisterProtectedPids - 向自保护驱动注册受保护 PID
 // 收集自身 + AVMain + msedgewebview2 的 PID 并移交给驱动
 // 保持设备句柄打开, 句柄关闭时驱动自动解除保护
@@ -4352,6 +4607,165 @@ ConnectToEndpointDriver(
            epStatus.BehaviorsRecorded,
            epStatus.ThreatsDetected,
            epStatus.ProcessesSuspended);
+
+    *phDriver = hDriver;
+    return TRUE;
+}
+
+//=============================================================================
+// ConnectToInjectGuardDriver - 连接 InjectGuard 驱动并鉴权
+//
+// 与 AVDriver / EndPoint 驱动相同的 Challenge-Response + HMAC-SHA256 鉴权流程
+// 使用 IG_WIN32_DEVICE_NAME 设备名和 IOCTL_IG_AUTH_INIT / IOCTL_IG_AUTH_VERIFY
+//=============================================================================
+BOOL
+ConnectToInjectGuardDriver(
+    _Out_ HANDLE* phDriver
+)
+{
+    HANDLE hDriver = INVALID_HANDLE_VALUE;
+    DWORD bytesReturned;
+    AV_AUTH_CHALLENGE challenge;
+    AV_AUTH_RESPONSE response;
+    AV_AUTH_RESULT authResult;
+    UCHAR hmacInput[AV_CHALLENGE_SIZE + sizeof(UINT64)];
+    int retryCount;
+
+    for (retryCount = 0; retryCount < AV_DRIVER_RETRY_MAX; retryCount++)
+    {
+        hDriver = CreateFileW(
+            IG_WIN32_DEVICE_NAME,
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            NULL,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            NULL
+        );
+
+        if (hDriver != INVALID_HANDLE_VALUE)
+        {
+            break;
+        }
+
+        if (retryCount < AV_DRIVER_RETRY_MAX - 1)
+        {
+            printf("[IGMgr] Waiting for InjectGuard driver connection... (attempt %d/%d)\n",
+                   retryCount + 1, AV_DRIVER_RETRY_MAX);
+            Sleep(AV_DRIVER_RETRY_DELAY);
+        }
+    }
+
+    if (hDriver == INVALID_HANDLE_VALUE)
+    {
+        printf("[IGMgr] Unable to connect to InjectGuard driver (error: %lu)\n", GetLastError());
+        return FALSE;
+    }
+
+    printf("[IGMgr] Connected to InjectGuard driver\n");
+
+    ZeroMemory(&challenge, sizeof(challenge));
+    if (!DeviceIoControl(
+            hDriver,
+            IOCTL_IG_AUTH_INIT,
+            NULL, 0,
+            &challenge, sizeof(challenge),
+            &bytesReturned, NULL))
+    {
+        printf("[IGMgr] IOCTL_IG_AUTH_INIT failed (error: %lu)\n", GetLastError());
+        CloseHandle(hDriver);
+        return FALSE;
+    }
+
+    if (bytesReturned < sizeof(AV_AUTH_CHALLENGE))
+    {
+        printf("[IGMgr] IOCTL_IG_AUTH_INIT returned data too small\n");
+        CloseHandle(hDriver);
+        return FALSE;
+    }
+
+    CopyMemory(hmacInput, challenge.Challenge, AV_CHALLENGE_SIZE);
+    CopyMemory(hmacInput + AV_CHALLENGE_SIZE, &challenge.SequenceId, sizeof(UINT64));
+
+    ZeroMemory(&response, sizeof(response));
+    response.SequenceId = challenge.SequenceId;
+    CopyMemory(response.Challenge, challenge.Challenge, AV_CHALLENGE_SIZE);
+
+    if (!CalculateHmac(
+            hmacInput,
+            sizeof(hmacInput),
+            AV_SHARED_KEY,
+            AV_SHARED_KEY_SIZE,
+            response.Hmac))
+    {
+        printf("[IGMgr] HMAC calculation failed\n");
+        CloseHandle(hDriver);
+        return FALSE;
+    }
+
+    ZeroMemory(&authResult, sizeof(authResult));
+    if (!DeviceIoControl(
+            hDriver,
+            IOCTL_IG_AUTH_VERIFY,
+            &response, sizeof(response),
+            &authResult, sizeof(authResult),
+            &bytesReturned, NULL))
+    {
+        printf("[IGMgr] IOCTL_IG_AUTH_VERIFY failed (error: %lu)\n", GetLastError());
+        CloseHandle(hDriver);
+        return FALSE;
+    }
+
+    if (authResult.Status != STATUS_SUCCESS)
+    {
+        printf("[IGMgr] InjectGuard driver auth failed (Status: 0x%08lX)\n", authResult.Status);
+        CloseHandle(hDriver);
+        return FALSE;
+    }
+
+    printf("[IGMgr] InjectGuard driver auth succeeded\n");
+
+    //
+    // 验证连接: 查询 InjectGuard 状态
+    //
+    IG_STATUS igStatus;
+    ZeroMemory(&igStatus, sizeof(igStatus));
+    if (!DeviceIoControl(
+            hDriver,
+            IOCTL_IG_GET_STATUS,
+            NULL, 0,
+            &igStatus, sizeof(igStatus),
+            &bytesReturned, NULL))
+    {
+        printf("[IGMgr] IOCTL_IG_GET_STATUS failed (error: %lu)\n", GetLastError());
+        CloseHandle(hDriver);
+        return FALSE;
+    }
+
+    printf("[IGMgr] InjectGuard connection verified - Active: %u, Pending: %u, "
+           "TotalEvents: %u, Blocked: %u, Whitelist: %u\n",
+           igStatus.ProtectionActive,
+           igStatus.PendingEventCount,
+           igStatus.TotalEventsProcessed,
+           igStatus.TotalBlocked,
+           igStatus.WhitelistCount);
+
+    //
+    // 启用保护
+    //
+    if (!DeviceIoControl(
+            hDriver,
+            IOCTL_IG_ENABLE_PROTECTION,
+            NULL, 0,
+            NULL, 0,
+            &bytesReturned, NULL))
+    {
+        printf("[IGMgr] IOCTL_IG_ENABLE_PROTECTION failed (error: %lu)\n", GetLastError());
+    }
+    else
+    {
+        printf("[IGMgr] InjectGuard protection enabled\n");
+    }
 
     *phDriver = hDriver;
     return TRUE;
@@ -4778,6 +5192,174 @@ EndPointMonitorThread(
 }
 
 //=============================================================================
+// InjectGuard 注入防御监控线程
+//
+// 轮询 InjectGuard 驱动获取注入事件通知 (通过 ObRegisterCallbacks 检测),
+// 转发 AVMain 弹窗决策, 决策通过 IOCTL 送回驱动:
+//   1=放行 2=阻断
+// AVMain 未连接或决策超时 -> 默认放行
+//
+// 三层架构: 驱动 ←IOCTL→ Agent(SYSTEM) ←命名管道→ 主程序
+//=============================================================================
+typedef struct _INJECTGUARD_MONITOR_PARAMS
+{
+    HANDLE hInjectGuard;
+} INJECTGUARD_MONITOR_PARAMS;
+
+static
+DWORD WINAPI
+InjectGuardMonitorThread(
+    _In_ LPVOID lpParam
+)
+{
+    INJECTGUARD_MONITOR_PARAMS* params = (INJECTGUARD_MONITOR_PARAMS*)lpParam;
+    HANDLE hIG = params->hInjectGuard;
+    DWORD bytesReturned;
+    IG_NOTIFICATION notification;
+    UINT32 lastSequenceId = 0;
+
+    printf("[IGMgr] InjectGuard monitor thread started\n");
+
+    while (TRUE)
+    {
+        ZeroMemory(&notification, sizeof(notification));
+
+        if (!DeviceIoControl(
+                hIG,
+                IOCTL_IG_GET_NOTIFICATION,
+                NULL, 0,
+                &notification, sizeof(notification),
+                &bytesReturned, NULL))
+        {
+            printf("[IGMgr] GET_NOTIFICATION failed (error: %lu)\n", GetLastError());
+            Sleep(200);
+            continue;
+        }
+
+        if (!notification.HasPending || notification.SequenceId == lastSequenceId)
+        {
+            Sleep(50);
+            continue;
+        }
+
+        lastSequenceId = notification.SequenceId;
+
+        //
+        // 仅对完整注入链事件 (IG_EVENT_INJECTION_CHAIN) 转发弹窗
+        // 其他事件 (OpenProcess、CreateRemoteThread 等) 仅记录日志
+        //
+        if (notification.EventType == IG_EVENT_INJECTION_CHAIN)
+        {
+            printf("[IGMgr] INJECTION CHAIN detected! src=%u(%ws) -> tgt=%u(%ws), seq=%u\n",
+                   notification.SourcePid, notification.SourceProcessName,
+                   notification.TargetPid, notification.TargetProcessName,
+                   notification.SequenceId);
+
+            EnterCriticalSection(&g_MainPipeLock);
+            HANDLE hMainPipe = g_hMainPipe;
+            LeaveCriticalSection(&g_MainPipeLock);
+
+            AV_PIPE_IG_NOTIFY_DATA notifyMsg;
+            ZeroMemory(&notifyMsg, sizeof(notifyMsg));
+            notifyMsg.SequenceId = notification.SequenceId;
+            notifyMsg.EventType = notification.EventType;
+            notifyMsg.SourcePid = notification.SourcePid;
+            notifyMsg.TargetPid = notification.TargetPid;
+            notifyMsg.ThreadId = notification.ThreadId;
+            notifyMsg.StartAddress = notification.StartAddress;
+            notifyMsg.AccessMask = notification.AccessMask;
+            notifyMsg.ChainStepCount = notification.ChainStepCount;
+            CopyMemory(notifyMsg.ChainSteps, notification.ChainSteps, sizeof(notifyMsg.ChainSteps));
+            CopyMemory(notifyMsg.SourceProcessName, notification.SourceProcessName,
+                       sizeof(notifyMsg.SourceProcessName));
+            CopyMemory(notifyMsg.TargetProcessName, notification.TargetProcessName,
+                       sizeof(notifyMsg.TargetProcessName));
+
+            //
+            // 默认决策: 放行 (ObRegisterCallbacks 不能阻断句柄创建,
+            // InjectGuard 目前为告警模式; 后续可扩展为 RemoveEntryList 阻断)
+            //
+            UINT32 decision = IG_DECISION_ALLOW;
+
+            if (hMainPipe == NULL)
+            {
+                printf("[IGMgr] No AVMain connected, allowing injection\n");
+            }
+            else if (!SendPipeMessage(hMainPipe, AvPipeMsgInjectGuardNotify,
+                                      &notifyMsg, sizeof(notifyMsg)))
+            {
+                printf("[IGMgr] Send notify to AVMain failed, allowing\n");
+            }
+            else
+            {
+                printf("[IGMgr] Notification forwarded to AVMain, waiting decision...\n");
+
+                UINT32 userDecision = WaitForPipeRawDecision(
+                    AvPipeMsgInjectGuardDecision,
+                    notification.SequenceId,
+                    AV_NOTIFICATION_TIMEOUT_MS);
+
+                if (userDecision != 0)
+                {
+                    decision = userDecision;
+                }
+                else
+                {
+                    printf("[IGMgr] Decision timeout, defaulting to allow\n");
+                }
+            }
+
+            //
+            // 发送决策给 InjectGuard 驱动
+            //
+            IG_DECISION decisionMsg;
+            ZeroMemory(&decisionMsg, sizeof(decisionMsg));
+            decisionMsg.SequenceId = notification.SequenceId;
+            decisionMsg.Decision = decision;
+
+            if (!DeviceIoControl(
+                    hIG,
+                    IOCTL_IG_SEND_DECISION,
+                    &decisionMsg, sizeof(decisionMsg),
+                    NULL, 0,
+                    &bytesReturned, NULL))
+            {
+                printf("[IGMgr] SEND_DECISION failed (error: %lu)\n", GetLastError());
+            }
+            else
+            {
+                const wchar_t* decisionDesc =
+                    (decision == IG_DECISION_BLOCK) ? L"BLOCK" : L"ALLOW";
+                printf("[IGMgr] Decision %ls sent to driver (seq=%u)\n",
+                       decisionDesc, notification.SequenceId);
+            }
+        }
+        else
+        {
+            //
+            // 非注入链事件: 仅日志
+            //
+            const wchar_t* evtName = L"Unknown";
+            switch (notification.EventType)
+            {
+                case IG_EVENT_PROCESS_OPEN:   evtName = L"OpenProcess"; break;
+                case IG_EVENT_REMOTE_THREAD:  evtName = L"CreateRemoteThread"; break;
+                case IG_EVENT_CROSS_MEM_WRITE: evtName = L"WriteProcessMemory"; break;
+                case IG_EVENT_CROSS_MEM_ALLOC: evtName = L"VirtualAllocEx"; break;
+                case IG_EVENT_SECTION_MAP:    evtName = L"SectionMap"; break;
+            }
+            printf("[IGMgr] %ws: %ws(PID=%u) -> %ws(PID=%u) [seq=%u]\n",
+                   evtName,
+                   notification.SourceProcessName, notification.SourcePid,
+                   notification.TargetProcessName, notification.TargetPid,
+                   notification.SequenceId);
+        }
+    }
+
+    return 0;
+}
+
+//=============================================================================
 // RunDiagnostics - 诊断模式
 //
 // 连接驱动后循环打印进程通知诊断信息, 用于定位拦截不生效问题
@@ -4909,6 +5491,20 @@ RunService(VOID)
     }
 
     //
+    // 自动安装并启动 InjectGuard 注入防御驱动
+    //
+    HANDLE hInjectGuard = INVALID_HANDLE_VALUE;
+    if (!EnsureInjectGuardDriverRunning())
+    {
+        printf("[AVSystem] InjectGuard driver init failed, continuing without injection protection\n");
+    }
+    else if (!ConnectToInjectGuardDriver(&hInjectGuard))
+    {
+        printf("[AVSystem] InjectGuard driver connection failed, continuing without injection protection\n");
+        hInjectGuard = INVALID_HANDLE_VALUE;
+    }
+
+    //
     // 启动管道决策分发线程 (唯一管道读取者, 路由进程/注册表决策)
     //
     HANDLE hDecisionThread = CreateThread(
@@ -5037,6 +5633,32 @@ RunService(VOID)
     }
 
     //
+    // 启动 InjectGuard 注入防御监控线程 (需 InjectGuard 驱动连接成功)
+    //
+    if (hInjectGuard != INVALID_HANDLE_VALUE)
+    {
+        INJECTGUARD_MONITOR_PARAMS igParams;
+        igParams.hInjectGuard = hInjectGuard;
+
+        HANDLE hInjectGuardMonitorThread = CreateThread(
+            NULL, 0,
+            InjectGuardMonitorThread,
+            &igParams,
+            0, NULL
+        );
+
+        if (hInjectGuardMonitorThread == NULL)
+        {
+            printf("[AVSystem] Start InjectGuard monitor thread failed (error: %lu)\n", GetLastError());
+        }
+        else
+        {
+            printf("[AVSystem] InjectGuard monitor thread started\n");
+            CloseHandle(hInjectGuardMonitorThread);
+        }
+    }
+
+    //
     // 启动驱动心跳线程
     // 决策等待期间监控线程不发 IOCTL, 驱动 5 秒超时会误判客户端离线
     // 并静默放行新进程; 心跳线程每 2 秒刷新驱动端活跃时间戳
@@ -5086,6 +5708,11 @@ RunService(VOID)
     if (hEndpoint != INVALID_HANDLE_VALUE)
     {
         CloseHandle(hEndpoint);
+    }
+
+    if (hInjectGuard != INVALID_HANDLE_VALUE)
+    {
+        CloseHandle(hInjectGuard);
     }
 
     if (hXgs != INVALID_HANDLE_VALUE)

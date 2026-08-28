@@ -15,6 +15,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "XIGUASelfProtect", "XIGUASe
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "XIGUAEndPoint", "XIGUAEndPoint\XIGUAEndPoint.vcxproj", "{E7F8A9B0-C1D2-3456-7890-ABCDEF123457}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "XIGUAInjectGuard", "XIGUAInjectGuard\XIGUAInjectGuard.vcxproj", "{F8A9B0C1-D2E3-4567-890A-BCDEF1234580}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -45,6 +47,10 @@ Global
 		{E7F8A9B0-C1D2-3456-7890-ABCDEF123457}.Debug|x64.Build.0 = Debug|x64
 		{E7F8A9B0-C1D2-3456-7890-ABCDEF123457}.Release|x64.ActiveCfg = Release|x64
 		{E7F8A9B0-C1D2-3456-7890-ABCDEF123457}.Release|x64.Build.0 = Release|x64
+		{F8A9B0C1-D2E3-4567-890A-BCDEF1234580}.Debug|x64.ActiveCfg = Debug|x64
+		{F8A9B0C1-D2E3-4567-890A-BCDEF1234580}.Debug|x64.Build.0 = Debug|x64
+		{F8A9B0C1-D2E3-4567-890A-BCDEF1234580}.Release|x64.ActiveCfg = Release|x64
+		{F8A9B0C1-D2E3-4567-890A-BCDEF1234580}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

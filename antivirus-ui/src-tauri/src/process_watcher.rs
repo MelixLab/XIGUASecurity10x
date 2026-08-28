@@ -127,6 +127,17 @@ impl ProcessWatcher {
                                         }
                                     }
 
+                                    // ★EDR行为检测——防御规避/凭据窃取/进程注入★
+                                    let cmd = get_process_command_line(pid);
+                                    let proc_name = name.clone();
+                                    run_edr_detection(
+                                        pid,
+                                        &proc_name,
+                                        path.as_deref(),
+                                        cmd.as_deref(),
+                                        &app_handle,
+                                    );
+
                                     let event = ProcessStartEvent {
                                         pid,
                                         name,
@@ -217,6 +228,17 @@ fn run_fallback_polling(running: Arc<AtomicBool>, app_handle: tauri::AppHandle) 
                                 }
                             }
 
+                            // ★EDR行为检测（fallback模式）★
+                            let cmd = get_process_command_line(pid);
+                            let proc_name = name.clone();
+                            run_edr_detection(
+                                pid,
+                                &proc_name,
+                                path.as_deref(),
+                                cmd.as_deref(),
+                                &app_handle,
+                            );
+
                             let event = ProcessStartEvent {
                                 pid,
                                 name,
@@ -306,5 +328,148 @@ fn get_process_path(pid: u32) -> Option<String> {
             }
         }
         None
+    }
+}
+
+/// 通过 WMI 查询进程命令行
+fn get_process_command_line(pid: u32) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct Win32Proc {
+        CommandLine: Option<String>,
+    }
+
+    let wmi_con = wmi::WMIConnection::new(wmi::COMLibrary::new().ok()?).ok()?;
+    let wql = format!("SELECT CommandLine FROM Win32_Process WHERE ProcessId = {}", pid);
+    let results: Vec<Win32Proc> = wmi_con.raw_query(&wql).ok()?;
+    results.into_iter().next().and_then(|p| p.CommandLine)
+}
+
+/// 执行 EDR 行为检测（防御规避 + 凭据访问 + 进程注入 + 行为规则引擎）
+fn run_edr_detection(
+    pid: u32,
+    process_name: &str,
+    _path: Option<&str>,
+    command_line: Option<&str>,
+    app_handle: &tauri::AppHandle,
+) {
+    let cmd = command_line.unwrap_or("");
+
+    // 跳过自身进程
+    if process_name.to_lowercase().contains("xiguasecurity") {
+        return;
+    }
+
+    let mut should_kill = false;
+    let mut detections: Vec<(String, String, u8)> = Vec::new(); // (technique, description, severity)
+
+    // 1. 防御规避检测
+    for d in crate::defense_evasion::check_process_creation(pid, process_name, cmd) {
+        if d.should_terminate {
+            should_kill = true;
+        }
+        if d.should_notify {
+            detections.push((
+                d.event.mitre_technique().to_string(),
+                d.event.description(),
+                d.event.severity(),
+            ));
+        }
+    }
+
+    // 2. 凭据访问检测
+    for d in crate::credential_access::check_process_creation(pid, process_name, cmd) {
+        if d.should_terminate {
+            should_kill = true;
+        }
+        if d.should_notify {
+            detections.push((
+                d.event.mitre_technique().to_string(),
+                d.event.description(),
+                d.event.severity(),
+            ));
+        }
+    }
+
+    // 3. 进程注入检测（命令行模式）
+    if let Some(d) = crate::process_injection::detect_injection_commandline(pid, process_name, cmd) {
+        if d.should_terminate {
+            should_kill = true;
+        }
+        detections.push((
+            d.technique.mitre_id().to_string(),
+            d.description,
+            d.severity,
+        ));
+    }
+
+    // 4. 行为规则引擎
+    let ctx = crate::behavior_engine::ProcessContext {
+        pid,
+        parent_pid: 0,
+        process_name: process_name.into(),
+        parent_name: String::new(),
+        command_line: cmd.into(),
+        image_path: _path.unwrap_or("").into(),
+        creation_time: chrono::Local::now().timestamp() as u64,
+    };
+    for rule in crate::behavior_engine::evaluate_process(ctx) {
+        if matches!(rule.response, crate::behavior_engine::ResponseAction::Terminate) {
+            should_kill = true;
+        }
+        let sev = match rule.severity {
+            crate::behavior_engine::ThreatLevel::Critical => 95,
+            crate::behavior_engine::ThreatLevel::High => 80,
+            crate::behavior_engine::ThreatLevel::Medium => 60,
+            crate::behavior_engine::ThreatLevel::Low => 40,
+            crate::behavior_engine::ThreatLevel::Info => 20,
+        };
+        detections.push((
+            rule.technique.id().to_string(),
+            format!("{}: {}", rule.rule_name, rule.matched_detail),
+            sev,
+        ));
+    }
+
+    // 5. AMSI 扫描（如果是脚本解释器进程）
+    let script_interpreters = ["powershell.exe", "pwsh.exe", "cmd.exe", "wscript.exe", "cscript.exe"];
+    if script_interpreters.contains(&process_name.to_lowercase().as_str()) {
+        if let (amsi_result, Some(msg)) = crate::amsi_protection::scan_script_command(process_name, cmd) {
+            let sev = match amsi_result {
+                crate::amsi_protection::AmsiResult::Blocked => { should_kill = true; 95 }
+                crate::amsi_protection::AmsiResult::DetectedByAV => { should_kill = true; 90 }
+                _ => 50,
+            };
+            detections.push(("AMSI".to_string(), msg, sev));
+        }
+    }
+
+    // 终止恶意进程
+    if should_kill {
+        println!("[EDR] Terminating malicious process: {} (PID={})", process_name, pid);
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+    }
+
+    // 发送检测结果到前端
+    for (technique, desc, severity) in &detections {
+        let _ = app_handle.emit("edr-detection", serde_json::json!({
+            "pid": pid,
+            "process": process_name,
+            "technique": technique,
+            "description": desc,
+            "severity": severity,
+            "action": if should_kill { "terminated" } else { "notified" },
+            "timestamp": chrono::Local::now().to_rfc3339(),
+        }));
+    }
+
+    if !detections.is_empty() {
+        let max_sev = detections.iter().map(|(_, _, s)| *s).max().unwrap_or(0);
+        println!(
+            "[EDR] {} detections for {} (PID={}), max severity={}",
+            detections.len(), process_name, pid, max_sev
+        );
     }
 }

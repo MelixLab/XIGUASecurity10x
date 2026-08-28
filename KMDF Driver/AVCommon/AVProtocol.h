@@ -88,6 +88,15 @@
 #define XGS_EP_WIN32_DEVICE_NAME L"\\\\.\\XGSEndPoint"
 
 //
+// InjectGuard 注入防御驱动常量
+//
+#define IG_DEVICE_NAME          L"\\Device\\XIGUAInjectGuard"
+#define IG_SYMLINK_NAME         L"\\DosDevices\\XIGUAInjectGuard"
+#define IG_WIN32_DEVICE_NAME    L"\\\\.\\XIGUAInjectGuard"
+#define IG_MAX_NAME_LEN         260
+#define IG_MAX_CHAIN_STEPS      8
+
+//
 // 勒索防护常量
 //
 #define XGS_MAX_FILE_PATH_LEN   520         // 文件路径最大长度
@@ -314,6 +323,109 @@ typedef struct _XGS_SP_REGISTER_PIDS_INPUT {
     UINT32 PidCount;                                  // 实际 PID 数量
     UINT32 Pids[XGS_SP_REGISTER_PIDS_MAX];           // 受保护 PID 数组
 } XGS_SP_REGISTER_PIDS_INPUT, *PXGS_SP_REGISTER_PIDS_INPUT;
+
+//
+// InjectGuard 注入防御驱动 IOCTL
+//
+#define IOCTL_IG_AUTH_INIT \
+    CTL_CODE(AV_IOCTL_DEVICE_TYPE, 0x9C0, METHOD_BUFFERED, FILE_READ_DATA | FILE_WRITE_DATA)
+
+#define IOCTL_IG_AUTH_VERIFY \
+    CTL_CODE(AV_IOCTL_DEVICE_TYPE, 0x9C1, METHOD_BUFFERED, FILE_READ_DATA | FILE_WRITE_DATA)
+
+#define IOCTL_IG_GET_NOTIFICATION \
+    CTL_CODE(AV_IOCTL_DEVICE_TYPE, 0x9C2, METHOD_BUFFERED, FILE_READ_DATA | FILE_WRITE_DATA)
+
+#define IOCTL_IG_SEND_DECISION \
+    CTL_CODE(AV_IOCTL_DEVICE_TYPE, 0x9C3, METHOD_BUFFERED, FILE_READ_DATA | FILE_WRITE_DATA)
+
+#define IOCTL_IG_GET_STATUS \
+    CTL_CODE(AV_IOCTL_DEVICE_TYPE, 0x9C4, METHOD_BUFFERED, FILE_READ_DATA | FILE_WRITE_DATA)
+
+#define IOCTL_IG_ENABLE_PROTECTION \
+    CTL_CODE(AV_IOCTL_DEVICE_TYPE, 0x9C5, METHOD_BUFFERED, FILE_READ_DATA | FILE_WRITE_DATA)
+
+#define IOCTL_IG_DISABLE_PROTECTION \
+    CTL_CODE(AV_IOCTL_DEVICE_TYPE, 0x9C6, METHOD_BUFFERED, FILE_READ_DATA | FILE_WRITE_DATA)
+
+#define IOCTL_IG_ADD_WHITELIST \
+    CTL_CODE(AV_IOCTL_DEVICE_TYPE, 0x9C7, METHOD_BUFFERED, FILE_READ_DATA | FILE_WRITE_DATA)
+
+#define IOCTL_IG_REMOVE_WHITELIST \
+    CTL_CODE(AV_IOCTL_DEVICE_TYPE, 0x9C8, METHOD_BUFFERED, FILE_READ_DATA | FILE_WRITE_DATA)
+
+//
+// InjectGuard 事件类型
+//
+#define IG_EVENT_REMOTE_THREAD     1
+#define IG_EVENT_CROSS_MEM_WRITE   2
+#define IG_EVENT_CROSS_MEM_ALLOC   3
+#define IG_EVENT_SECTION_MAP       4
+#define IG_EVENT_PROCESS_OPEN      5
+#define IG_EVENT_INJECTION_CHAIN   6
+
+//
+// InjectGuard 决策码
+//
+#define IG_DECISION_ALLOW         1
+#define IG_DECISION_BLOCK         2
+
+//
+// InjectGuard 注入链步骤类型
+//
+#define IG_STEP_OPEN_PROCESS    1
+#define IG_STEP_ALLOC_MEM       2
+#define IG_STEP_WRITE_MEM       3
+#define IG_STEP_CREATE_THREAD   4
+#define IG_STEP_SECTION_CREATE  5
+#define IG_STEP_SECTION_MAP     6
+#define IG_STEP_SUSPEND_THREAD  7
+#define IG_STEP_SET_CONTEXT     8
+#define IG_STEP_RESUME_THREAD   9
+
+//
+// InjectGuard 注入事件通知 (IOCTL_IG_GET_NOTIFICATION 输出)
+//
+typedef struct _IG_NOTIFICATION {
+    BOOLEAN  HasPending;                           // 是否有待处理事件
+    UINT32   SequenceId;                           // 事件序列号 (用于决策匹配)
+    UINT32   EventType;                            // IG_EVENT_*
+    UINT32   SourcePid;                            // 源进程 PID
+    UINT32   TargetPid;                            // 目标进程 PID
+    UINT32   ThreadId;                             // 线程ID (远程线程时有效)
+    UINT64   StartAddress;                         // 远程线程起始地址
+    UINT32   AccessMask;                           // 请求的访问权限
+    UINT32   ChainStepCount;                       // 注入链步数
+    UINT32   ChainSteps[IG_MAX_CHAIN_STEPS];       // 注入链步骤
+    WCHAR    SourceProcessName[IG_MAX_NAME_LEN];   // 源进程名
+    WCHAR    TargetProcessName[IG_MAX_NAME_LEN];   // 目标进程名
+} IG_NOTIFICATION, *PIG_NOTIFICATION;
+
+//
+// InjectGuard 决策 (IOCTL_IG_SEND_DECISION 输入)
+//
+typedef struct _IG_DECISION {
+    UINT32   SequenceId;                           // 对应事件的序列号
+    UINT32   Decision;                             // IG_DECISION_*
+} IG_DECISION, *PIG_DECISION;
+
+//
+// InjectGuard 白名单条目 (IOCTL_IG_ADD/REMOVE_WHITELIST 输入)
+//
+typedef struct _IG_WHITELIST_ENTRY {
+    WCHAR    ProcessName[IG_MAX_NAME_LEN];         // 进程名 (不区分大小写)
+} IG_WHITELIST_ENTRY, *PIG_WHITELIST_ENTRY;
+
+//
+// InjectGuard 状态 (IOCTL_IG_GET_STATUS 输出)
+//
+typedef struct _IG_STATUS {
+    UINT32   ProtectionActive;
+    UINT32   PendingEventCount;
+    UINT32   TotalEventsProcessed;
+    UINT32   TotalBlocked;
+    UINT32   WhitelistCount;
+} IG_STATUS, *PIG_STATUS;
 
 //
 // 诊断信息 IOCTL (调试用)
@@ -859,6 +971,10 @@ typedef enum _AV_PIPE_MSG_TYPE
     AvPipeMsgEndPointNotify    = 0x2050,   // System -> Main: EndPoint 威胁通知 (要求 Main 弹窗决策)
     AvPipeMsgEndPointDecision  = 0x2051,   // Main -> System: EndPoint 决策回复
 
+    // InjectGuard 注入防御通知/决策
+    AvPipeMsgInjectGuardNotify   = 0x2070,   // System -> Main: 注入检测通知 (要求 Main 弹窗决策)
+    AvPipeMsgInjectGuardDecision = 0x2071,   // Main -> System: 注入检测决策回复
+
     // 系统控制 (Main -> System)
     AvPipeMsgShutdownRequest   = 0x3000,   // Main -> System: 请求 AVSystem 退出 (驱动保持加载)
 
@@ -1086,6 +1202,37 @@ typedef struct _AV_PIPE_EP_DECISION
     UINT64   NotificationId;                 // 对应通知 ID
     UINT32   Decision;                       // 1=放行(恢复) 2=终止进程
 } AV_PIPE_EP_DECISION_DATA;
+#pragma pack(pop)
+
+//
+// 管道消息: InjectGuard 注入检测通知 (System -> Main)
+//
+#pragma pack(push, 1)
+typedef struct _AV_PIPE_IG_NOTIFY
+{
+    UINT32   SequenceId;                            // 事件序列号 (用于决策匹配)
+    UINT32   EventType;                             // IG_EVENT_*
+    UINT32   SourcePid;                             // 源进程 PID
+    UINT32   TargetPid;                             // 目标进程 PID
+    UINT32   ThreadId;                              // 线程ID
+    UINT64   StartAddress;                          // 远程线程起始地址
+    UINT32   AccessMask;                            // 请求的访问权限
+    UINT32   ChainStepCount;                        // 注入链步数
+    UINT32   ChainSteps[IG_MAX_CHAIN_STEPS];       // 注入链步骤
+    WCHAR    SourceProcessName[IG_MAX_NAME_LEN];   // 源进程名
+    WCHAR    TargetProcessName[IG_MAX_NAME_LEN];   // 目标进程名
+} AV_PIPE_IG_NOTIFY_DATA;
+#pragma pack(pop)
+
+//
+// 管道消息: InjectGuard 决策回复 (Main -> System)
+//
+#pragma pack(push, 1)
+typedef struct _AV_PIPE_IG_DECISION
+{
+    UINT32   SequenceId;                            // 对应事件序列号
+    UINT32   Decision;                             // 1=放行 2=阻断
+} AV_PIPE_IG_DECISION_DATA;
 #pragma pack(pop)
 
 //

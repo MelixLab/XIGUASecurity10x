@@ -1,30 +1,730 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="stylesheet" href="/src/styles.css" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Antivirus Security</title>
-    <script type="module" src="/src/main.ts" defer></script>
-  </head>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XIGUASecurity</title>
+    <link rel="stylesheet" href="/css/style.css">
+    <style>
+        /* 通知弹窗动画 */
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        @keyframes slideOut {
+            from { transform: translateX(0); opacity: 1; }
+            to { transform: translateX(100%); opacity: 0; }
+        }
+        /* 下拉框样式 - 内联兜底 */
+        .setting-select {
+            -webkit-appearance: none !important;
+            appearance: none !important;
+            padding: 6px 32px 6px 12px !important;
+            border: 1px solid #d1d1d6 !important;
+            border-radius: 6px !important;
+            font-size: 13px !important;
+            font-family: 'Segoe UI', 'Microsoft YaHei UI', system-ui, sans-serif !important;
+            background-color: #f5f5f7 !important;
+            color: #1d1d1f !important;
+            outline: none !important;
+            cursor: pointer !important;
+            min-width: 140px;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23666' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 8px center;
+            background-size: 14px;
+        }
+        .setting-select:hover {
+            border-color: #00BFA5 !important;
+        }
+        .setting-select:focus {
+            border-color: #00BFA5 !important;
+            box-shadow: 0 0 0 2px rgba(0, 191, 165, 0.1) !important;
+        }
+        /* 首次启动导览气泡动画 */
+        @keyframes oobePop {
+            from { opacity: 0; transform: scale(0.92) translateY(8px); }
+            to { opacity: 1; transform: scale(1) translateY(0); }
+        }
+    </style>
+</head>
+<body>
+    <!-- Loading Overlay -->
+    <div id="loading_overlay">
+        <svg class="spinner" viewBox="0 0 50 50">
+            <circle class="path" cx="25" cy="25" r="20" fill="none" stroke-width="5"></circle>
+        </svg>
+    </div>
 
-  <body>
-    <div id="app"></div>
+    <!-- Main App Container -->
+    <div class="app-container" id="app">
+        <!-- Title Bar -->
+        <header class="titlebar">
+            <div class="titlebar-left">
+                <img class="titlebar-logo" src="icon.png" alt="XIGUASecurity">
+                <span class="titlebar-title">XIGUASecurity</span>
+            </div>
+            <div class="titlebar-right">
+                <button class="ctrl-btn" id="notification-btn" title="通知中心" style="position: relative;">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+                    <span id="notification-badge" style="position: absolute; top: 2px; right: 2px; width: 8px; height: 8px; border-radius: 50%; background: #d13438; display: none;"></span>
+                </button>
+                <div class="titlebar-menu-container">
+                    <button class="ctrl-btn" id="menu-btn" title="菜单">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+                    </button>
+                    <div class="titlebar-menu-dropdown" id="menu-dropdown">
+                        <div class="menu-dropdown-item" id="menu-chat" data-i18n="menu.chat">云平台</div>
+                        <div class="menu-dropdown-item" id="menu-toolbox" data-i18n="menu.toolbox">工具箱</div>
+                        <div class="menu-dropdown-item" id="menu-advanced-settings" data-i18n="menu.advanced">高级设置</div>
+                        <div class="menu-dropdown-item" id="menu-engine-overview" data-i18n="menu.engine">引擎概览</div>
+                        <div class="menu-dropdown-item" id="menu-demo-mode" data-i18n="menu.demo">演示模式</div>
+                    </div>
+                </div>
+                <button class="ctrl-btn" id="minimize_btn">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                </button>
+                <button class="ctrl-btn close-btn" id="close_btn">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+            </div>
+        </header>
 
-    <!-- 液态玻璃 SVG 滤镜定义（feTurbulence 噪声 + feDisplacementMap 扭曲，模拟玻璃折射） -->
-    <svg width="0" height="0" style="position:absolute;width:0;height:0;overflow:hidden;" aria-hidden="true">
-      <defs>
-        <filter id="lg-dist" x="-20%" y="-20%" width="140%" height="140%">
-          <feTurbulence type="fractalNoise" baseFrequency="0.01 0.015" numOctaves="2" seed="92" result="noise" />
-          <feGaussianBlur in="noise" result="blurred" stdDeviation="1.5" />
-          <feDisplacementMap in="SourceGraphic" in2="blurred" scale="24" xChannelSelector="R" yChannelSelector="G" />
-        </filter>
-        <filter id="lg-dist-strong" x="-20%" y="-20%" width="140%" height="140%">
-          <feTurbulence type="fractalNoise" baseFrequency="0.012 0.018" numOctaves="2" seed="92" result="noise" />
-          <feGaussianBlur in="noise" result="blurred" stdDeviation="2" />
-          <feDisplacementMap in="SourceGraphic" in2="blurred" scale="42" xChannelSelector="R" yChannelSelector="G" />
-        </filter>
-      </defs>
-    </svg>
-  </body>
+        <!-- Main Layout -->
+        <div class="main-layout">
+            <!-- Sidebar -->
+            <aside class="sidebar">
+                <nav class="sidebar-nav">
+                    <button class="nav-btn active" data-page="home" data-label="概览" data-label-key="nav.home">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+                    </button>
+                    <button class="nav-btn" data-page="scan" data-label="病毒扫描" data-label-key="nav.scan">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                    </button>
+                    <button class="nav-btn" data-page="protection" data-label="实时防护" data-label-key="nav.protection">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+                    </button>
+                    <button class="nav-btn" data-page="quarantine" data-label="隔离区" data-label-key="nav.quarantine">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+                    </button>
+                    <button class="nav-btn" data-page="logs" data-label="安全日志" data-label-key="nav.logs">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
+                    </button>
+                </nav>
+                <div class="sidebar-spacer"></div>
+                <button class="nav-btn settings-nav" data-page="settings" data-label="设置" data-label-key="nav.settings">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                </button>
+                <button class="nav-btn sidebar-toggle" id="sidebarToggle">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+                </button>
+            </aside>
+
+            <!-- Content Area -->
+            <main class="content">
+                <!-- Home Page -->
+                <section id="page-home" class="page active">
+                    <div class="home-status">
+                        <img class="home-illustration" id="homeIllustration" src="illustration.svg" alt="Protected">
+                        <h1 class="home-title" id="homeTitle" data-i18n="home.title">Protected</h1>
+                        <p class="home-sub" id="homeSub" data-i18n="home.sub">All protection features are active on this device</p>
+                        <div class="home-status-line" id="homeStatusLine">
+                            <span class="status-dot" id="homeStatusDot"></span>
+                            <span id="homeStatusText" data-i18n="home.statusOn">Real-time protection on &nbsp;·&nbsp; Definitions up to date</span>
+                        </div>
+                        <button class="btn btn-primary home-scan-btn" data-page="scan">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                            <span data-i18n="home.quickScan">Quick Scan</span>
+                        </button>
+                        <!-- 建议卡片（浮动覆盖） -->
+                        <div class="home-suggestion" id="homeSuggestion" style="display:none">
+                            <div class="suggestion-card" id="suggestionCard">
+                                <div class="suggestion-header">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                                    <span data-i18n="home.suggestionTitle">需要执行操作</span>
+                                    <button class="suggestion-dismiss" id="suggestionDismiss" title="忽略">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                                    </button>
+                                </div>
+                                <div class="suggestion-body" id="suggestionBody"></div>
+                                <div class="suggestion-footer">
+                                    <span data-i18n="home.suggestionFooter">点击前往防护页面启用所有防护</span>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="home-stats">
+                        <div class="home-stat">
+                            <span class="home-stat-value" id="stat-threats">0</span>
+                            <span class="home-stat-label" data-i18n="home.threatsBlocked">Threats Blocked</span>
+                        </div>
+                        <span class="home-stat-sep"></span>
+                        <div class="home-stat">
+                            <span class="home-stat-value" id="stat-scanned">0</span>
+                            <span class="home-stat-label" data-i18n="home.filesScanned">Files Scanned</span>
+                        </div>
+                        <span class="home-stat-sep"></span>
+                        <div class="home-stat">
+                            <span class="home-stat-value" id="stat-days">0</span>
+                            <span class="home-stat-label" data-i18n="home.daysProtected">Days Protected</span>
+                        </div>
+                    </div>
+                    </section>
+
+                <!-- Scan Page -->
+                <section id="page-scan" class="page">
+                    <div class="scan-view" id="scanModeView">
+                        <div class="page-header">
+                            <h1 data-i18n="scan.title">Virus Scan</h1>
+                            <p data-i18n="scan.sub">Select a scan type to check your system</p>
+                        </div>
+                        <div class="action-grid">
+                            <button class="action-card" data-mode="quick">
+                                <div class="action-icon">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                                </div>
+                                <div class="action-content">
+                                    <div class="action-title" data-i18n="scan.quick">Quick Scan</div>
+                                    <div class="action-desc" data-i18n="scan.quickDesc">Scan critical system areas, takes 1-2 minutes</div>
+                                </div>
+                                <svg class="action-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                            </button>
+                            <button class="action-card" data-mode="full">
+                                <div class="action-icon">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+                                </div>
+                                <div class="action-content">
+                                    <div class="action-title" data-i18n="scan.full">Full Scan</div>
+                                    <div class="action-desc" data-i18n="scan.fullDesc">Deep scan all files, takes 15-30 minutes</div>
+                                </div>
+                                <svg class="action-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                            </button>
+                            <button class="action-card" data-mode="custom">
+                                <div class="action-icon">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                                </div>
+                                <div class="action-content">
+                                    <div class="action-title" data-i18n="scan.custom">Custom Scan</div>
+                                    <div class="action-desc" data-i18n="scan.customDesc">Select specific folders to scan</div>
+                                </div>
+                                <svg class="action-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="scan-view hidden" id="scanProgressView">
+                        <div class="scanning-page">
+                            <div class="scan-main-card">
+                                <div class="scan-card-header">
+                                    <div class="scan-header-left">
+                                        <div class="scan-anim-container">
+                                            <svg class="scan-anim-icon" id="scanAnimIcon" width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" overflow="visible">
+                                                <defs>
+                                                    <linearGradient id="trail-up" x1="0" y1="1" x2="0" y2="0">
+                                                        <stop offset="0%" stop-color="var(--primary)" stop-opacity="0.35"/>
+                                                        <stop offset="100%" stop-color="var(--primary)" stop-opacity="0"/>
+                                                    </linearGradient>
+                                                    <linearGradient id="trail-down" x1="0" y1="0" x2="0" y2="1">
+                                                        <stop offset="0%" stop-color="var(--primary)" stop-opacity="0.35"/>
+                                                        <stop offset="100%" stop-color="var(--primary)" stop-opacity="0"/>
+                                                    </linearGradient>
+                                                </defs>
+                                                <rect x="10" y="6" width="28" height="36" rx="4" stroke="var(--primary)" stroke-width="1.8" fill="var(--primary-alpha)" opacity="0.5"/>
+                                                <path d="M28 6v8h8" stroke="var(--primary)" stroke-width="1.5" fill="none" opacity="0.4"/>
+                                                <rect x="16" y="18" width="16" height="2.5" rx="1" fill="var(--primary)" opacity="0.3"/>
+                                                <rect x="16" y="24" width="12" height="2.5" rx="1" fill="var(--primary)" opacity="0.2"/>
+                                                <rect x="16" y="30" width="14" height="2.5" rx="1" fill="var(--primary)" opacity="0.25"/>
+                                                <rect class="scan-trail" x="4" y="-60" width="40" height="12" rx="1.5" fill="url(#trail-up)">
+                                                    <animate attributeName="y" values="-6;26;-6" keyTimes="0;0.5;1" calcMode="spline" keySplines="0.33 0 0.67 1;0.33 0 0.67 1" dur="1.8s" repeatCount="indefinite"/>
+                                                    <animate attributeName="opacity" values="1;1;0;0;1" keyTimes="0;0.30;0.50;0.70;1" calcMode="spline" keySplines="0 0 1 1;0.33 0 0.67 1;0 0 1 1;0.33 0 0.67 1" dur="1.8s" repeatCount="indefinite"/>
+                                                </rect>
+                                                <rect class="scan-trail" x="4" y="50" width="40" height="12" rx="1.5" fill="url(#trail-down)">
+                                                    <animate attributeName="y" values="8;40;8" keyTimes="0;0.5;1" calcMode="spline" keySplines="0.33 0 0.67 1;0.33 0 0.67 1" dur="1.8s" repeatCount="indefinite"/>
+                                                    <animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.30;0.50;0.70;1" calcMode="spline" keySplines="0 0 1 1;0.33 0 0.67 1;0 0 1 1;0.33 0 0.67 1" dur="1.8s" repeatCount="indefinite"/>
+                                                </rect>
+                                                <rect class="scan-beam" x="4" y="6" width="40" height="2.5" rx="1.25" fill="var(--primary)" opacity="0.75">
+                                                    <animate attributeName="y" values="6;38;6" keyTimes="0;0.5;1" calcMode="spline" keySplines="0.33 0 0.67 1;0.33 0 0.67 1" dur="1.8s" repeatCount="indefinite"/>
+                                                </rect>
+                                                <rect class="scan-beam-glow" x="4" width="40" height="1" rx="0.5" fill="#fff" opacity="0.6">
+                                                    <animate attributeName="y" values="7;39;7" keyTimes="0;0.5;1" calcMode="spline" keySplines="0.33 0 0.67 1;0.33 0 0.67 1" dur="1.8s" repeatCount="indefinite"/>
+                                                </rect>
+                                            </svg>
+                                        </div>
+                                        <div>
+                                            <div class="scan-card-title" id="scanCardTitle" data-i18n="scan.scanning">Scanning...</div>
+                                            <div class="scanning-file-path" id="scanFilePath" data-i18n="scan.preparing">Preparing to scan...</div>
+                                        </div>
+                                    </div>
+                                    <button class="btn-fluent-secondary" id="scanStopBtn" data-i18n="scan.stop">Stop</button>
+                                </div>
+
+                                <div class="scan-progress-area">
+                                    <div class="progress-bar scan-progress-bar" id="scanProgressBar">
+                                        <div class="progress-fill" id="scanProgressFill" style="width: 0%"></div>
+                                    </div>
+                                    <div class="scan-progress-text" id="scanProgressText">0%</div>
+                                </div>
+
+                                <div class="scan-stats-row">
+                                    <div class="scan-stat"><span class="stat-num" id="statThreats">0</span><span class="stat-name" data-i18n="scan.threats">Threats</span></div>
+                                    <div class="scan-stat"><span class="stat-num" id="statScanned">0</span><span class="stat-name" data-i18n="scan.scanned">Scanned</span></div>
+                                    <div class="scan-stat"><span class="stat-num" id="statTotal">0</span><span class="stat-name" data-i18n="scan.totalFiles">Total Files</span></div>
+                                    <div class="scan-stat"><span class="stat-num" id="statSpeed">0</span><span class="stat-name" data-i18n="scan.speed">Speed</span></div>
+                                    <div class="scan-stat"><span class="stat-num" id="statElapsed">0s</span><span class="stat-name" data-i18n="scan.elapsed">Elapsed</span></div>
+                                </div>
+
+                                <div class="scan-threats-area thin-scrollbar" id="scanThreatsArea">
+                                    <div class="scan-threats-empty" id="scanThreatsEmpty">
+                                        <img src="illustration-quarantine.svg" alt="No threats">
+                                        <span data-i18n="scan.noThreatsYet">No threats detected yet</span>
+                                    </div>
+                                </div>
+
+                                <div class="scan-engine-footer" data-i18n="scan.engineFooter">Threat detection engine &middot; HeySafe ML x Cloud Hash</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="scan-view hidden" id="scanResultView">
+                        <div class="scanning-page">
+                            <div class="scan-simple-header">
+                                <div>
+                                    <div class="scan-simple-title" data-i18n="scan.title">Virus Scan</div>
+                                    <div class="scan-simple-subtitle" id="scanResultSummary">Scan complete</div>
+                                </div>
+                                <div style="display: flex; gap: 10px;">
+                                    <button class="btn-fluent-primary hidden" id="scanHandleThreatsBtn" data-i18n="scan.handle">Handle</button>
+                                    <button class="btn-fluent-secondary" id="scanDoneBtn" data-i18n="scan.done">Done</button>
+                                </div>
+                            </div>
+                            <div class="scan-simple-list hidden" id="scanResultList"></div>
+                            <div class="scan-simple-empty hidden" id="scanResultEmpty">
+                                <div class="scan-success-anim">
+                                    <svg width="72" height="72" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="1.5">
+                                        <circle cx="12" cy="12" r="10"></circle>
+                                        <path d="M9 12l2 2 4-4"></path>
+                                    </svg>
+                                </div>
+                                <div class="scan-success-text" data-i18n="scan.noThreatsFound">No threats found</div>
+                                <div class="scan-success-sub" data-i18n="scan.deviceSecure">Your device is secure</div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Protection Page -->
+                <section id="page-protection" class="page">
+                    <div class="page-header">
+                        <h1 data-i18n="prot.title">Protection</h1>
+                        <p data-i18n="prot.sub">Manage real-time security features</p>
+                    </div>
+                    <img class="page-illustration" src="illustration-protection.svg" alt="Protection">
+                    <div class="protection-list">
+                        <div class="protection-item">
+                            <div class="protection-info">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="M9 12l2 2 4-4"></path></svg>
+                                <div>
+                                    <h3 data-i18n="prot.driver">Driver Protection</h3>
+                                    <p data-i18n="prot.driverDesc">Kernel-level protection via XIGUASecurityAgent</p>
+                                </div>
+                            </div>
+                            <label class="toggle">
+                                <input type="checkbox" id="driverProtectionToggle">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="protection-item">
+                            <div class="protection-info">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+                                <div>
+                                    <h3 data-i18n="prot.basic">Real-time Protection</h3>
+                                    <p data-i18n="prot.basicDesc">Monitors files and processes in real-time</p>
+                                </div>
+                            </div>
+                            <label class="toggle">
+                                <input type="checkbox" id="realtimeProtectionToggle" checked>
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="protection-item">
+                            <div class="protection-info">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg>
+                                <div>
+                                    <h3 data-i18n="prot.web">Web Protection</h3>
+                                    <p data-i18n="prot.webDesc">Blocks malicious scripts and downloads</p>
+                                </div>
+                            </div>
+                            <label class="toggle">
+                                <input type="checkbox" id="webProtectionToggle" checked>
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="protection-item">
+                            <div class="protection-info">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                                <div>
+                                    <h3 data-i18n="prot.network">Network Security</h3>
+                                    <p data-i18n="prot.networkDesc">Monitors network traffic for suspicious activity</p>
+                                </div>
+                            </div>
+                            <label class="toggle">
+                                <input type="checkbox" id="networkProtectionToggle" checked>
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="protection-item">
+                            <div class="protection-info">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                                <div>
+                                    <h3 data-i18n="prot.identity">Identity Protection</h3>
+                                    <p data-i18n="prot.identityDesc">Protects against identity theft and phishing</p>
+                                </div>
+                            </div>
+                            <label class="toggle">
+                                <input type="checkbox" id="identityProtectionToggle" checked>
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="protection-item">
+                            <div class="protection-info">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="M9 12l2 2 4-4"></path></svg>
+                                <div>
+                                    <h3 data-i18n="settings.endpointProtection">Enhanced Endpoint Protection</h3>
+                                    <p data-i18n="settings.endpointProtectionDesc">Professional endpoint detection and response via kernel-level monitoring</p>
+                                </div>
+                            </div>
+                            <div class="protection-actions">
+                                <button class="btn btn-secondary endpoint-rules-btn" id="endpoint-rules-open">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                                    <span data-i18n="prot.endpointConfig">设置</span>
+                                </button>
+                                <label class="toggle">
+                                    <input type="checkbox" id="endpoint-protection-toggle-prot">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 增强端点防护管理页 -->
+                <section id="page-endpoint" class="page">
+                    <div class="page-header">
+                        <button class="btn btn-secondary" id="endpoint-back-btn" style="margin-bottom:12px;">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+                            <span data-i18n="prot.back">返回防护</span>
+                        </button>
+                        <h1 data-i18n="prot.endpointTitle">增强端点防护</h1>
+                        <p data-i18n="prot.endpointSub">管理 HIPS 防护规则、文件信任、行为链与拦截日志</p>
+                    </div>
+
+                    <!-- 防护连接状态卡片（紧凑） -->
+                    <div class="endpoint-card endpoint-status-card" id="endpoint-status-refresh" style="flex-direction:row;align-items:center;justify-content:space-between;gap:8px;margin-bottom:16px;cursor:pointer;font-family:'Microsoft YaHei UI','PingFang SC','Segoe UI',system-ui,sans-serif;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;">
+                        <div style="display:flex;align-items:center;gap:8px;min-width:0;">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="ec-icon" style="width:20px;height:20px;flex-shrink:0;"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                            <span style="font-size:14px;font-weight:400;color:var(--text-primary);white-space:nowrap;" data-i18n="prot.connectionStatus">防护状态</span>
+                            <span class="endpoint-status-badge" id="ep-status-total" style="font-size:13px;padding:2px 10px;border-radius:12px;font-weight:400;flex-shrink:0;font-family:'Microsoft YaHei UI','PingFang SC',system-ui,sans-serif;-webkit-font-smoothing:antialiased;"></span>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+                            <span style="font-size:13px;color:var(--text-secondary);white-space:nowrap;" data-i18n="prot.driverStatus">驱动</span>
+                            <span class="endpoint-status-badge" id="ep-status-driver" style="font-size:12px;padding:1px 8px;border-radius:10px;font-weight:400;font-family:'Microsoft YaHei UI','PingFang SC',system-ui,sans-serif;-webkit-font-smoothing:antialiased;"></span>
+                            <span style="font-size:13px;color:var(--text-secondary);white-space:nowrap;" data-i18n="prot.serviceStatus">服务</span>
+                            <span class="endpoint-status-badge" id="ep-status-service" style="font-size:12px;padding:1px 8px;border-radius:10px;font-weight:400;font-family:'Microsoft YaHei UI','PingFang SC',system-ui,sans-serif;-webkit-font-smoothing:antialiased;"></span>
+                        </div>
+                    </div>
+
+                    <!-- 功能入口网格 -->
+                    <div class="endpoint-grid">
+                        <button class="endpoint-card" data-cmd="melix_ui_open_rules">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="ec-icon"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>
+                            <span class="ec-label" data-i18n="prot.manageRules">规则管理</span>
+                            <span class="ec-desc" data-i18n="prot.manageRulesDesc">查看/新增/删除 HIPS 防护规则</span>
+                        </button>
+                        <button class="endpoint-card" data-cmd="melix_ui_open_settings">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="ec-icon"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                            <span class="ec-label" data-i18n="prot.manageSettings">端点防护设置</span>
+                            <span class="ec-desc" data-i18n="prot.manageSettingsDesc">防护维度与 AI 研判配置</span>
+                        </button>
+                        <button class="endpoint-card" data-cmd="melix_ui_open_trust">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="ec-icon"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>
+                            <span class="ec-label" data-i18n="prot.manageTrust">文件信任中心</span>
+                            <span class="ec-desc" data-i18n="prot.manageTrustDesc">管理放行文件与信任列表</span>
+                        </button>
+                        <button class="endpoint-card" data-cmd="melix_ui_open_chain">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="ec-icon"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+                            <span class="ec-label" data-i18n="prot.manageChain">行为链</span>
+                            <span class="ec-desc" data-i18n="prot.manageChainDesc">进程链 / 攻击链分析</span>
+                        </button>
+                        <button class="endpoint-card" data-cmd="melix_ui_open_composite">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="ec-icon"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+                            <span class="ec-label" data-i18n="prot.manageComposite">组合规则</span>
+                            <span class="ec-desc" data-i18n="prot.manageCompositeDesc">IOA / EDR 组合规则管理</span>
+                        </button>
+                        <button class="endpoint-card" data-cmd="melix_ui_open_log">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="ec-icon"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>
+                            <span class="ec-label" data-i18n="prot.manageLog">拦截记录</span>
+                            <span class="ec-desc" data-i18n="prot.manageLogDesc">查看历史拦截与审计</span>
+                        </button>
+                    </div>
+
+                </section>
+
+                <!-- Quarantine Page -->
+                <section id="page-quarantine" class="page">
+                    <div class="page-header">
+                        <h1 data-i18n="quar.title">Quarantine</h1>
+                        <p data-i18n="quar.sub">Manage isolated threats and suspicious files</p>
+                    </div>
+                    <div id="quarantine-list"></div>
+                </section>
+
+                <!-- Logs Page -->
+                <section id="page-logs" class="page">
+                    <div class="page-header">
+                        <h1 data-i18n="logs.title">Event Logs</h1>
+                        <p data-i18n="logs.sub">View security events and scan history</p>
+                    </div>
+                    <div class="logs-toolbar">
+                        <button class="btn btn-secondary" id="clear_logs_btn">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                            <span data-i18n="logs.clear">Clear All</span>
+                        </button>
+                        <button class="btn btn-secondary" id="export_logs_btn">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                            <span data-i18n="logs.export">Export</span>
+                        </button>
+                    </div>
+                    <div class="logs-container" id="logs-container">
+                        <div class="logs-empty" data-i18n="logs.loading">Loading...</div>
+                    </div>
+                </section>
+
+                <!-- Settings Page -->
+                <section id="page-settings" class="page">
+                    <div class="page-header">
+                        <h1 data-i18n="settings.title">Settings</h1>
+                        <p data-i18n="settings.sub">Configure XIGUASecurity preferences</p>
+                    </div>
+                    <div class="settings-group">
+                        <h3 data-i18n="settings.general">General</h3>
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <span data-i18n="settings.startWithWin">Start with Windows</span>
+                                <span class="setting-desc" data-i18n="settings.startWithWinDesc">Automatically launch on system startup</span>
+                            </div>
+                            <label class="toggle">
+                                <input type="checkbox" id="startup-toggle">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="settings-group">
+                        <h3 data-i18n="settings.protection">Protection</h3>
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <span data-i18n="settings.fileProtection">File Protection</span>
+                                <span class="setting-desc" data-i18n="settings.fileProtectionDesc">Protect files from tampering and ransomware</span>
+                            </div>
+                            <label class="toggle">
+                                <input type="checkbox" id="file-protection-toggle" checked>
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <span data-i18n="settings.scriptScan">Script Scanning</span>
+                                <span class="setting-desc" data-i18n="settings.scriptScanDesc">Detect malicious scripts in real-time</span>
+                            </div>
+                            <label class="toggle">
+                                <input type="checkbox" id="script-scan-toggle" checked>
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <span data-i18n="settings.cloudHash">Cloud Hash Scanning</span>
+                                <span class="setting-desc" data-i18n="settings.cloudHashDesc">Query cloud hash database for unknown files</span>
+                            </div>
+                            <label class="toggle">
+                                <input type="checkbox" id="cloud-hash-toggle" checked>
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <span data-i18n="settings.cloudQuery">Cloud Query Assistant</span>
+                                <span class="setting-desc" data-i18n="settings.cloudQueryDesc">Enable auxiliary cloud-based threat analysis</span>
+                            </div>
+                            <label class="toggle">
+                                <input type="checkbox" id="cloud-query-toggle" checked>
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <span data-i18n="settings.ransomware">Ransomware Protection</span>
+                                <span class="setting-desc" data-i18n="settings.ransomwareDesc">Detect and roll back ransomware attacks in real-time</span>
+                            </div>
+                            <label class="toggle">
+                                <input type="checkbox" id="ransomware-protection-toggle">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <span data-i18n="settings.archiveScan">Scan Archives</span>
+                                <span class="setting-desc" data-i18n="settings.archiveScanDesc">Include compressed archives in scans</span>
+                            </div>
+                            <label class="toggle">
+                                <input type="checkbox" id="archive-scan-toggle" checked>
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <span data-i18n="settings.endpointProtection">Enhanced Endpoint Protection</span>
+                                <span class="setting-desc" data-i18n="settings.endpointProtectionDesc">Professional endpoint detection and response via kernel-level monitoring</span>
+                            </div>
+                            <label class="toggle">
+                                <input type="checkbox" id="endpoint-protection-toggle">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="settings-group">
+                        <h3 data-i18n="settings.whitelistGroup">Whitelist</h3>
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <span data-i18n="settings.whitelist">Process Whitelist</span>
+                                <span class="setting-desc" data-i18n="settings.whitelistDesc">Whitelisted processes will not be blocked</span>
+                            </div>
+                            <button class="btn btn-secondary" id="whitelist-open-btn" data-i18n="settings.whitelistManage">Manage</button>
+                        </div>
+                    </div>
+                    <div class="settings-group">
+                        <h3 data-i18n="settings.rules">Rules</h3>
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <span data-i18n="settings.rulesVersion">Virus Database Version</span>
+                                <span class="setting-desc" id="rules-version">-</span>
+                            </div>
+                            <button class="btn btn-secondary" id="rules-update-btn" data-i18n="settings.rulesUpdate">Check Update</button>
+                        </div>
+                    </div>
+                    <div class="settings-group">
+                        <h3 data-i18n="settings.preferences">Preferences</h3>
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <span data-i18n="settings.theme">Theme Color</span>
+                                <span class="setting-desc" data-i18n="settings.themeDesc">Choose the accent theme color</span>
+                            </div>
+                            <div class="custom-select" data-target="theme-select">
+                                <div class="custom-select-trigger">
+                                    <span class="custom-select-value" id="theme-select-value">默认（青绿）</span>
+                                    <svg class="custom-select-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                                </div>
+                                <div class="custom-select-options" id="theme-select-options">
+                                    <div class="custom-select-option" data-value="blue" data-selected>默认（青绿）</div>
+                                    <div class="custom-select-option" data-value="purple">紫色</div>
+                                    <div class="custom-select-option" data-value="green">绿色</div>
+                                    <div class="custom-select-option" data-value="orange">橙色</div>
+                                    <div class="custom-select-option" data-value="pink">粉色</div>
+                                    <div class="custom-select-option" data-value="teal">青色</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <span data-i18n="settings.language">Language</span>
+                                <span class="setting-desc" data-i18n="settings.languageDesc">Interface display language</span>
+                            </div>
+                            <div class="custom-select" data-target="language-select">
+                                <div class="custom-select-trigger">
+                                    <span class="custom-select-value" id="language-select-value">简体中文</span>
+                                    <svg class="custom-select-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                                </div>
+                                <div class="custom-select-options" id="language-select-options">
+                                    <div class="custom-select-option" data-value="zh-CN" data-selected>简体中文</div>
+                                    <div class="custom-select-option" data-value="en">English</div>
+                                    <div class="custom-select-option" data-value="zh-TW">繁體中文</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <span data-i18n="settings.customBg">Custom Background</span>
+                                <span class="setting-desc" data-i18n="settings.customBgDesc">Set a custom background image for the app</span>
+                            </div>
+                            <button class="btn btn-secondary" id="custom-bg-btn" data-i18n="settings.customBgBtn">Choose Image</button>
+                        </div>
+                    </div>
+                    <div class="settings-group">
+                        <h3 data-i18n="settings.about">About</h3>
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <span data-i18n="settings.sponsor">Sponsor</span>
+                                <span class="setting-desc" data-i18n="settings.sponsorDesc">Support the developer</span>
+                            </div>
+                            <button class="btn btn-secondary" id="about-sponsor-btn">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 14px; height: 14px;"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                            </button>
+                        </div>
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <span data-i18n="settings.feedback">Feedback</span>
+                                <span class="setting-desc" data-i18n="settings.feedbackDesc">Report issues and suggestions</span>
+                            </div>
+                            <button class="btn btn-secondary" id="about-feedback-btn">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 14px; height: 14px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                            </button>
+                        </div>
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <span data-i18n="settings.resetOptions">Reset Options</span>
+                                <span class="setting-desc" data-i18n="settings.resetOptionsDesc">Reset the application back to first-run setup (OOBE)</span>
+                            </div>
+                            <button class="btn btn-secondary" id="reset-oobe-btn" data-i18n="settings.resetOOBE">Reset to First-Run Setup</button>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ===== 补充页面（新 UI 未包含的功能，沿用旧功能实现） ===== -->
+                <!-- 通知中心（公告系统） -->
+                <section id="page-notifications" class="page">
+                    <div class="page-header">
+                        <h1 data-i18n="notif.title">通知中心</h1>
+                        <p data-i18n="notif.sub">安全事件与系统通知</p>
+                    </div>
+                    <div id="notifications-container"></div>
+                </section>
+
+                <!-- 工具箱 -->
+                <section id="page-process" class="page">
+                    <div id="process-container"></div>
+                </section>
+
+                <!-- 云平台 -->
+                <section id="page-chat" class="page">
+                    <div id="chat-container"></div>
+                </section>
+
+                <!-- 高级设置 -->
+                <section id="page-advanced_settings" class="page">
+                    <div id="advanced-settings-container"></div>
+                </section>
+
+                <!-- 工具箱子页面（动态填充） -->
+                <section id="page-toolbox_popup" class="page"><div id="toolbox-popup-container"></div></section>
+                <section id="page-toolbox_cleaner" class="page"><div id="toolbox-cleaner-container"></div></section>
+                <section id="page-toolbox_edr_reports" class="page"><div id="toolbox-edr-reports-container"></div></section>
+                <section id="page-toolbox_process_manager" class="page"><div id="toolbox-process-manager-container"></div></section>
+                <section id="page-toolbox_system_repair" class="page"><div id="toolbox-system-repair-container"></div></section>
+            </main>
+        </div>
+    </div>
+
+    <script src="js/main.js"></script>
+    <script type="module" src="/src/bridge.ts"></script>
+</body>
 </html>

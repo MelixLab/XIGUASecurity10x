@@ -17,10 +17,10 @@
     "windows": [
       {
         "title": "XIGUASecurity",
-        "width": 900,
-        "height": 685,
-        "minWidth": 800,
-        "minHeight": 500,
+        "width": 1024,
+        "height": 680,
+        "minWidth": 860,
+        "minHeight": 580,
         "decorations": false,
         "transparent": true,
         "shadow": false,
@@ -70,6 +70,34 @@
         "resizable": false,
         "visible": false,
         "url": "file-protection-alert.html"
+      },
+      {
+        "label": "active-threat-alert",
+        "title": "发现活动内存的威胁",
+        "width": 400,
+        "height": 400,
+        "decorations": false,
+        "transparent": true,
+        "shadow": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "visible": false,
+        "url": "active-threat-alert.html"
+      },
+      {
+        "label": "reboot-countdown",
+        "title": "重启倒计时",
+        "width": 360,
+        "height": 220,
+        "decorations": false,
+        "transparent": true,
+        "shadow": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "visible": false,
+        "url": "reboot-countdown.html"
       },
       {
         "label": "sandbox-progress",
@@ -124,6 +152,8 @@
       "../edr-alert.html": "edr-alert.html",
       "../edr-behavior-chain.html": "edr-behavior-chain.html",
       "../file-protection-alert.html": "file-protection-alert.html",
+      "../active-threat-alert.html": "active-threat-alert.html",
+      "../reboot-countdown.html": "reboot-countdown.html",
       "../sandbox-progress.html": "sandbox-progress.html",
       "../secure-confirm.html": "secure-confirm.html",
       "../../rulers": "rulers",

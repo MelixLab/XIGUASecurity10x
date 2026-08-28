@@ -276,6 +276,9 @@ use announcement::{fetch_latest_announcement, Announcement};
 mod quarantine;
 use quarantine::{QuarantineManager, quarantine_threat_file, restore_quarantined_file, delete_quarantined_file, get_quarantined_files, get_quarantine_stats};
 
+// 活动内存威胁处置模块（清除被占用文件：开机时清除 / 不重启而清除）
+mod active_threat;
+
 // AVIC 云端威胁情报上报模块
 mod avic_client;
 
@@ -303,6 +306,13 @@ mod deep_analysis;
 mod process_watcher;
 use process_watcher::ProcessWatcher;
 
+// EDR 核心模块 - 基于MITRE ATT&CK的行为检测
+mod amsi_protection;
+mod behavior_engine;
+mod defense_evasion;
+mod credential_access;
+mod process_injection;
+
 mod system_repair;
 
 // 新 KMDF 驱动管道客户端模块
@@ -310,6 +320,12 @@ mod system_repair;
 mod av_driver_client;
 #[cfg(not(feature = "ms_store"))]
 mod avmodel_client;
+// Melix 端点防护（HIPS）桥接 — 经 AVGuard（管理员）中转，主程序非管理员无法直连 Melix.Control
+#[cfg(not(feature = "ms_store"))]
+mod melix_ui_client;
+// 内存活动威胁扫描模块（快速扫描开局阶段）
+#[cfg(not(feature = "ms_store"))]
+mod memory_scan;
 use system_repair::{scan_system_issues, fix_system_issues};
 
 /// 从 EDR 报告中提取 IOA 标记，并映射为标准化病毒家族名称
@@ -1552,6 +1568,10 @@ fn build_default_decision(pending_key: &str) -> av_driver_client::AvDecision {
                     notification_id: info.notification_id,
                     decision: XGS_EP_DECISION_ALLOW,
                 },
+                "injectguard" => AvDecision::InjectGuard {
+                    sequence_id: info.notification_id as u32,
+                    decision: IG_DECISION_ALLOW,
+                },
                 _ => AvDecision::Process {
                     notification_id: info.notification_id,
                     decision: default_dec,
@@ -1605,6 +1625,10 @@ fn block_intercept_item(resp_pipe: &str) {
             "endpoint" => av_driver_client::AvDecision::EndPoint {
                 notification_id: info.notification_id,
                 decision: av_driver_client::XGS_EP_DECISION_KILL,
+            },
+            "injectguard" => av_driver_client::AvDecision::InjectGuard {
+                sequence_id: info.notification_id as u32,
+                decision: av_driver_client::IG_DECISION_BLOCK,
             },
             _ => {
                 eprintln!("[InterceptQueue] Unknown notification type: {}", info.notification_type);
@@ -3089,6 +3113,71 @@ fn handle_av_driver_notification(app_handle: &tauri::AppHandle, notification: &a
         AvNotification::Error { code, message } => {
             println!("[AvDriver] Error from AVSystem: {} - {}", code, message);
         }
+
+        AvNotification::InjectGuard(n) => {
+            println!("[AvDriver] InjectGuard notify: src={}({}) -> tgt={}({}), type={}, seq={}",
+                     n.source_pid, n.source_process_name,
+                     n.target_pid, n.target_process_name,
+                     n.event_type, n.sequence_id);
+
+            let src_name = if n.source_process_name.is_empty() {
+                format!("PID={}", n.source_pid)
+            } else {
+                n.source_process_name.clone()
+            };
+            let tgt_name = if n.target_process_name.is_empty() {
+                format!("PID={}", n.target_pid)
+            } else {
+                n.target_process_name.clone()
+            };
+
+            let image_path = format!("{} -> {}", src_name, tgt_name);
+
+            if let Some(rule) = check_always_rule("injectguard", &image_path) {
+                let dec = if rule == "block" { IG_DECISION_BLOCK } else { IG_DECISION_ALLOW };
+                println!("[AvDriver] Always-rule {} injectguard: {}", rule, image_path);
+                let _ = send_av_decision(AvDecision::InjectGuard {
+                    sequence_id: n.sequence_id,
+                    decision: dec,
+                });
+                return;
+            }
+
+            let pending_key = n.sequence_id.to_string();
+            {
+                let mut pending = AV_DRIVER_PENDING.lock().unwrap();
+                pending.insert(pending_key.clone(), AvDriverPendingInfo {
+                    notification_type: "injectguard".to_string(),
+                    notification_id: n.sequence_id as u64,
+                    image_path: image_path.clone(),
+                    process_name: src_name.clone(),
+                    default_block: false,
+                });
+            }
+
+            let chain_desc: String = n.chain_steps.iter()
+                .map(|s| match *s {
+                    1 => "OpenProcess".to_string(),
+                    2 => "VirtualAllocEx".to_string(),
+                    3 => "WriteProcessMemory".to_string(),
+                    4 => "CreateRemoteThread".to_string(),
+                    5 => "SectionCreate".to_string(),
+                    6 => "SectionMap".to_string(),
+                    7 => "SuspendThread".to_string(),
+                    8 => "SetThreadContext".to_string(),
+                    9 => "ResumeThread".to_string(),
+                    _ => format!("Step{}", s),
+                })
+                .collect::<Vec<_>>()
+                .join(" → ");
+
+            show_intercept_window_internal(
+                app_handle, "注入攻击拦截", &src_name, &image_path, &pending_key,
+                &format!("检测到进程注入链:\n{} → {}\n注入链: {}\n目标 PID: {}\n源 PID: {}",
+                         src_name, tgt_name, chain_desc, n.target_pid, n.source_pid),
+                false,
+            );
+        }
     }
 }
 
@@ -3607,6 +3696,28 @@ async fn send_av_driver_decision(
             }
             AvDecision::EndPoint {
                 notification_id: info.notification_id,
+                decision: dec,
+            }
+        }
+        "injectguard" => {
+            let (dec, is_block) = match decision.as_str() {
+                "allow" => (IG_DECISION_ALLOW, false),
+                "block" => (IG_DECISION_BLOCK, true),
+                "allow_always" => {
+                    add_always_rule("injectguard", &info.image_path, "allow");
+                    (IG_DECISION_ALLOW, false)
+                }
+                "block_always" => {
+                    add_always_rule("injectguard", &info.image_path, "block");
+                    (IG_DECISION_BLOCK, true)
+                }
+                _ => (IG_DECISION_ALLOW, false),
+            };
+            if is_block {
+                emit_blocked = true;
+            }
+            AvDecision::InjectGuard {
+                sequence_id: info.notification_id as u32,
                 decision: dec,
             }
         }
@@ -4615,6 +4726,83 @@ fn stop_driver_protection_sync() {
     }
 }
 
+// 在后台线程启动驱动防护（AVModel + Agent + av_driver_client）。
+// 供 set_driver_protection(true) 与"启动时强制开启驱动防护"共用，
+// 避免 setup 里依赖 State 的生命周期问题。
+#[cfg(not(feature = "ms_store"))]
+fn start_driver_protection_background(app_handle: tauri::AppHandle) {
+    log_to_file("[DriverProtection] start_driver_protection_background");
+    std::thread::spawn(move || {
+        // 先启动 AVModel，再启动 Agent（AVModel 必须先于 Agent，否则 OB 回调剥离其权限）
+        if !avmodel_client::ping() {
+            println!("[DriverProtection] Starting AVModel before Agent...");
+            log_to_file("[DriverProtection] Starting AVModel before Agent...");
+            match start_avmodel_process() {
+                Ok(()) => {
+                    for _ in 0..10 {
+                        if avmodel_client::ping() {
+                            println!("[DriverProtection] AVModel is ready");
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                    }
+                }
+                Err(e) => {
+                    println!("[DriverProtection] AVModel failed to start: {}", e);
+                    log_to_file(&format!("[DriverProtection] AVModel failed to start: {}", e));
+                }
+            }
+        }
+
+        log_to_file("[DriverProtection] spawn thread: starting interceptor");
+        let result = std::panic::catch_unwind(|| {
+            start_interceptor_tool()
+        });
+        match result {
+            Ok(Ok(_)) => {
+                println!("[DriverProtection] Agent started, waiting for pipe...");
+                log_to_file("[DriverProtection] Agent started, waiting for pipe...");
+                let mut connected = false;
+                for attempt in 1..=10 {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    match av_driver_client::start_av_driver_client(app_handle.clone()) {
+                        Ok(()) => {
+                            println!("[DriverProtection] av_driver_client connected successfully");
+                            log_to_file("[DriverProtection] av_driver_client connected successfully");
+                            connected = true;
+                            break;
+                        }
+                        Err(e) => {
+                            println!("[DriverProtection] av_driver_client connect failed: {}", e);
+                            log_to_file(&format!("[DriverProtection] av_driver_client connect failed: {}", e));
+                        }
+                    }
+                }
+                if connected {
+                    let _ = security_log::add_security_log(
+                        security_log::LogCategory::Driver,
+                        "驱动防护",
+                        "驱动防护已启动",
+                        None, None,
+                        security_log::LogAction::Started,
+                        security_log::LogResult::Success, None,
+                    );
+                } else {
+                    log_to_file("[DriverProtection] Failed to connect av_driver_client after 10 attempts");
+                }
+            }
+            Ok(Err(e)) => {
+                eprintln!("[DriverProtection] Failed to start interceptor: {}", e);
+                log_to_file(&format!("[DriverProtection] Failed to start interceptor: {}", e));
+            }
+            Err(_) => {
+                eprintln!("[DriverProtection] start_interceptor_tool panicked");
+                log_to_file("[DriverProtection] start_interceptor_tool panicked");
+            }
+        }
+    });
+}
+
 #[tauri::command]
 #[cfg(not(feature = "ms_store"))]
 fn set_driver_protection(enabled: bool, state: State<DriverProtectionState>, app_handle: tauri::AppHandle) -> Result<(), String> {
@@ -4628,99 +4816,7 @@ fn set_driver_protection(enabled: bool, state: State<DriverProtectionState>, app
         // ShellExecuteW(runas) 触发 UAC 弹窗，若同步执行可能导致界面卡死
         if enabled {
             let app_clone = app_handle.clone();
-            std::thread::spawn(move || {
-                // 先启动 AVModel，再启动 Agent
-                // 关键：AVModel 必须在 Agent 之前启动！
-                // Agent 启动后会注册 OB 回调（ObRegisterCallbacks），剥离非白名单进程的权限。
-                // 如果 AVModel 在 Agent 之后启动，OB 回调会剥离 AVModel 进程的权限，
-                // 导致 AVModel 无法 OpenProcess 终止恶意进程，甚至进程本身被挂起。
-                if !avmodel_client::ping() {
-                    println!("[DriverProtection] Starting AVModel before Agent...");
-                    log_to_file("[DriverProtection] Starting AVModel before Agent...");
-                    match start_avmodel_process() {
-                        Ok(()) => {
-                            println!("[DriverProtection] AVModel started, waiting for pipe...");
-                            log_to_file("[DriverProtection] AVModel started, waiting for pipe...");
-                            // 等待 AVModel 管道就绪（最多 5 秒）
-                            for _ in 0..10 {
-                                if avmodel_client::ping() {
-                                    println!("[DriverProtection] AVModel is ready");
-                                    log_to_file("[DriverProtection] AVModel is ready");
-                                    break;
-                                }
-                                std::thread::sleep(std::time::Duration::from_millis(500));
-                            }
-                        }
-                        Err(e) => {
-                            println!("[DriverProtection] AVModel failed to start: {}", e);
-                            log_to_file(&format!("[DriverProtection] AVModel failed to start: {}", e));
-                        }
-                    }
-                }
-
-                log_to_file("[DriverProtection] spawn thread: starting interceptor");
-                let result = std::panic::catch_unwind(|| {
-                    start_interceptor_tool()
-                });
-                match result {
-                    Ok(Ok(_)) => {
-                        println!("[DriverProtection] Agent started, waiting for pipe...");
-                        log_to_file("[DriverProtection] Agent started, waiting for pipe...");
-
-                        // 等待 AVSystem 管道就绪后启动 av_driver_client
-                        // 最多重试 10 次，每次间隔 2 秒
-                        let mut connected = false;
-                        for attempt in 1..=10 {
-                            println!("[DriverProtection] Connecting av_driver_client, attempt {}/10", attempt);
-                            log_to_file(&format!("[DriverProtection] Connecting av_driver_client, attempt {}/10", attempt));
-                            std::thread::sleep(std::time::Duration::from_secs(2));
-                            match av_driver_client::start_av_driver_client(app_clone.clone()) {
-                                Ok(()) => {
-                                    println!("[DriverProtection] av_driver_client connected successfully");
-                                    log_to_file("[DriverProtection] av_driver_client connected successfully");
-                                    connected = true;
-                                    break;
-                                }
-                                Err(e) => {
-                                    println!("[DriverProtection] av_driver_client connect failed: {}", e);
-                                    log_to_file(&format!("[DriverProtection] av_driver_client connect failed: {}", e));
-                                }
-                            }
-                        }
-
-                        if connected {
-                            let _ = security_log::add_security_log(
-                                security_log::LogCategory::Driver,
-                                "驱动防护",
-                                "驱动防护已启动",
-                                None, None,
-                                security_log::LogAction::Started,
-                                security_log::LogResult::Success, None,
-                            );
-                            let event = TimelineEvent {
-                                id: format!("protection_start_{}", chrono::Local::now().timestamp()),
-                                timestamp: chrono::Local::now().to_rfc3339(),
-                                event_type: "system".to_string(),
-                                title: "实时防护已启动".to_string(),
-                                description: "XIGUASecurity 实时防护功能已成功启动".to_string(),
-                                process_name: None,
-                                result: Some("正常".to_string()),
-                            };
-                            add_timeline_event(event);
-                        } else {
-                            log_to_file("[DriverProtection] Failed to connect av_driver_client after 10 attempts");
-                        }
-                    }
-                    Ok(Err(e)) => {
-                        eprintln!("[DriverProtection] Failed to start interceptor: {}", e);
-                        log_to_file(&format!("[DriverProtection] Failed to start interceptor: {}", e));
-                    }
-                    Err(_) => {
-                        eprintln!("[DriverProtection] start_interceptor_tool panicked");
-                        log_to_file("[DriverProtection] start_interceptor_tool panicked");
-                    }
-                }
-            });
+            start_driver_protection_background(app_clone);
         } else {
             std::thread::spawn(|| {
                 log_to_file("[DriverProtection] spawn thread: stopping interceptor");
@@ -6266,6 +6362,43 @@ async fn get_scan_files() -> Result<Vec<String>, String> {
     
     Ok(all_files)
     }).await.map_err(|e| format!("扫描任务失败: {}", e))?
+}
+
+/// 内存活动威胁扫描（快速扫描开局阶段）
+///
+/// 遍历系统进程表（优先 AVGuard 提权枚举，覆盖管理员进程），
+/// 对每个运行中进程的镜像文件执行本地引擎扫描，
+/// 命中威胁标记为「内存活动威胁」。
+///
+/// 返回 MemoryScanOutcome JSON: { source, total_processes, scanned, threats, errors }
+/// ★不能写成 pub fn（tauri 宏对 pub 函数导出 __cmd__xxx 到 crate 根，与
+/// generate_handler! 引用重复定义 E0255，见 kill_process_via_driver_internal 注释）★
+#[tauri::command]
+async fn scan_running_processes_command() -> Result<serde_json::Value, String> {
+    scan_running_processes_impl().await
+}
+
+/// 内存活动威胁扫描实现（非 MS Store：AVGuard 提权枚举 + 本地引擎扫描）
+#[cfg(not(feature = "ms_store"))]
+async fn scan_running_processes_impl() -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(|| {
+        let outcome = crate::memory_scan::scan_running_processes();
+        serde_json::to_value(&outcome).map_err(|e| format!("序列化失败: {}", e))
+    })
+    .await
+    .map_err(|e| format!("内存威胁扫描任务失败: {}", e))?
+}
+
+/// 内存活动威胁扫描实现（MS Store 版本 stub — 无 AVGuard 提权进程，返回空结果）
+#[cfg(feature = "ms_store")]
+async fn scan_running_processes_impl() -> Result<serde_json::Value, String> {
+    Ok(serde_json::json!({
+        "source": "none",
+        "total_processes": 0,
+        "scanned": 0,
+        "threats": [],
+        "errors": ["MS Store 版本不支持内存威胁扫描"],
+    }))
 }
 
 // 递归扫描目录，排除DriverStore和WindowsApps
@@ -9916,6 +10049,545 @@ fn set_driver_protection_config_enabled(enabled: bool) {
     let _ = std::fs::write(&config_path, if enabled { "true" } else { "false" });
 }
 
+// ==================== 增强端点防护（MelixEDR）集成 ====================
+// 该模块负责接入外部专业端点防护项目 MelixEDR。启动顺序（必须严格遵守）：
+//   1. 运行 install-driver.ps1（绕过执行策略 + RUNAS 管理员），安装并加载 MelixDrv.sys 驱动
+//   2. 运行 Service/Melix.Service.exe（RUNAS 管理员），连接驱动并处理后端逻辑
+//   3. 运行 Melix.UI.exe（普通权限），根据后台服务状态在界面显示是否已保护
+// 打包时整个 Driver/ 目录（含 MelixEDR/）已由 tauri.conf.json 的 resources 复制到程序目录。
+
+// 端点防护开关配置读写 - 默认关闭（需用户确认开启）
+#[tauri::command]
+#[cfg(not(feature = "ms_store"))]
+fn get_endpoint_protection_enabled() -> bool {
+    let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".to_string());
+    let config_path = format!("{}/XIGUASecurity/endpoint_protection_enabled.txt", local_app_data);
+    std::fs::read_to_string(&config_path)
+        .map(|s| s.trim() == "true")
+        .unwrap_or(false) // 默认关闭
+}
+
+#[tauri::command]
+#[cfg(not(feature = "ms_store"))]
+fn set_endpoint_protection_enabled(enabled: bool) {
+    let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".to_string());
+    let config_dir = format!("{}/XIGUASecurity", local_app_data);
+    let _ = std::fs::create_dir_all(&config_dir);
+    let config_path = format!("{}/endpoint_protection_enabled.txt", config_dir);
+    let _ = std::fs::write(&config_path, if enabled { "true" } else { "false" });
+}
+
+// 首次启动/首次出现该选项时是否已询问过用户（防止每次启动都弹窗）
+#[tauri::command]
+#[cfg(not(feature = "ms_store"))]
+fn get_endpoint_protection_prompted() -> bool {
+    let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".to_string());
+    let config_path = format!("{}/XIGUASecurity/endpoint_protection_prompted.txt", local_app_data);
+    std::fs::read_to_string(&config_path)
+        .map(|s| s.trim() == "true")
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+#[cfg(not(feature = "ms_store"))]
+fn set_endpoint_protection_prompted(prompted: bool) {
+    let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".to_string());
+    let config_dir = format!("{}/XIGUASecurity", local_app_data);
+    let _ = std::fs::create_dir_all(&config_dir);
+    let config_path = format!("{}/endpoint_protection_prompted.txt", config_dir);
+    let _ = std::fs::write(&config_path, if prompted { "true" } else { "false" });
+}
+
+// 查找 MelixEDR 部署目录（包含 install-driver.ps1、Melix.UI.exe、Service/Melix.Service.exe）
+#[cfg(not(feature = "ms_store"))]
+fn find_melix_edr_dir() -> Option<std::path::PathBuf> {
+    let exe_path = std::env::current_exe().ok()?;
+    let exe_dir = exe_path.parent()?;
+
+    // 从可执行文件目录向上遍历 5 层，查找 Driver/MelixEDR 目录
+    let mut current_dir = Some(exe_dir.to_path_buf());
+    for _ in 0..6 {
+        if let Some(dir) = current_dir {
+            // 1. 主程序同级 Driver/MelixEDR
+            let test = dir.join("Driver").join("MelixEDR");
+            if test.join("install-driver.ps1").exists() && test.join("Melix.UI.exe").exists() {
+                return Some(test);
+            }
+            // 2. 直接是当前目录下 MelixEDR
+            let direct = dir.join("MelixEDR");
+            if direct.join("install-driver.ps1").exists() && direct.join("Melix.UI.exe").exists() {
+                return Some(direct);
+            }
+            current_dir = dir.parent().map(|p| p.to_path_buf());
+        } else {
+            break;
+        }
+    }
+    None
+}
+
+// 检查 Melix.Service.exe 进程是否运行（端点防护后端服务）
+#[cfg(windows)]
+fn is_melix_service_running() -> bool {
+    use windows::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS, PROCESSENTRY32W};
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+
+    unsafe {
+        let snapshot: HANDLE = match CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) {
+            Ok(h) => h,
+            Err(_) => return false,
+        };
+
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+
+        if Process32FirstW(snapshot, &mut entry).is_ok() {
+            loop {
+                let exe_file: Vec<u16> = entry.szExeFile.iter()
+                    .take_while(|&&c| c != 0)
+                    .copied()
+                    .collect();
+
+                if let Ok(name) = String::from_utf16(&exe_file) {
+                    if name.eq_ignore_ascii_case("Melix.Service.exe") {
+                        let _: windows::core::Result<()> = CloseHandle(snapshot);
+                        return true;
+                    }
+                }
+
+                if Process32NextW(snapshot, &mut entry).is_err() {
+                    break;
+                }
+            }
+        }
+
+        let _: windows::core::Result<()> = CloseHandle(snapshot);
+        false
+    }
+}
+
+#[cfg(not(windows))]
+fn is_melix_service_running() -> bool {
+    false
+}
+
+// 获取端点防护当前状态（以后台服务进程是否运行为准）
+#[tauri::command]
+#[cfg(not(feature = "ms_store"))]
+async fn get_endpoint_protection_status() -> Result<bool, ()> {
+    let result = tokio::task::spawn_blocking(|| {
+        is_melix_service_running()
+    }).await.unwrap_or(false);
+    Ok(result)
+}
+
+// 运行 install-driver.ps1：绕过执行策略并用 RUNAS 提权（主程序可能无管理员权限）
+#[cfg(not(feature = "ms_store"))]
+fn run_endpoint_install_script(script_path: &str, working_dir: &str) -> Result<(), String> {
+    // 脚本自带提权逻辑（if (-not (Test-Admin)) { Start-Process -Verb RunAs }），
+    // 若当前未提权则由脚本自身触发 UAC；此处仍需 -ExecutionPolicy Bypass 绕过执行策略。
+    // 直接以 powershell 启动脚本（不额外 runas），脚本内部会自动请求管理员权限。
+    let args = format!(
+        "-NoProfile -ExecutionPolicy Bypass -File \"{}\"",
+        script_path
+    );
+
+    // 若当前进程已提权则直接启动；否则由脚本内部触发 UAC 提权
+    if is_elevated() {
+        use std::os::windows::process::CommandExt;
+        log_to_file(&format!("[EndpointProtection] Running install-driver.ps1 (elevated): {}", args));
+        let child = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script_path])
+            .current_dir(working_dir)
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .spawn()
+            .map_err(|e| format!("Failed to start install-driver.ps1: {}", e))?;
+        let _ = child;
+        Ok(())
+    } else {
+        // 未提权：交给脚本内部触发 UAC（脚本首部 if(-not (Test-Admin)) 会用 -Verb RunAs 重启自身）
+        let args_wide: Vec<u16> = args.encode_utf16().chain(std::iter::once(0)).collect();
+        let ps: Vec<u16> = "powershell.exe".encode_utf16().chain(std::iter::once(0)).collect();
+        let runas: Vec<u16> = "runas".encode_utf16().chain(std::iter::once(0)).collect();
+        let dir_wide: Vec<u16> = working_dir.encode_utf16().chain(std::iter::once(0)).collect();
+        unsafe {
+            let result = ShellExecuteW(
+                None,
+                PCWSTR(runas.as_ptr()),
+                PCWSTR(ps.as_ptr()),
+                PCWSTR(args_wide.as_ptr()),
+                PCWSTR(dir_wide.as_ptr()),
+                SHOW_WINDOW_CMD(1), // SW_SHOWNORMAL，让 UAC 提示可见
+            );
+            if result.0 as usize <= 32 {
+                return Err(format!("ShellExecuteW failed for install-driver.ps1, code: {}", result.0 as usize));
+            }
+        }
+        Ok(())
+    }
+}
+
+// 启动端点防护（后台线程执行，避免阻塞 Tauri IPC）
+#[tauri::command]
+#[cfg(not(feature = "ms_store"))]
+fn start_endpoint_protection(app_handle: tauri::AppHandle) -> Result<(), String> {
+    let melix_dir = find_melix_edr_dir()
+        .ok_or_else(|| "未找到 MelixEDR 目录（Driver/MelixEDR），请检查安装完整性".to_string())?;
+    let melix_dir_str = melix_dir.to_str().ok_or("Invalid MelixEDR path encoding")?.to_string();
+    let install_script = melix_dir.join("install-driver.ps1");
+    let service_exe = melix_dir.join("Service").join("Melix.Service.exe");
+    let ui_exe = melix_dir.join("Melix.UI.exe");
+
+    log_to_file(&format!("[EndpointProtection] start_endpoint_protection, dir: {}", melix_dir_str));
+
+    if !install_script.exists() {
+        return Err("未找到 install-driver.ps1 脚本".to_string());
+    }
+    if !service_exe.exists() {
+        return Err("未找到 Service/Melix.Service.exe".to_string());
+    }
+    if !ui_exe.exists() {
+        return Err("未找到 Melix.UI.exe".to_string());
+    }
+
+    let script_str = install_script.to_str().ok_or("Invalid script path")?.to_string();
+    let service_str = service_exe.to_str().ok_or("Invalid service path")?.to_string();
+    let ui_str = ui_exe.to_str().ok_or("Invalid UI path")?.to_string();
+    let service_dir = service_exe.parent().and_then(|p| p.to_str()).unwrap_or(".").to_string();
+
+    std::thread::spawn(move || {
+        log_to_file("[EndpointProtection] Step 1/3: running install-driver.ps1...");
+        match run_endpoint_install_script(&script_str, &melix_dir_str) {
+            Ok(()) => {
+                log_to_file("[EndpointProtection] install-driver.ps1 launched");
+                // 等待驱动安装完成（脚本内部包含 UAC 等待），给足时间
+                std::thread::sleep(std::time::Duration::from_secs(8));
+            }
+            Err(e) => {
+                log_to_file(&format!("[EndpointProtection] install-driver.ps1 failed: {}", e));
+            }
+        }
+
+        log_to_file("[EndpointProtection] Step 2/3: starting Melix.Service.exe...");
+        // 以 --console 方式运行，使服务程序以独立进程运行（连接驱动并处理后端事件），
+        // 用 RUNAS 提权（驱动通信需管理员权限）。
+        match launch_process_with_elevation(&service_str, Some("--console"), Some(&service_dir), 0) {
+            Ok(()) => {
+                log_to_file("[EndpointProtection] Melix.Service.exe launched");
+                // 等待服务连接驱动
+                std::thread::sleep(std::time::Duration::from_secs(4));
+            }
+            Err(e) => {
+                log_to_file(&format!("[EndpointProtection] Melix.Service.exe failed to start: {}", e));
+            }
+        }
+
+        // Step 3/3: 启动 Melix.UI 后台进程（无窗口）。
+        // Melix.UI 负责连接 Melix.Service 并弹拦截/规则等原生窗口；主程序通过
+        // `\\.\pipe\Melix.UIControl` 管道控制它（弹规则窗口/设置窗口等）。
+        // 若 UI 已在运行则跳过。
+        log_to_file("[EndpointProtection] Step 3/3: ensuring Melix.UI background process is running...");
+        if melix_ui_client::send_command("ping", 1500).is_err() {
+            match launch_process_with_elevation(&ui_str, None, Some(&melix_dir_str), 1) {
+                Ok(()) => log_to_file("[EndpointProtection] Melix.UI background process launched"),
+                Err(e) => log_to_file(&format!("[EndpointProtection] failed to launch Melix.UI: {e}")),
+            }
+            std::thread::sleep(std::time::Duration::from_secs(3));
+        }
+
+        let _ = security_log::add_security_log(
+            security_log::LogCategory::Driver,
+            "端点防护",
+            "增强端点防护已启动",
+            None, None,
+            security_log::LogAction::Started,
+            security_log::LogResult::Success, None,
+        );
+        let event = TimelineEvent {
+            id: format!("endpoint_protection_start_{}", chrono::Local::now().timestamp()),
+            timestamp: chrono::Local::now().to_rfc3339(),
+            event_type: "system".to_string(),
+            title: "增强端点防护已启动".to_string(),
+            description: "MelixEDR 专业端点防护已启动，提供更强的端点防护效果".to_string(),
+            process_name: None,
+            result: Some("正常".to_string()),
+        };
+        add_timeline_event(event);
+
+        let _ = app_handle.emit("endpoint-protection-notification", "started");
+
+        // 启动 Melix.UI 拦截事件监听线程：持续读取 Melix.UI 后台进程推送的拦截/询问事件，
+        // 写入通知中心与事件日志，并 emit 给前端。
+        let app_for_events = app_handle.clone();
+        std::thread::spawn(move || {
+            log_to_file("[MelixEvents] listening to Melix.UI intercept events");
+            loop {
+                let pipe = match melix_ui_client::connect_pipe(10000) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        log_to_file(&format!("[MelixEvents] connect Melix.UI failed: {e}"));
+                        std::thread::sleep(std::time::Duration::from_secs(3));
+                        continue;
+                    }
+                };
+                let _guard = melix_ui_client::PipeGuard(pipe);
+                log_to_file("[MelixEvents] connected to Melix.UI");
+                loop {
+                    match melix_ui_client::read_line(pipe, 60000) {
+                        Ok(line) => {
+                            handle_melix_ui_event(&app_for_events, &line);
+                        }
+                        Err(e) => {
+                            log_to_file(&format!("[MelixEvents] read error: {e}, reconnecting"));
+                            break;
+                        }
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_secs(3));
+            }
+        });
+    });
+
+    Ok(())
+}
+
+// 停止端点防护（后台线程执行）
+#[tauri::command]
+#[cfg(not(feature = "ms_store"))]
+fn stop_endpoint_protection(app_handle: tauri::AppHandle) -> Result<(), String> {
+    log_to_file("[EndpointProtection] stop_endpoint_protection");
+    std::thread::spawn(move || {
+        // 停止后端服务与 UI（Melix.Service.exe、Melix.UI.exe）
+        log_to_file("[EndpointProtection] stopping Melix.Service.exe / Melix.UI.exe");
+        let _ = kill_process_by_name_uac("Melix.Service");
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let _ = kill_process_by_name_uac("Melix.UI");
+
+        let _ = security_log::add_security_log(
+            security_log::LogCategory::Driver,
+            "端点防护",
+            "增强端点防护已停止",
+            None, None,
+            security_log::LogAction::Stopped,
+            security_log::LogResult::Success, None,
+        );
+        let event = TimelineEvent {
+            id: format!("endpoint_protection_stop_{}", chrono::Local::now().timestamp()),
+            timestamp: chrono::Local::now().to_rfc3339(),
+            event_type: "system".to_string(),
+            title: "增强端点防护已停止".to_string(),
+            description: "MelixEDR 专业端点防护已停止".to_string(),
+            process_name: None,
+            result: Some("正常".to_string()),
+        };
+        add_timeline_event(event);
+
+        let _ = app_handle.emit("endpoint-protection-notification", "stopped");
+    });
+    Ok(())
+}
+
+/// 处理 Melix.UI 后台进程推送的拦截/询问事件。
+/// UI 推送格式：`{"event":"intercept","type":"prompt"/"block","payload":{SecurityEvent}}`
+/// 这里写入安全日志(事件日志)并 emit 通知给前端(通知中心)。
+fn handle_melix_ui_event(app: &tauri::AppHandle, line: &str) {
+    let v: serde_json::Value = match serde_json::from_str(line) {
+        Ok(x) => x,
+        Err(_) => return,
+    };
+    if v.get("event").and_then(|x| x.as_str()) != Some("intercept") {
+        return;
+    }
+    let kind = v.get("type").and_then(|x| x.as_str()).unwrap_or("block");
+    let payload = v.get("payload").cloned().unwrap_or(serde_json::Value::Null);
+
+    let actor = payload
+        .get("actorPath")
+        .or_else(|| payload.get("processName"))
+        .and_then(|x| x.as_str())
+        .unwrap_or("未知进程");
+    let target = payload
+        .get("target")
+        .or_else(|| payload.get("targetPath"))
+        .and_then(|x| x.as_str())
+        .unwrap_or("");
+    let ev_type = payload.get("type").and_then(|x| x.as_str()).unwrap_or("");
+    let risk = payload
+        .get("risk")
+        .and_then(|x| if x.is_string() { x.as_str() } else { x.get("description").and_then(|d| d.as_str()) })
+        .unwrap_or("检测到可疑行为");
+
+    let summary = if kind == "prompt" {
+        format!("端点防护询问：{actor} 触发 {ev_type}")
+    } else {
+        format!("端点防护已拦截：{actor} {risk}")
+    };
+
+    // 写入安全日志(事件日志)
+    let _ = security_log::add_security_log(
+        security_log::LogCategory::Realtime,
+        "端点防护",
+        &summary,
+        Some(actor.to_string()),
+        Some(format!("{ev_type} · {risk}")),
+        if kind == "prompt" { security_log::LogAction::Detected } else { security_log::LogAction::Blocked },
+        security_log::LogResult::Success,
+        Some(security_log::LogDetails {
+            scanned_files: None,
+            threats_found: Some(1),
+            threats_cleaned: None,
+            file_size: None,
+            virus_family: Some(ev_type.to_string()),
+            additional_info: Some(format!("目标:{}", if target.is_empty() { "—".to_string() } else { target.to_string() })),
+        }),
+    );
+
+    // emit 通知给前端(通知中心)
+    let _ = app.emit("melix-intercepted", serde_json::json!({
+        "kind": kind,
+        "actor": actor,
+        "target": target,
+        "type": ev_type,
+        "risk": risk,
+        "summary": summary,
+    }));
+}
+
+// ==================== Melix HIPS 防护规则桥接层（跳过 Melix.UI） ====================
+// 主程序通过 melix_ipc 命名管道客户端直接与 Melix.Service 通信，
+// 实现防护规则面板、内置规则、拦截决策等功能的完整集成。
+
+/// 检查 Melix.Service 是否运行（经 AVGuard 中转探测）。
+#[tauri::command]
+#[cfg(not(feature = "ms_store"))]
+async fn melix_service_running() -> bool {
+    tokio::task::spawn_blocking(avmodel_client::melix_service_running).await.map_err(|e| e.to_string()).unwrap_or(Ok(false)).unwrap_or(false)
+}
+
+/// 请求防护规则列表（经 AVGuard 只发送请求，规则通过 melix-rules 事件异步返回）。
+#[tauri::command]
+#[cfg(not(feature = "ms_store"))]
+async fn melix_get_rules() -> Result<Vec<serde_json::Value>, String> {
+    // 只发送请求；规则数据随后经事件管道以 melix-rules 事件推送到前端
+    tokio::task::spawn_blocking(avmodel_client::melix_get_rules).await.map_err(|e| e.to_string())?
+}
+
+/// 新增一条防护规则。
+#[tauri::command]
+#[cfg(not(feature = "ms_store"))]
+async fn melix_add_rule(
+    actor_path: Option<String>,
+    r#type: Option<String>,
+    target_pattern: Option<String>,
+    action: String,
+    note: Option<String>,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || avmodel_client::melix_add_rule(actor_path, r#type, target_pattern, action, note))
+        .await.map_err(|e| e.to_string())?
+}
+
+/// 删除指定防护规则。
+#[tauri::command]
+#[cfg(not(feature = "ms_store"))]
+async fn melix_delete_rule(rule_id: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || avmodel_client::melix_delete_rule(rule_id)).await.map_err(|e| e.to_string())?
+}
+
+/// 获取当前运行时设置（总开关等）。
+#[tauri::command]
+#[cfg(not(feature = "ms_store"))]
+async fn melix_get_settings() -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(avmodel_client::melix_get_settings).await.map_err(|e| e.to_string())?
+}
+
+/// 更新运行时设置。
+#[tauri::command]
+#[cfg(not(feature = "ms_store"))]
+async fn melix_update_settings(settings: serde_json::Value) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || avmodel_client::melix_update_settings(settings)).await.map_err(|e| e.to_string())?
+}
+
+/// 获取文件信任列表。
+#[tauri::command]
+#[cfg(not(feature = "ms_store"))]
+async fn melix_get_trust_list() -> Result<Vec<serde_json::Value>, String> {
+    tokio::task::spawn_blocking(avmodel_client::melix_get_trust_list).await.map_err(|e| e.to_string())?
+}
+
+/// 新增一条文件信任。
+#[tauri::command]
+#[cfg(not(feature = "ms_store"))]
+async fn melix_add_trust(actor_path: String, note: Option<String>) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || avmodel_client::melix_add_trust(actor_path, note)).await.map_err(|e| e.to_string())?
+}
+
+/// 移除一条文件信任。
+#[tauri::command]
+#[cfg(not(feature = "ms_store"))]
+async fn melix_remove_trust(rule_id: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || avmodel_client::melix_remove_trust(rule_id)).await.map_err(|e| e.to_string())?
+}
+
+/// 用户对某拦截事件做出裁决（允许/阻止/询问）。
+#[tauri::command]
+#[cfg(not(feature = "ms_store"))]
+async fn melix_prompt_response(event_id: String, action: String, remember: bool) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || avmodel_client::melix_prompt_response(event_id, action, remember)).await.map_err(|e| e.to_string())?
+}
+
+// ==================== Melix.UI 后台进程控制 ====================
+// 主程序通过命名管道 `Melix.UIControl` 命令 Melix.UI 后台进程弹出原生规则/设置/信任窗口，
+// 复用其稳定连接 Melix.Service 的能力（规则查询/编辑、拦截窗口都由 UI 进程完成）。
+
+#[tauri::command]
+#[cfg(not(feature = "ms_store"))]
+async fn melix_ui_open_rules() -> Result<(), String> {
+    melix_ui_client::send_command("show_rules", 2000).map(|_| ())
+}
+
+#[tauri::command]
+#[cfg(not(feature = "ms_store"))]
+async fn melix_ui_open_settings() -> Result<(), String> {
+    melix_ui_client::send_command("show_settings", 2000).map(|_| ())
+}
+
+#[tauri::command]
+#[cfg(not(feature = "ms_store"))]
+async fn melix_ui_open_trust() -> Result<(), String> {
+    melix_ui_client::send_command("show_trust", 2000).map(|_| ())
+}
+
+#[tauri::command]
+#[cfg(not(feature = "ms_store"))]
+async fn melix_ui_open_chain() -> Result<(), String> {
+    melix_ui_client::send_command("show_chain", 2000).map(|_| ())
+}
+
+#[tauri::command]
+#[cfg(not(feature = "ms_store"))]
+async fn melix_ui_open_composite() -> Result<(), String> {
+    melix_ui_client::send_command("show_composite", 2000).map(|_| ())
+}
+
+#[tauri::command]
+#[cfg(not(feature = "ms_store"))]
+async fn melix_ui_open_log() -> Result<(), String> {
+    melix_ui_client::send_command("show_log", 2000).map(|_| ())
+}
+
+#[tauri::command]
+#[cfg(not(feature = "ms_store"))]
+async fn melix_ui_ping() -> Result<bool, String> {
+    Ok(melix_ui_client::send_command("ping", 2000).map(|r| r.ok).unwrap_or(false))
+}
+
+/// 查询 Melix.UI 的引擎/内核/服务连接状态（跟随 WPF 端显示的真实状态）。
+#[tauri::command]
+#[cfg(not(feature = "ms_store"))]
+async fn melix_ui_get_status() -> Result<melix_ui_client::UiEngineStatus, String> {
+    melix_ui_client::get_status(2500)
+}
+
 // ==================== Windows 版本检测与兼容性警告 ====================
 
 /// 检测当前系统是否为 Windows 11（通过注册表获取真实 Build 号）
@@ -10974,6 +11646,58 @@ pub fn run() {
             get_driver_protection_config_enabled,
             #[cfg(not(feature = "ms_store"))]
             set_driver_protection_config_enabled,
+            #[cfg(not(feature = "ms_store"))]
+            get_endpoint_protection_enabled,
+            #[cfg(not(feature = "ms_store"))]
+            set_endpoint_protection_enabled,
+            #[cfg(not(feature = "ms_store"))]
+            get_endpoint_protection_prompted,
+            #[cfg(not(feature = "ms_store"))]
+            set_endpoint_protection_prompted,
+            #[cfg(not(feature = "ms_store"))]
+            get_endpoint_protection_status,
+            #[cfg(not(feature = "ms_store"))]
+            start_endpoint_protection,
+            #[cfg(not(feature = "ms_store"))]
+            stop_endpoint_protection,
+            // Melix HIPS 规则桥接命令
+            #[cfg(not(feature = "ms_store"))]
+            melix_service_running,
+            #[cfg(not(feature = "ms_store"))]
+            melix_get_rules,
+            #[cfg(not(feature = "ms_store"))]
+            melix_add_rule,
+            #[cfg(not(feature = "ms_store"))]
+            melix_delete_rule,
+            #[cfg(not(feature = "ms_store"))]
+            melix_get_settings,
+            #[cfg(not(feature = "ms_store"))]
+            melix_update_settings,
+            #[cfg(not(feature = "ms_store"))]
+            melix_get_trust_list,
+            #[cfg(not(feature = "ms_store"))]
+            melix_add_trust,
+            #[cfg(not(feature = "ms_store"))]
+            melix_remove_trust,
+            #[cfg(not(feature = "ms_store"))]
+            melix_prompt_response,
+            // Melix.UI 后台进程控制命令
+            #[cfg(not(feature = "ms_store"))]
+            melix_ui_open_rules,
+            #[cfg(not(feature = "ms_store"))]
+            melix_ui_open_settings,
+            #[cfg(not(feature = "ms_store"))]
+            melix_ui_open_trust,
+            #[cfg(not(feature = "ms_store"))]
+            melix_ui_open_chain,
+            #[cfg(not(feature = "ms_store"))]
+            melix_ui_open_composite,
+            #[cfg(not(feature = "ms_store"))]
+            melix_ui_open_log,
+            #[cfg(not(feature = "ms_store"))]
+            melix_ui_ping,
+            #[cfg(not(feature = "ms_store"))]
+            melix_ui_get_status,
             is_windows_11,
             #[cfg(not(feature = "ms_store"))]
             get_driver_auto_start_decision,
@@ -10994,6 +11718,7 @@ pub fn run() {
             scan_batch_direct,
             scan_batch_direct_with_hashes,
             get_scan_files_direct,
+            scan_running_processes_command,
             set_taskbar_progress,
             get_process_list,
             kill_process,
@@ -11032,6 +11757,14 @@ pub fn run() {
             delete_quarantined_file,
             get_quarantined_files,
             get_quarantine_stats,
+            active_threat::show_active_threat_alert,
+            active_threat::close_active_threat_alert_window,
+            active_threat::get_pending_active_threat_data,
+            active_threat::show_reboot_countdown,
+            active_threat::close_reboot_countdown_window,
+            active_threat::schedule_boot_cleanup_command,
+            active_threat::clear_without_restart_command,
+            active_threat::restart_now_command,
             clean_infector_file,
             get_security_logs,
             get_security_log_stats,
@@ -11550,6 +12283,21 @@ pub fn run() {
                             sandbox_analysis::start_r3_process_monitor(&app_handle_clone);
                         }
                     });
+                }
+            }
+
+            // 驱动防护默认强制开启：即使上次会话用户关闭了驱动/总防护，
+            // 本次启动也自动连接驱动（避免"上次关掉 → 重启失去驱动 → 功能丢失"）。
+            // 用户仅可在当前会话内临时关闭（set_driver_protection(false) 只影响本次运行）。
+            // 若驱动已连接则幂等跳过（不重复提权拉起）。
+            #[cfg(not(feature = "ms_store"))]
+            {
+                if !av_driver_client::is_av_driver_connected() && !is_interceptor_running() {
+                    println!("[Setup] 驱动防护默认强制开启：自动连接驱动");
+                    log_to_file("[Setup] 驱动防护默认强制开启：自动连接驱动");
+                    start_driver_protection_background(app.handle().clone());
+                } else {
+                    println!("[Setup] 驱动已连接/已在运行，跳过强制启动");
                 }
             }
 

@@ -400,6 +400,41 @@ html, body {
   color: var(--text-primary);
 }
 
+/* 测试版本水印（角落低调文字，不拦截交互） */
+.version-watermark {
+  position: fixed;
+  right: 12px;
+  bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 75%;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-tertiary);
+  opacity: 0.6;
+  z-index: 9999;
+  pointer-events: none;
+  user-select: none;
+  animation: watermarkFadeIn 0.5s ease;
+}
+
+.version-watermark-badge {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.version-watermark-badge #watermark-version {
+  font-family: Consolas, 'Courier New', monospace;
+  font-weight: 400;
+}
+
+@keyframes watermarkFadeIn {
+  from { opacity: 0; }
+  to { opacity: 0.6; }
+}
+
 
 
 .titlebar-controls {
@@ -2209,18 +2244,41 @@ html, body {
 .settings-list {
   display: flex;
   flex-direction: column;
+  gap: 8px;
+}
+
+/* Setting Group (通用分组布局，工具箱/扫描/EDR 等页面共用) */
+.setting-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.setting-group-title {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text-secondary);
+  padding: 16px 4px 8px 4px;
+  margin: 0;
+}
+
+.setting-group:first-child .setting-group-title {
+  padding-top: 4px;
+}
+
+/* 设置页面分组卡片（Windows 设置风格，仅作用于设置页面 #section-settings） */
+#section-settings .settings-list {
   gap: 12px;
 }
 
-/* Setting Group - Card Style */
-.setting-group {
+#section-settings .setting-group {
   background: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   overflow: hidden;
 }
 
-.setting-group-header {
+#section-settings .setting-group-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2230,18 +2288,18 @@ html, body {
   transition: background 0.15s ease;
 }
 
-.setting-group-header:hover {
+#section-settings .setting-group-header:hover {
   background: var(--bg-hover);
 }
 
-.setting-group-title {
+#section-settings .setting-group-title {
   font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
-  margin: 0;
+  padding: 0;
 }
 
-.setting-group-chevron {
+#section-settings .setting-group-chevron {
   width: 16px;
   height: 16px;
   color: var(--text-secondary);
@@ -2249,32 +2307,32 @@ html, body {
   flex-shrink: 0;
 }
 
-.setting-group:not(.collapsed) .setting-group-chevron {
+#section-settings .setting-group:not(.collapsed) .setting-group-chevron {
   transform: rotate(180deg);
 }
 
-.setting-group-content {
+#section-settings .setting-group-content {
   display: grid;
   grid-template-rows: 1fr;
   transition: grid-template-rows 0.3s ease;
 }
 
-.setting-group.collapsed .setting-group-content {
+#section-settings .setting-group.collapsed .setting-group-content {
   grid-template-rows: 0fr;
 }
 
-.setting-group-content-inner {
+#section-settings .setting-group-content-inner {
   overflow: hidden;
   min-height: 0;
 }
 
-.setting-group-content .setting-item {
+#section-settings .setting-group-content .setting-item {
   border: none;
   border-radius: 0;
   border-top: 1px solid var(--border-color);
 }
 
-.setting-group-content .setting-item:first-child {
+#section-settings .setting-group-content .setting-item:first-child {
   border-top: none;
 }
 

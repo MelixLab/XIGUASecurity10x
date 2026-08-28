@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>重启倒计时</title>
+    <link rel="stylesheet" href="intercept-theme.css">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: var(--bg-primary);
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        .countdown-container {
+            width: 100%;
+            height: 100%;
+            padding: 16px 20px 14px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background: var(--bg-primary);
+            border-radius: 8px;
+            overflow: hidden;
+            position: relative;
+        }
+        .drag-region {
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 32px;
+            -webkit-app-region: drag;
+            app-region: drag;
+            z-index: 10;
+        }
+
+        .countdown-title {
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-top: 2px;
+        }
+        .countdown-num {
+            font-size: 44px;
+            font-weight: 700;
+            color: var(--danger);
+            line-height: 1.15;
+            margin-top: 2px;
+            font-variant-numeric: tabular-nums;
+            min-width: 64px;
+            text-align: center;
+        }
+        .countdown-desc {
+            font-size: 12.5px;
+            color: var(--text-secondary);
+            line-height: 1.6;
+            text-align: center;
+            margin-top: 4px;
+        }
+        .countdown-desc b {
+            color: var(--danger);
+            font-weight: 600;
+        }
+
+        .countdown-actions {
+            margin-top: auto;
+            display: flex;
+            gap: 10px;
+            width: 100%;
+            justify-content: center;
+        }
+        .btn {
+            padding: 7px 22px;
+            border: none;
+            border-radius: 5px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all .15s;
+            height: 34px;
+        }
+        .btn:disabled { opacity: .55; cursor: not-allowed; }
+        .btn-primary {
+            background: var(--accent-primary);
+            color: white;
+        }
+        .btn-primary:hover:not(:disabled) { background: var(--accent-secondary); }
+        .btn-secondary {
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+        .btn-secondary:hover:not(:disabled) { background: var(--bg-hover); }
+
+        .status-line {
+            margin-top: 8px;
+            font-size: 11.5px;
+            color: var(--text-secondary);
+            min-height: 15px;
+            line-height: 1.4;
+        }
+        .status-line.error { color: var(--danger); }
+    </style>
+    <script>
+        (function() {
+            var theme = localStorage.getItem('theme') || 'blue';
+            var themeMode = localStorage.getItem('themeMode') || 'colorful';
+            var backdrop = localStorage.getItem('windowBackdrop') || 'none';
+            document.documentElement.setAttribute('data-theme', theme);
+            document.documentElement.setAttribute('data-theme-mode', themeMode);
+            document.documentElement.setAttribute('data-backdrop', backdrop);
+        })();
+    </script>
+</head>
+<body>
+    <div class="drag-region"></div>
+    <div class="countdown-container">
+        <div class="countdown-title" data-i18n="cdTitle">即将重启计算机</div>
+        <div class="countdown-num" id="countdown-num">60</div>
+        <div class="countdown-desc" id="countdown-desc"></div>
+
+        <div class="countdown-actions">
+            <button class="btn btn-primary" id="btn-restart" data-i18n="cdRestart">立即重启</button>
+            <button class="btn btn-secondary" id="btn-cancel" data-i18n="cdCancel">取消</button>
+        </div>
+        <div class="status-line" id="status-line"></div>
+    </div>
+
+    <script>
+        const translations = {
+            'zh-CN': {
+                cdTitle: '即将重启计算机',
+                cdDesc: '系统将在 {n} 秒后重启，请保存所有未保存的工作。',
+                cdRestart: '立即重启',
+                cdCancel: '取消',
+                cdRestarting: '正在重启系统…',
+                cdFailed: '重启失败：{msg}',
+                cdAutoRestarting: '倒计时结束，正在重启系统…'
+            },
+            'zh-TW': {
+                cdTitle: '即將重新啟動電腦',
+                cdDesc: '系統將在 {n} 秒後重新啟動，請儲存所有未儲存的工作。',
+                cdRestart: '立即重新啟動',
+                cdCancel: '取消',
+                cdRestarting: '正在重新啟動系統…',
+                cdFailed: '重新啟動失敗：{msg}',
+                cdAutoRestarting: '倒數結束，正在重新啟動系統…'
+            },
+            'en-US': {
+                cdTitle: 'Restart Required',
+                cdDesc: 'Your computer will restart in {n} seconds. Please save all unsaved work.',
+                cdRestart: 'Restart now',
+                cdCancel: 'Cancel',
+                cdRestarting: 'Restarting the system…',
+                cdFailed: 'Restart failed: {msg}',
+                cdAutoRestarting: 'Countdown finished, restarting the system…'
+            }
+        };
+
+        const params = new URLSearchParams(window.location.search);
+        // 预创建窗口的 URL 无 lang 参数，运行时从后端拉取当前语言
+        let currentLang = ['zh-CN', 'zh-TW', 'en-US'].includes(params.get('lang')) ? params.get('lang') : '';
+
+        function t(key, replacements) {
+            const base = currentLang || 'zh-CN';
+            let text = translations[base]?.[key] ?? translations['zh-CN']?.[key] ?? key;
+            if (replacements) {
+                Object.entries(replacements).forEach(([k, v]) => {
+                    text = text.replace(new RegExp('\\{' + k + '\\}', 'g'), String(v));
+                });
+            }
+            return text;
+        }
+
+        function applyI18n() {
+            document.title = t('cdTitle');
+            document.documentElement.lang = currentLang || 'zh-CN';
+            document.querySelectorAll('[data-i18n]').forEach(el => {
+                const key = el.getAttribute('data-i18n');
+                if (key) el.textContent = t(key);
+            });
+        }
+
+        const TOTAL_SECONDS = 60;
+        let remaining = TOTAL_SECONDS;
+        let timer = null;
+        let restartTriggered = false;
+
+        function renderCountdown() {
+            const numEl = document.getElementById('countdown-num');
+            const descEl = document.getElementById('countdown-desc');
+            if (numEl) numEl.textContent = String(remaining);
+            if (descEl) descEl.innerHTML = t('cdDesc').replace('{n}', '<b>' + remaining + '</b>');
+        }
+
+        function stopTimer() {
+            if (timer) { clearInterval(timer); timer = null; }
+        }
+
+        function setStatus(text, kind) {
+            const el = document.getElementById('status-line');
+            if (el) {
+                el.textContent = text || '';
+                el.className = 'status-line' + (kind ? ' ' + kind : '');
+            }
+        }
+
+        // 窗口是预创建的（启动即加载、平时隐藏），只有真正显示时才应开始倒计时。
+        // 后端在 show 前 emit 'reboot-countdown-start'；Win32 显示触发 focus/visibilitychange 兜底。
+        function startCountdown(seconds) {
+            if (restartTriggered) return;
+            stopTimer();
+            remaining = (typeof seconds === 'number' && seconds > 0) ? seconds : TOTAL_SECONDS;
+            renderCountdown();
+            timer = setInterval(function() {
+                remaining -= 1;
+                if (remaining <= 0) {
+                    remaining = 0;
+                    renderCountdown();
+                    stopTimer();
+                    triggerRestart(true);
+                    return;
+                }
+                renderCountdown();
+            }, 1000);
+        }
+
+        async function triggerRestart(auto) {
+            if (restartTriggered) return;
+            restartTriggered = true;
+            stopTimer();
+            const btnRestart = document.getElementById('btn-restart');
+            const btnCancel = document.getElementById('btn-cancel');
+            if (btnRestart) btnRestart.disabled = true;
+            if (btnCancel) btnCancel.disabled = true;
+            setStatus(auto ? t('cdAutoRestarting') : t('cdRestarting'), '');
+            try {
+                if (window.__TAURI__ && window.__TAURI__.core) {
+                    await window.__TAURI__.core.invoke('restart_now_command');
+                } else {
+                    throw new Error('Tauri API not available');
+                }
+            } catch (e) {
+                console.error('[RebootCountdown] Restart failed:', e);
+                setStatus(t('cdFailed', { msg: (e && e.message) || e }), 'error');
+                if (btnRestart) btnRestart.disabled = false;
+                if (btnCancel) btnCancel.disabled = false;
+                restartTriggered = false;
+                // 允许用户重新开始倒计时
+                startCountdown(30);
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            // 拉取当前语言后应用国际化文案（预创建窗口 URL 无 lang 参数）
+            if (window.__TAURI__ && window.__TAURI__.core) {
+                window.__TAURI__.core.invoke('get_current_language')
+                    .then((lang) => {
+                        if (lang && ['zh-CN', 'zh-TW', 'en-US'].includes(lang)) currentLang = lang;
+                        applyI18n();
+                    })
+                    .catch(() => {
+                        if (!currentLang) currentLang = 'zh-CN';
+                        applyI18n();
+                    });
+            } else {
+                if (!currentLang) currentLang = 'zh-CN';
+                applyI18n();
+            }
+
+            // 后端 emit 通知（优先）
+            if (window.__TAURI__ && window.__TAURI__.event) {
+                (async () => {
+                    try {
+                        await window.__TAURI__.event.listen('reboot-countdown-start', (event) => {
+                            const secs = event.payload && event.payload.seconds;
+                            console.log('[RebootCountdown] Start event received, seconds=', secs);
+                            startCountdown(secs);
+                        });
+                    } catch (e) {
+                        console.warn('[RebootCountdown] Failed to register listener:', e);
+                    }
+                })();
+            }
+
+            // 窗口被 Win32 显示时兜底启动倒计时（预创建窗口首次 load 不触发）
+            window.addEventListener('focus', function() {
+                if (!restartTriggered) startCountdown(TOTAL_SECONDS);
+            });
+            document.addEventListener('visibilitychange', function() {
+                if (!document.hidden && !restartTriggered) startCountdown(TOTAL_SECONDS);
+            });
+
+            document.getElementById('btn-restart')?.addEventListener('click', function() {
+                triggerRestart(false);
+            });
+
+            document.getElementById('btn-cancel')?.addEventListener('click', async function() {
+                stopTimer();
+                try {
+                    if (window.__TAURI__ && window.__TAURI__.core) {
+                        await window.__TAURI__.core.invoke('close_reboot_countdown_window');
+                    } else { window.close(); }
+                } catch (e) { window.close(); }
+            });
+        });
+    </script>
+</body>
+</html>

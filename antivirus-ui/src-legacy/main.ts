@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import "./styles.css";
+import "./new-ui.css";
 import { translations, Language, Translations } from "./locales";
 import { engineManager, ScanResult, updateManager, UpdateInfo } from "./engines";
 
@@ -1398,6 +1399,7 @@ class FileProtectionManager {
     const { invoke } = await import('@tauri-apps/api/core');
 
     // 1. 先尝试自动隔离，失败不影响弹窗提示
+    let accessDenied = false;
     try {
       const quarantineResult = await invoke('quarantine_threat_file', {
         filePath,
@@ -1407,11 +1409,24 @@ class FileProtectionManager {
 
       if (quarantineResult && quarantineResult.success) {
         console.log('[FileProtection] - Quarantined:', filePath, '->', quarantineResult.id);
+      } else if (quarantineResult && quarantineResult.reason === 'access_denied') {
+        // 文件被活动进程占用（病毒正在运行）：后端已自动弹出"发现活动内存威胁"
+        // 处置窗口（开机时清除 / 不重启而清除），此处不重复弹标准隔离告警。
+        console.warn('[FileProtection] - 文件被活动进程占用，已弹出活动威胁清除窗口:', filePath);
+        accessDenied = true;
       } else {
         console.warn('[FileProtection] - Quarantine failed or partial:', filePath, quarantineResult);
       }
     } catch (e) {
       console.warn('[FileProtection] - Quarantine threw, continuing to alert:', filePath, e);
+    }
+
+    // 活动内存威胁：处置窗口已由后端弹出，跳过标准隔离告警
+    if (accessDenied) {
+      if (this.onThreatDetectedCallback) {
+        this.onThreatDetectedCallback(filePath, threatName);
+      }
+      return;
     }
 
     // 2. 显示文件防护隔离告警窗口（必须让用户感知到威胁）
@@ -2569,6 +2584,121 @@ class DriverProtectionManager {
   }
 }
 
+// ============ 增强端点防护（MelixEDR）管理 ============
+// 负责专业端点防护的开关状态、配置持久化、后端服务状态检测。
+class EndpointProtectionManager {
+  private enabled: boolean = false;        // 开关状态（用户意图）
+  private configEnabled: boolean = false;  // 持久化配置状态
+  private prompted: boolean = false;       // 是否已询问过用户
+  private cachedProcessRunning: boolean = false; // 缓存后端服务实际运行状态
+
+  constructor() {
+    this.loadState();
+  }
+
+  // 加载配置状态
+  private async loadState() {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      this.configEnabled = await invoke('get_endpoint_protection_enabled') as boolean;
+      this.prompted = await invoke('get_endpoint_protection_prompted') as boolean;
+      console.log('[EndpointProtection] Config loaded:', this.configEnabled, 'prompted:', this.prompted);
+      // 若配置为开启，刷新后端服务实际运行状态
+      if (this.configEnabled) {
+        this.refreshState();
+      }
+    } catch (e) {
+      console.error('[EndpointProtection] Failed to load state:', e);
+      this.configEnabled = false;
+    }
+  }
+
+  // 保存开关配置
+  async saveConfig(enabled: boolean): Promise<void> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('set_endpoint_protection_enabled', { enabled });
+      this.configEnabled = enabled;
+      console.log('[EndpointProtection] Config saved:', enabled);
+    } catch (e) {
+      console.error('[EndpointProtection] Failed to save config:', e);
+    }
+  }
+
+  // 标记已询问
+  async markPrompted(): Promise<void> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('set_endpoint_protection_prompted', { prompted: true });
+      this.prompted = true;
+    } catch (e) {
+      console.error('[EndpointProtection] Failed to mark prompted:', e);
+    }
+  }
+
+  isPrompted(): boolean {
+    return this.prompted;
+  }
+
+  getConfigEnabled(): boolean {
+    return this.configEnabled;
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  // 刷新后端服务实际运行状态（同步缓存，供同步方法使用）
+  async refreshState(): Promise<void> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const running = await invoke('get_endpoint_protection_status') as boolean;
+      this.cachedProcessRunning = running;
+      this.enabled = running || this.configEnabled;
+      console.log('[EndpointProtection] Status refreshed, running:', running, 'enabled:', this.enabled);
+    } catch (e) {
+      console.error('[EndpointProtection] Failed to refresh state:', e);
+    }
+  }
+
+  // 检查后端服务进程是否在运行
+  async isProcessRunning(): Promise<boolean> {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const running = await invoke('get_endpoint_protection_status') as boolean;
+      this.cachedProcessRunning = running;
+      return running;
+    } catch (e) {
+      console.error('[EndpointProtection] Failed to check process:', e);
+      return false;
+    }
+  }
+
+  // 同步返回缓存的实际进程状态
+  isProcessRunningSync(): boolean {
+    return this.cachedProcessRunning;
+  }
+
+  // 启用/停用端点防护
+  async setEnabled(enabled: boolean): Promise<void> {
+    this.enabled = enabled;
+    await this.saveConfig(enabled);
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      if (enabled) {
+        await invoke('start_endpoint_protection');
+      } else {
+        await invoke('stop_endpoint_protection');
+      }
+      this.cachedProcessRunning = enabled;
+      console.log('[EndpointProtection] setEnabled:', enabled);
+    } catch (e) {
+      console.error('[EndpointProtection] Failed to set enabled:', e);
+      throw e;
+    }
+  }
+}
+
 // Anime Style Management
 type BackgroundMode = 'cover' | 'contain' | 'stretch' | 'repeat';
 
@@ -2923,7 +3053,7 @@ class SeparatorLineManager {
 }
 
 // App State
-type Page = 'home' | 'scan' | 'process' | 'settings' | 'quarantine' | 'security_log' | 'toolbox_popup' | 'toolbox_cleaner' | 'toolbox_edr_reports' | 'toolbox_process_manager' | 'toolbox_system_repair' | 'edr' | 'chat' | 'notifications';
+type Page = 'home' | 'scan' | 'protection' | 'process' | 'settings' | 'advanced_settings' | 'quarantine' | 'security_log' | 'toolbox_popup' | 'toolbox_cleaner' | 'toolbox_edr_reports' | 'toolbox_process_manager' | 'toolbox_system_repair' | 'edr' | 'chat' | 'notifications';
 
 // 待处理威胁通知
 interface PendingThreat {
@@ -3083,6 +3213,7 @@ class App {
   private liquidGlassManager: LiquidGlassManager;
   private separatorLineManager: SeparatorLineManager;
   private driverProtectionManager: DriverProtectionManager;
+  private endpointProtectionManager: EndpointProtectionManager;
   // @ts-ignore - reserved for future use
   private driverLaunchHintManager: DriverLaunchHintManager;
   private basicProtectionManager: BasicProtectionManager;
@@ -3125,7 +3256,6 @@ class App {
   private scanProgress: number = 0;
   private isTraversing: boolean = false; // 遍历目录阶段（显示不确定进度条动画）
   private scanTimer: number | null = null;
-  private sidebarUpdateTimer: number | null = null;
   private isManualScrolling: boolean = false;
   private currentScanFileIndex: number = 0;
   private scannedFilesCount: number = 0;
@@ -3216,6 +3346,7 @@ class App {
     this.liquidGlassManager = new LiquidGlassManager();
     this.separatorLineManager = new SeparatorLineManager();
     this.driverProtectionManager = new DriverProtectionManager();
+    this.endpointProtectionManager = new EndpointProtectionManager();
     this.driverLaunchHintManager = new DriverLaunchHintManager();
     this.basicProtectionManager = new BasicProtectionManager();
     this.fileProtectionManager = new FileProtectionManager();
@@ -3272,8 +3403,8 @@ class App {
     // 加载开机自启动状态
     this.loadAutoStartState();
     
-    // 加载侧边栏折叠状态
-    this.sidebarCollapsed = localStorage.getItem('sidebar_collapsed') === 'true';
+    // 加载侧边栏折叠状态（新 UI 默认收起为图标模式）
+    this.sidebarCollapsed = localStorage.getItem('sidebar_collapsed') !== 'false';
     
     // 加载禁用一滑到底设置
     this.loadContinuousScrollSetting();
@@ -4172,6 +4303,142 @@ class App {
     });
   }
 
+  // 首次启动/升级后新增选项时，询问是否启用增强端点防护
+  // 描述文案：端点防护可以带来更强的防护效果，但可能需要自行进行决策，
+  // 我们较推荐您打开该防护，但可能需要拥有自行决策的能力。
+  // 提供倒计时，若干秒后自动确认开启并启动端点防护。
+  private async maybePromptEndpointProtection() {
+    if (document.getElementById('endpoint-protection-consent-dialog')) return;
+    // 已询问过则不再弹窗
+    if (this.endpointProtectionManager.isPrompted()) return;
+    // 已开启则无需询问
+    if (this.endpointProtectionManager.getConfigEnabled()) {
+      await this.endpointProtectionManager.markPrompted();
+      return;
+    }
+
+    // 短暂延迟，等主界面完全显示后再弹窗
+    await new Promise(resolve => setTimeout(resolve, 1500));
+
+    if (document.getElementById('endpoint-protection-consent-dialog')) return;
+
+    const COUNTDOWN = 10; // 秒后自动确认开启
+    let remaining = COUNTDOWN;
+    let countdownTimer: number | null = null;
+    let autoConfirmed = false;
+
+    const dialog = document.createElement('div');
+    dialog.id = 'endpoint-protection-consent-dialog';
+    dialog.innerHTML = `
+      <div class="ep-consent-overlay"></div>
+      <div class="ep-consent-content">
+        <div style="padding: 24px;">
+          <div style="display:flex;align-items:flex-start;gap:16px;margin-bottom:16px;">
+            <div style="width:24px;height:24px;flex-shrink:0;margin-top:2px;color:#0067C0;">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 1L3 5V11C3 16.55 6.84 21.74 12 23C17.16 21.74 21 16.55 21 11V5L12 1ZM12 11.99H19C18.47 16.11 15.72 19.78 12 20.93V12H5V6.3L12 3.19V11.99Z" fill="currentColor"/>
+              </svg>
+            </div>
+            <div style="flex:1;">
+              <div style="font-size:18px;font-weight:600;color:#1C1C1C;line-height:1.4;margin-bottom:12px;">启用增强端点防护？</div>
+              <div style="font-size:14px;color:#5F5F5F;line-height:1.7;">
+                <p style="margin:0 0 8px 0;">端点防护可以带来更强的防护效果，但可能需要自行进行决策。我们较推荐您打开该防护，但可能需要拥有自行决策的能力。</p>
+                <p style="margin:0;color:#8A8A8A;font-size:13px;">启用后将安装驱动并启动专业端点防护服务，拦截高级威胁。将在 <span id="ep-consent-count" style="font-weight:600;color:#0067C0;">${COUNTDOWN}</span> 秒后自动开启。</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;padding:16px 24px;background:#F3F3F3;border-top:1px solid rgba(0,0,0,0.05);">
+          <button id="ep-consent-later-btn" style="
+            padding:6px 16px;border:1px solid rgba(0,0,0,0.1);background:#FFFFFF;
+            border-radius:4px;font-size:14px;font-weight:400;color:#1C1C1C;
+            cursor:pointer;font-family:inherit;transition:all 0.15s ease;min-width:80px;
+            box-shadow:0 1px 2px rgba(0,0,0,0.05);
+          ">稍后再说</button>
+          <button id="ep-consent-allow-btn" style="
+            padding:6px 16px;border:1px solid transparent;background:#0067C0;
+            border-radius:4px;font-size:14px;font-weight:400;color:#FFFFFF;
+            cursor:pointer;font-family:inherit;transition:all 0.15s ease;min-width:100px;
+            box-shadow:0 1px 2px rgba(0,0,0,0.05);
+          ">立即开启</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(dialog);
+
+    const style = document.createElement('style');
+    style.textContent = `
+      #endpoint-protection-consent-dialog {
+        position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+        z-index: 100002; display: flex; align-items: center; justify-content: center;
+      }
+      .ep-consent-overlay {
+        position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,0.25); backdrop-filter: blur(4px);
+      }
+      .ep-consent-content {
+        position: relative; background: #FFFFFF; border-radius: 8px;
+        max-width: 560px; width: 92%;
+        box-shadow: 0 32px 64px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.05);
+        font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
+        overflow: hidden;
+        animation: epConsentShow 0.2s cubic-bezier(0.0, 0.0, 0.2, 1);
+      }
+      @keyframes epConsentShow {
+        from { opacity: 0; transform: scale(0.95) translateY(-10px); }
+        to { opacity: 1; transform: scale(1) translateY(0); }
+      }
+    `;
+    document.head.appendChild(style);
+
+    const cleanup = async () => {
+      if (countdownTimer !== null) window.clearInterval(countdownTimer);
+      dialog.remove();
+      style.remove();
+    };
+
+    const doEnable = async () => {
+      if (autoConfirmed) return;
+      autoConfirmed = true;
+      if (countdownTimer !== null) window.clearInterval(countdownTimer);
+      await cleanup();
+      try {
+        await this.endpointProtectionManager.setEnabled(true);
+        this.addLog('INFO', '增强端点防护已开启 (MelixEDR)');
+        this.updateProtectionStatus();
+        // 同步更新设置页复选框状态
+        const cb = document.getElementById('endpoint-protection-checkbox') as HTMLInputElement;
+        if (cb) cb.checked = true;
+      } catch (err) {
+        console.error('[EndpointProtection] Auto-enable failed:', err);
+        this.addLog('WARNING', '增强端点防护启动失败，请稍后重试');
+      }
+      await this.endpointProtectionManager.markPrompted();
+    };
+
+    const doLater = async () => {
+      if (autoConfirmed) return;
+      autoConfirmed = true;
+      if (countdownTimer !== null) window.clearInterval(countdownTimer);
+      await cleanup();
+      await this.endpointProtectionManager.markPrompted();
+    };
+
+    // 倒计时：归零后自动确认开启
+    const countEl = document.getElementById('ep-consent-count');
+    countdownTimer = window.setInterval(() => {
+      remaining--;
+      if (countEl) countEl.textContent = String(remaining);
+      if (remaining <= 0) {
+        doEnable();
+      }
+    }, 1000);
+
+    document.getElementById('ep-consent-later-btn')?.addEventListener('click', () => { doLater(); });
+    document.getElementById('ep-consent-allow-btn')?.addEventListener('click', () => { doEnable(); });
+  }
+
   // 赞助开发者确认弹窗（Fluent 风格）
   private showSponsorDialog() {
     if (document.getElementById('sponsor-dialog')) return;
@@ -4492,6 +4759,11 @@ class App {
       // 渲染完成后再更新主页状态，避免 DOM 未生成导致样式没生效
       this.updateHomeStatus().catch(e => console.error('Failed to update home status:', e));
       setTimeout(() => this.hideSplash(), 400);
+
+      // 首次启动/升级新增选项时，询问是否启用增强端点防护
+      if (!this.isMsStore) {
+        this.maybePromptEndpointProtection();
+      }
       
       // 自动恢复桌面宠物（如果之前开启了）
       if (this.desktopPetEnabled) {
@@ -4777,37 +5049,24 @@ class App {
         console.log(`[ContextMenu] Received scan request from ${source} for: ${path}`);
         this.addLog('INFO', `[ContextMenu] Received scan request for: ${path}`);
 
-        // 切换到主页并滚动到扫描区域
-        this.currentPage = 'home';
-        this.render();
+        // 切换到扫描页面
+        this.switchToPage('scan');
 
-        // 延迟滚动到扫描区域并开始扫描
+        // 延迟开始扫描
         setTimeout(() => {
-          const scanSection = document.getElementById('section-scan');
-          if (scanSection) {
-            scanSection.scrollIntoView({ behavior: 'smooth' });
-          }
-          // 再延迟一点开始扫描
-          setTimeout(() => {
-            console.log(`[ContextMenu] Starting custom scan for: ${path}`);
-            this.addLog('INFO', `[ContextMenu] Starting custom scan for: ${path}`);
-            this.startCustomScan(path);
-          }, 300);
-        }, 100);
+          console.log(`[ContextMenu] Starting custom scan for: ${path}`);
+          this.addLog('INFO', `[ContextMenu] Starting custom scan for: ${path}`);
+          this.startCustomScan(path);
+        }, 300);
       });
 
       // 监听 EDR 弹窗触发的快速扫描事件
       listen('edr-start-quick-scan', () => {
         console.log('[EDRAlert] Received edr-start-quick-scan event, starting quick scan');
-        this.currentPage = 'home';
-        this.render();
+        this.switchToPage('scan');
         setTimeout(() => {
-          const scanSection = document.getElementById('section-scan');
-          if (scanSection) scanSection.scrollIntoView({ behavior: 'smooth' });
-          setTimeout(() => {
-            this.startScan();
-          }, 300);
-        }, 100);
+          this.startScan();
+        }, 300);
       });
     } catch (e) {
       console.error('Failed to listen for navigation events:', e);
@@ -4818,51 +5077,26 @@ class App {
   private handleNavigation(page: string) {
     switch (page) {
       case 'quick-scan':
-        this.currentPage = 'home';
-        this.render();
-        // 滚动到扫描区域并触发快速扫描
+        this.switchToPage('scan');
+        // 延迟触发快速扫描按钮
         setTimeout(() => {
-          const scanSection = document.getElementById('section-scan');
-          if (scanSection) {
-            scanSection.scrollIntoView({ behavior: 'smooth' });
-            // 延迟触发快速扫描按钮
-            setTimeout(() => {
-              const quickScanBtn = document.getElementById('start-quick-scan');
-              if (quickScanBtn) quickScanBtn.click();
-            }, 300);
-          }
-        }, 100);
+          const quickScanBtn = document.getElementById('start-quick-scan');
+          if (quickScanBtn) quickScanBtn.click();
+        }, 300);
         break;
       case 'custom-scan':
-        this.currentPage = 'home';
-        this.render();
-        // 滚动到扫描区域并触发自定义扫描
+        this.switchToPage('scan');
+        // 延迟触发自定义扫描按钮
         setTimeout(() => {
-          const scanSection = document.getElementById('section-scan');
-          if (scanSection) {
-            scanSection.scrollIntoView({ behavior: 'smooth' });
-            // 延迟触发自定义扫描按钮
-            setTimeout(() => {
-              const customScanBtn = document.getElementById('start-custom-scan');
-              if (customScanBtn) customScanBtn.click();
-            }, 300);
-          }
-        }, 100);
+          const customScanBtn = document.getElementById('start-custom-scan');
+          if (customScanBtn) customScanBtn.click();
+        }, 300);
         break;
       case 'quarantine':
-        this.currentPage = 'quarantine';
-        this.render();
+        this.switchToPage('quarantine');
         break;
       case 'settings':
-        this.currentPage = 'home';
-        this.render();
-        // 滚动到设置区域
-        setTimeout(() => {
-          const settingsSection = document.getElementById('section-settings');
-          if (settingsSection) {
-            settingsSection.scrollIntoView({ behavior: 'smooth' });
-          }
-        }, 100);
+        this.switchToPage('settings');
         break;
       default:
         this.currentPage = 'home';
@@ -6799,127 +7033,108 @@ class App {
     const app = document.getElementById('app');
     if (!app) return;
 
+    // 新 UI 壳结构：app-container → titlebar + main-layout(sidebar + content)
+    const shell = (content: string) => `
+      ${this.renderBackgroundImage()}
+      <div class="app-container">
+        ${this.renderTitleBar()}
+        <div class="main-layout">
+          ${this.renderSidebar()}
+          <main class="content">
+            ${content}
+          </main>
+        </div>
+      </div>
+    `;
+
     if (this.isScanning || this.scanProgress >= 100) {
-      app.innerHTML = `
-        ${this.renderBackgroundImage()}
-        ${this.renderTitleBar()}
-        <div class="main-container">
-          ${this.renderSidebar()}
-          <div class="content">
-            ${this.renderScanningPage()}
-          </div>
-        </div>
-      `;
+      app.innerHTML = shell(`
+        <section class="page active" id="page-scan">
+          ${this.renderScanningPage()}
+        </section>
+      `);
     } else if (this.currentPage === 'quarantine') {
-      app.innerHTML = `
-        ${this.renderBackgroundImage()}
-        ${this.renderTitleBar()}
-        <div class="main-container">
-          ${this.renderSidebar()}
-          <div class="content">
-            ${this.renderQuarantineSection()}
-          </div>
-        </div>
-      `;
+      app.innerHTML = shell(`
+        <section class="page active" id="page-quarantine">
+          ${this.renderQuarantineSection()}
+        </section>
+      `);
     } else if (this.currentPage === 'security_log') {
-      app.innerHTML = `
-        ${this.renderBackgroundImage()}
-        ${this.renderTitleBar()}
-        <div class="main-container">
-          ${this.renderSidebar()}
-          <div class="content">
-            ${this.renderSecurityLogSection()}
-          </div>
-        </div>
-      `;
+      app.innerHTML = shell(`
+        <section class="page active" id="page-security_log">
+          ${this.renderSecurityLogSection()}
+        </section>
+      `);
     } else if (this.currentPage === 'toolbox_popup') {
-      app.innerHTML = `
-        ${this.renderBackgroundImage()}
-        ${this.renderTitleBar()}
-        <div class="main-container">
-          ${this.renderSidebar()}
-          <div class="content">
-            ${this.renderToolboxPopupSection()}
-          </div>
-        </div>
-      `;
+      app.innerHTML = shell(`
+        <section class="page active" id="page-toolbox_popup">
+          ${this.renderToolboxPopupSection()}
+        </section>
+      `);
     } else if (this.currentPage === 'toolbox_cleaner') {
-      app.innerHTML = `
-        ${this.renderBackgroundImage()}
-        ${this.renderTitleBar()}
-        <div class="main-container">
-          ${this.renderSidebar()}
-          <div class="content">
-            ${this.renderToolboxCleanerSection()}
-          </div>
-        </div>
-      `;
+      app.innerHTML = shell(`
+        <section class="page active" id="page-toolbox_cleaner">
+          ${this.renderToolboxCleanerSection()}
+        </section>
+      `);
     } else if (this.currentPage === 'toolbox_edr_reports') {
-      app.innerHTML = `
-        ${this.renderBackgroundImage()}
-        ${this.renderTitleBar()}
-        <div class="main-container">
-          ${this.renderSidebar()}
-          <div class="content">
-            ${this.renderEdrReportsSection()}
-          </div>
-        </div>
-      `;
+      app.innerHTML = shell(`
+        <section class="page active" id="page-toolbox_edr_reports">
+          ${this.renderEdrReportsSection()}
+        </section>
+      `);
     } else if (this.currentPage === 'toolbox_process_manager') {
-      app.innerHTML = `
-        ${this.renderBackgroundImage()}
-        ${this.renderTitleBar()}
-        <div class="main-container">
-          ${this.renderSidebar()}
-          <div class="content">
-            ${this.renderToolboxProcessManagerSection()}
-          </div>
-        </div>
-      `;
+      app.innerHTML = shell(`
+        <section class="page active" id="page-toolbox_process_manager">
+          ${this.renderToolboxProcessManagerSection()}
+        </section>
+      `);
     } else if (this.currentPage === 'toolbox_system_repair') {
-      app.innerHTML = `
-        ${this.renderBackgroundImage()}
-        ${this.renderTitleBar()}
-        <div class="main-container">
-          ${this.renderSidebar()}
-          <div class="content">
-            ${this.renderSystemRepairSection()}
-          </div>
-        </div>
-      `;
+      app.innerHTML = shell(`
+        <section class="page active" id="page-toolbox_system_repair">
+          ${this.renderSystemRepairSection()}
+        </section>
+      `);
+    } else if (this.currentPage === 'chat') {
+      app.innerHTML = shell(`
+        <section class="page active" id="page-chat">
+          ${this.renderChatPage()}
+        </section>
+      `);
+    } else if (this.currentPage === 'advanced_settings') {
+      app.innerHTML = shell(`
+        <section class="page active" id="page-advanced_settings">
+          ${this.renderAdvancedSettingsSection()}
+        </section>
+      `);
     } else if (this.currentPage === 'edr') {
       // EDR 模式入口已从侧边栏和设置中隐藏，若仍通过旧状态进入则重定向到首页
       this.currentPage = 'home';
       this.render();
       return;
-    } else if (this.currentPage === 'chat') {
-      app.innerHTML = `
-        ${this.renderBackgroundImage()}
-        ${this.renderTitleBar()}
-        <div class="main-container">
-          ${this.renderSidebar()}
-          <div class="content">
-            ${this.renderChatPage()}
-          </div>
-        </div>
-      `;
     } else {
+      // 主页面：所有页面同时渲染在 DOM 中，通过 .active 类切换（新 UI 页面切换模式）
       app.innerHTML = `
-        ${this.renderBackgroundImage()}
-        ${this.renderTitleBar()}
-        <div class="main-container">
-          ${this.renderSidebar()}
-          <div class="content">
-            <div class="scroll-container">
-              ${this.renderHomeSection()}
-              ${this.renderScanSection()}
-              ${this.renderNotificationsSection()}
-              ${this.renderProcessSection()}
-              ${this.edrModeManager?.isEnabled() ? this.renderEdrSection() : ''}
-              ${this.renderSettingsSection()}
-            </div>
-          </div>
-        </div>
+        ${shell(`
+          <section class="page ${this.currentPage === 'home' ? 'active' : ''}" id="page-home">
+            ${this.renderHomeSection()}
+          </section>
+          <section class="page ${this.currentPage === 'scan' ? 'active' : ''}" id="page-scan">
+            ${this.renderScanSection()}
+          </section>
+          <section class="page ${this.currentPage === 'protection' ? 'active' : ''}" id="page-protection">
+            ${this.renderProtectionSection()}
+          </section>
+          <section class="page ${this.currentPage === 'notifications' ? 'active' : ''}" id="page-notifications">
+            ${this.renderNotificationsSection()}
+          </section>
+          <section class="page ${this.currentPage === 'process' ? 'active' : ''}" id="page-process">
+            ${this.renderProcessSection()}
+          </section>
+          <section class="page ${this.currentPage === 'settings' ? 'active' : ''}" id="page-settings">
+            ${this.renderSettingsSection()}
+          </section>
+        `)}
         ${this.renderIconSettingsModal()}
       `;
     }
@@ -6939,12 +7154,8 @@ class App {
     // 异步加载背景图片
     this.loadBackgroundImageAsync();
     
-    // 应用一滑到底设置
+    // 页面切换后更新滚动模式（页面模式下各页面独立滚动）
     this.applyContinuousScrollSetting();
-    
-    if (!this.isScanning && this.scanProgress < 100) {
-      this.observeSections();
-    }
     
     // 渲染完成后更新活动日志标题
     if (this.currentPage !== 'quarantine' && !this.isScanning) {
@@ -6962,22 +7173,18 @@ class App {
     // 始终显示应用标题，不再显示受限模式
     const titleText = this.t('appTitle');
     return `
-      <div class="titlebar" data-tauri-drag-region>
+      <header class="titlebar" data-tauri-drag-region>
         <div class="titlebar-left">
-          <div class="titlebar-icon">
-            <img src="icons/icon.png" alt="XIGUA Security" style="width: 20px; height: 20px;">
-          </div>
-          <div class="titlebar-brand">
-            <span class="titlebar-text">${titleText}</span>
-          </div>
+          <img class="titlebar-logo" src="icons/icon.png" alt="XIGUA Security">
+          <span class="titlebar-title">${titleText}</span>
         </div>
-        <div class="titlebar-controls">
+        <div class="titlebar-right">
+          ${this.cloudHashConnectionStatus === 'disconnected' ? `<div class="cloud-connection-warning" title="云端哈希连接失败"><svg class="cloud-warning-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="7"/><path d="M8 5v4"/><circle cx="8" cy="11.5" r="0.5" fill="currentColor" stroke="none"/></svg>云端哈希连接失败！</div>` : ''}
           <button class="titlebar-btn" id="notification-btn" title="${this.t('notificationCenter')}" style="position: relative;">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
             <span id="notification-badge" style="position: absolute; top: 2px; right: 2px; width: 8px; height: 8px; border-radius: 50%; background: #d13438; display: none;"></span>
           </button>
           <div class="titlebar-menu-container">
-            ${this.cloudHashConnectionStatus === 'disconnected' ? `<div class="cloud-connection-warning" title="云端哈希连接失败"><svg class="cloud-warning-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="7"/><path d="M8 5v4"/><circle cx="8" cy="11.5" r="0.5" fill="currentColor" stroke="none"/></svg>云端哈希连接失败！</div>` : ''}
             <button class="titlebar-btn" id="menu-btn" title="菜单">
               ${Icons.menu}
             </button>
@@ -6985,6 +7192,14 @@ class App {
               <div class="menu-dropdown-item" id="menu-chat">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 16px; height: 16px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
                 <span>云平台</span>
+              </div>
+              <div class="menu-dropdown-item" id="menu-toolbox">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 16px; height: 16px;"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>
+                <span>工具箱</span>
+              </div>
+              <div class="menu-dropdown-item" id="menu-advanced-settings">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 16px; height: 16px;"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+                <span>高级设置</span>
               </div>
               <div class="menu-dropdown-item" id="menu-engine-overview">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 16px; height: 16px;"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
@@ -7003,43 +7218,67 @@ class App {
             ${Icons.close}
           </button>
         </div>
+      </header>
+      ${this.renderVersionWatermark()}
+    `;
+  }
+
+  private renderVersionWatermark(): string {
+    return `
+      <div class="version-watermark" id="version-watermark">
+        <span class="version-watermark-badge">${this.t('testVersionBadge')} <span id="watermark-version">…</span></span>
+        <span class="version-watermark-text">${this.t('testVersionNotice')}</span>
       </div>
     `;
   }
 
   private renderSidebar(): string {
+    // 新 UI 侧边栏：首页 / 扫描 / 防护 / 隔离区 / 日志 / 设置
     const items = [
       { id: 'home', icon: Icons.home, label: this.t('navOverview') },
       { id: 'scan', icon: Icons.search, label: this.t('navVirusScan') },
-      { id: 'notifications', icon: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>`, label: this.t('notificationCenter') },
-      { id: 'process', icon: Icons.grid, label: this.t('navToolbox') },
+      { id: 'protection', icon: Icons.shieldCheck, label: this.t('realtimeProtection') },
+      { id: 'quarantine', icon: Icons.box, label: this.t('quarantineTitle') },
+      { id: 'security_log', icon: Icons.list, label: this.t('securityLog') },
     ];
 
+    // 判断导航项是否处于激活状态
+    const isActive = (id: string): boolean => {
+      if (id === 'protection') {
+        return this.currentPage === 'protection';
+      }
+      if (id === 'scan') {
+        return this.currentPage === 'scan' || this.isScanning || this.scanProgress >= 100;
+      }
+      return this.currentPage === id;
+    };
+
     return `
-      <div class="sidebar${this.sidebarCollapsed ? ' collapsed' : ''}">
-        <div class="sidebar-top">
+      <aside class="sidebar${this.sidebarCollapsed ? '' : ' expanded'}">
+        <nav class="sidebar-nav">
           ${items.map(item => `
-            <div class="sidebar-item ${(this.currentPage === item.id || this.currentPage.startsWith(item.id + '_')) ? 'active' : ''}" 
-                 data-page="${item.id}" 
-                 title="${item.label}">
+            <button class="nav-btn sidebar-item ${isActive(item.id) ? 'active' : ''}" 
+                    data-page="${item.id}" 
+                    data-label="${item.label}" 
+                    title="${item.label}">
               ${item.icon}
               <span class="sidebar-label">${item.label}</span>
-            </div>
+            </button>
           `).join('')}
-        </div>
-        <div class="sidebar-bottom">
-          <div class="sidebar-item ${this.currentPage === 'settings' ? 'active' : ''}" 
-               data-page="settings" 
-               title="${this.t('settings')}">
-            ${Icons.settings}
-            <span class="sidebar-label">${this.t('settings')}</span>
-          </div>
-          <div class="sidebar-item sidebar-collapse-btn" id="sidebar-collapse-btn" title="${this.sidebarCollapsed ? this.t('expandSidebar') : this.t('collapseSidebar')}">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transition: transform 0.3s ease;${this.sidebarCollapsed ? ' transform: rotate(180deg);' : ''}"><path d="m15 18-6-6 6-6"/></svg>
-            <span class="sidebar-label">${this.sidebarCollapsed ? '' : this.t('collapseSidebar')}</span>
-          </div>
-        </div>
-      </div>
+        </nav>
+        <div class="sidebar-spacer"></div>
+        <button class="nav-btn sidebar-item ${this.currentPage === 'settings' ? 'active' : ''}" 
+                data-page="settings" 
+                data-label="${this.t('settings')}" 
+                title="${this.t('settings')}">
+          ${Icons.settings}
+          <span class="sidebar-label">${this.t('settings')}</span>
+        </button>
+        <button class="nav-btn sidebar-toggle" id="sidebar-collapse-btn" title="${this.sidebarCollapsed ? this.t('expandSidebar') : this.t('collapseSidebar')}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transition: transform 0.25s ease;${this.sidebarCollapsed ? '' : ' transform: rotate(180deg);'}"><path d="m15 18-6-6 6-6"/></svg>
+          <span class="sidebar-label">${this.sidebarCollapsed ? '' : this.t('collapseSidebar')}</span>
+        </button>
+      </aside>
     `;
   }
 
@@ -7140,286 +7379,92 @@ class App {
   }
 
   private renderHomeSection(): string {
-    // 初始渲染时直接同步计算状态，避免整页渲染后还要异步刷新导致闪烁
-    const defaultStatus = this.getDeviceStatusSync();
-
-    const lastScanTime = this.lastScanInfo?.time || '--';
     const protectedDays = Math.max(1, Math.floor((Date.now() - this.appStartTime) / (1000 * 60 * 60 * 24)));
-
-    const rtDriverActive = this.driverProtectionManager.isEnabled();
-    const rtBasicActive = this.basicProtectionManager.isEnabled();
-    const rtFileActive = this.fileProtectionManager.isEnabled();
-    const rtSilentActive = this.silentModeManager.isEnabled();
-
-    // 根据防护状态决定 Hero 卡片渐变状态（静默模式不纳入安全状态判定）
-    const heroStatusClass = defaultStatus.color === 'var(--success)'
-      ? 'status-safe'
-      : defaultStatus.color === 'var(--error)'
-        ? 'status-danger'
-        : 'status-warning';
-
-    const arrowDownIcon = `<svg class="hero-scan-arrow" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>`;
-    const checkIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>`;
-
+    const status = this.getDeviceStatusSync();
+    const isProtected = status.color === 'var(--success)';
+    const threatsBlocked = (this.driverInterceptCount + this.basicProtectionInterceptCount).toLocaleString();
     return `
-      <section class="page-section home-section" id="section-home">
-        <div class="home-grid">
-          <!-- Hero 卡片 -->
-          <div class="hero-card ${heroStatusClass}" id="hero-card">
-            <div class="hero-bg"></div>
-            <div class="hero-content">
-              <h2 class="hero-title" id="home-status-title">${this.isMsStore ? this.t('scannerReady') : (defaultStatus.color === 'var(--success)' ? `${this.t('protectedComputer')} ${protectedDays} ${this.t('days')}` : defaultStatus.title)}</h2>
-              <p class="hero-subtitle" id="home-status-subtitle">${defaultStatus.subtitle}</p>
-              <div class="hero-actions">
-                <div class="hero-scan-dropdown" id="hero-scan-dropdown">
-                  <button class="btn btn-primary hero-scan-btn" id="hero-scan-trigger">
-                    <span class="hero-scan-label">${this.t('quickScan')}</span>
-                    ${arrowDownIcon}
-                  </button>
-                  <div class="hero-scan-menu" id="hero-scan-menu">
-                    <div class="hero-scan-option" data-scan="quick">${this.t('quickScan')}</div>
-                    <div class="hero-scan-option" data-scan="custom">${this.t('customScan')}</div>
-                    <div class="hero-scan-option" data-scan="full">${this.t('fullScan')}</div>
-                  </div>
-                </div>
-                <div class="hero-meta">
-                  <span class="hero-last-scan">${this.t('lastScan')}：${lastScanTime}</span>
-                  <a href="#" class="hero-link" id="open-scan-history-link">${this.t('scanHistory')}</a>
-                </div>
-              </div>
-            </div>
-            <div class="hero-shield-placeholder" id="hero-shield-placeholder"></div>
+      <section class="page-section" id="section-home">
+        <div class="home-status">
+          <img class="home-illustration" id="homeIllustration" src="/illustrations/illustration.svg" alt="Protected">
+          <h1 class="home-title" id="homeTitle">${this.isMsStore ? this.t('scannerReady') : (isProtected ? `${this.t('protectedComputer')} ${protectedDays} ${this.t('days')}` : status.title)}</h1>
+          <p class="home-sub" id="homeSub">${status.subtitle}</p>
+          <div class="home-status-line" id="homeStatusLine">
+            <span class="status-dot" id="homeStatusDot"></span>
+            <span id="homeStatusText">${isProtected ? this.t('realtimeProtectionOn') : this.t('realtimeProtectionOff')}</span>
           </div>
-
-          ${this.isMsStore ? '' : `
-          <!-- 实时防护面板 -->
-          <div class="realtime-panel card">
-            <div class="realtime-header">
-              <h3 class="realtime-title">${this.t('realtimeProtection')}</h3>
-            </div>
-            <div class="realtime-list">
-              <div class="realtime-item">
-                <div class="realtime-info">
-                  <div class="realtime-name">${this.t('driverProtection')}</div>
-                  <div class="realtime-desc">${this.t('driverProtectionDesc')}</div>
-                </div>
-                <div class="toggle ${rtDriverActive ? 'active' : ''}" id="rt-driver-toggle" data-rt="driver"><div class="toggle-thumb"></div></div>
-              </div>
-              <div class="realtime-item">
-                <div class="realtime-info">
-                  <div class="realtime-name">${this.t('basicProtection')}</div>
-                  <div class="realtime-desc">${this.t('basicProtectionDesc')}</div>
-                </div>
-                <div class="toggle ${rtBasicActive ? 'active' : ''}" id="rt-basic-toggle" data-rt="basic"><div class="toggle-thumb"></div></div>
-              </div>
-              <div class="realtime-item">
-                <div class="realtime-info">
-                  <div class="realtime-name">${this.t('fileProtection')}</div>
-                  <div class="realtime-desc">${this.t('fileProtectionDesc')}</div>
-                </div>
-                <div class="toggle ${rtFileActive ? 'active' : ''}" id="rt-file-toggle" data-rt="file"><div class="toggle-thumb"></div></div>
-              </div>
-              <div class="realtime-item">
-                <div class="realtime-info">
-                  <div class="realtime-name">${this.t('silentMode')}</div>
-                  <div class="realtime-desc">${this.t('silentModeDesc')}</div>
-                </div>
-                <div class="toggle ${rtSilentActive ? 'active' : ''}" id="rt-silent-toggle" data-rt="silent"><div class="toggle-thumb"></div></div>
-              </div>
-            </div>
+          <button class="btn btn-primary home-scan-btn" id="home-quick-scan" data-page="scan">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            ${this.t('quickScan')}
+          </button>
+        </div>
+        <div class="home-stats">
+          <div class="home-stat">
+            <span class="home-stat-value" id="stat-threats-blocked">${threatsBlocked}</span>
+            <span class="home-stat-label">${this.t('threats')}</span>
           </div>
-          `}
-
-          <!-- 功能卡片 -->
-          <div class="feature-cards">
-            <div class="feature-card" data-feature="scan">
-              <div class="feature-icon feature-icon-blue">${Icons.scan}</div>
-              <div class="feature-info">
-                <div class="feature-title">${this.t('featureVirusScan')}</div>
-                <div class="feature-desc">${this.t('featureVirusScanDesc')}</div>
-              </div>
-              <div class="feature-arrow">${Icons.arrowRight}</div>
-            </div>
-            <div class="feature-card" data-feature="quarantine">
-              <div class="feature-icon feature-icon-green">${Icons.shield}</div>
-              <div class="feature-info">
-                <div class="feature-title">${this.t('featureQuarantine')}</div>
-                <div class="feature-desc">${this.t('featureQuarantineDesc')}</div>
-              </div>
-              <div class="feature-arrow">${Icons.arrowRight}</div>
-            </div>
-            <div class="feature-card" data-feature="optimize">
-              <div class="feature-icon feature-icon-orange">${Icons.cpu}</div>
-              <div class="feature-info">
-                <div class="feature-title">${this.t('featureSystemOptimize')}</div>
-                <div class="feature-desc">${this.t('featureSystemOptimizeDesc')}</div>
-              </div>
-              <div class="feature-arrow">${Icons.arrowRight}</div>
-            </div>
-            <div class="feature-card" data-feature="privacy">
-              <div class="feature-icon feature-icon-purple">${Icons.eye}</div>
-              <div class="feature-info">
-                <div class="feature-title">${this.t('featurePrivacy')}</div>
-                <div class="feature-desc">${this.t('featurePrivacyDesc')}</div>
-              </div>
-              <div class="feature-arrow">${Icons.arrowRight}</div>
-            </div>
+          <span class="home-stat-sep"></span>
+          <div class="home-stat">
+            <span class="home-stat-value" id="stat-files-scanned">${this.driverProcessCheckCount.toLocaleString()}</span>
+            <span class="home-stat-label">${this.t('scanned')}</span>
           </div>
-
-          <!-- 统计行 -->
-          <div class="stats-row card">
-            ${this.isMsStore ? '' : `
-            <div class="stat-item">
-              <span class="stat-num" id="stat-checked-count">${this.driverProcessCheckCount.toLocaleString()}</span>
-              <span class="stat-label">${this.t('checkedFiles')}</span>
-            </div>
-            <div class="stat-item">
-              <span class="stat-num" id="stat-intercept-count">${this.driverInterceptCount}</span>
-              <span class="stat-label">${this.t('interceptedActions')}</span>
-            </div>
-            `}
-            <div class="stat-item">
-              <span class="stat-num" id="stat-protected-days">${this.isMsStore ? this.t('scannerReady') : '--'}</span>
-              <span class="stat-label">${this.isMsStore ? '' : this.t('protectedDays')}</span>
-            </div>
-            ${this.isMsStore ? '' : `
-            <div class="stat-protection">
-              <span class="stat-protection-label">${this.t('realtimeProtection')}</span>
-              <div class="toggle ${this.driverProtectionManager.isEnabled() ? 'active' : ''}" id="stat-protection-toggle">
-                <div class="toggle-thumb"></div>
-              </div>
-            </div>
-            `}
-          </div>
-
-          <!-- 最近日志 -->
-          <div class="logs-panel card">
-            <div class="logs-header">
-              <h3 class="logs-title">${this.t('recentLogs')}</h3>
-              <a href="#" class="logs-view-all" id="open-security-log-btn">${this.t('viewAll')}</a>
-            </div>
-            <div class="logs-list thin-scrollbar" id="home-logs-list">
-              ${this.logs.length > 0
-                ? this.logs.slice(0, 6).map(log => `<div class="log-entry">${log}</div>`).join('')
-                : `<div class="log-entry">[${new Date().toLocaleString()}] XIGUASecurity Start</div>`}
-            </div>
-          </div>
-
-          <!-- 底部状态栏 -->
-          <div class="bottom-status-bar">
-            <div class="bottom-status-left">
-              <span>${this.t('virusDatabase')} ${this.rulesManager.getVersion()}</span>
-              <span class="bottom-status-divider">|</span>
-              <span>${this.t('lastUpdate')} ${this.rulesManager.getUpdatedAt()}</span>
-              <a href="#" class="bottom-status-link" id="check-update-link">${this.t('checkUpdate')}</a>
-            </div>
-            <div class="bottom-status-right">
-              <span>${this.t('engineStatus')}</span>
-              <span class="engine-status-value">${checkIcon} ${this.t('normal')}</span>
-            </div>
+          <span class="home-stat-sep"></span>
+          <div class="home-stat">
+            <span class="home-stat-value" id="stat-days-protected">${protectedDays}</span>
+            <span class="home-stat-label">${this.t('protectedDays')}</span>
           </div>
         </div>
       </section>
     `;
   }
 
-  // 异步更新主页状态
   private async updateHomeStatus(): Promise<void> {
-    const status = this.getDeviceStatusSync();
-    const protectedDays = Math.max(1, Math.floor((Date.now() - this.appStartTime) / (1000 * 60 * 60 * 24)));
-
-    const homeStatusTitle = document.getElementById('home-status-title');
-    const homeStatusSubtitle = document.getElementById('home-status-subtitle');
-    if (homeStatusTitle) {
-      if (this.isMsStore) {
-        homeStatusTitle.textContent = this.t('scannerReady');
-      } else if (status.color === 'var(--success)') {
-        homeStatusTitle.textContent = `${this.t('protectedComputer')} ${protectedDays} ${this.t('days')}`;
-      } else {
-        homeStatusTitle.textContent = status.title;
-      }
-    }
-    if (homeStatusSubtitle) {
-      homeStatusSubtitle.textContent = status.subtitle;
-    }
-
-    // 同步更新统计卡片上的保护天数（MS Store 版显示"扫描器就绪"）
-    const statProtectedDays = document.getElementById('stat-protected-days');
-    if (statProtectedDays) {
-      if (this.isMsStore) {
-        statProtectedDays.textContent = this.t('scannerReady');
-      } else {
-        statProtectedDays.textContent = `${protectedDays} ${this.t('days')}`;
-      }
-    }
-
-    // 根据实时防护状态更新 Hero 卡片渐变光照效果，与状态文本保持一致
-    // 标题颜色由 CSS 类统一控制，避免内联 style.color 不生效的问题
-    const heroCard = document.getElementById('hero-card');
-    if (heroCard) {
-      heroCard.classList.remove('status-safe', 'status-warning', 'status-danger');
-      if (status.color === 'var(--success)') {
-        heroCard.classList.add('status-safe');
-      } else if (status.color === 'var(--error)') {
-        heroCard.classList.add('status-danger');
-      } else {
-        heroCard.classList.add('status-warning');
-      }
-    }
-
-    // 同步更新实时防护面板开关
-    this.updateRealtimeProtectionToggles();
-    if (!this.isMsStore) {
-      // 同步更新统计卡片上的防护开关状态
-      this.updateStatsProtectionToggle();
-      // 同步更新设置页面的防护开关状态
-      this.updateDriverProtectionToggle();
-    }
-
+    this.refreshHomeStatus();
     // 同时用异步方式校验一次真实驱动状态并刷新缓存，避免缓存长期偏离实际
     if (!this.isMsStore) {
       this.driverProtectionManager.isProcessRunning().then(running => {
-        const currentStatus = this.getDeviceStatusSync();
-        // 只有状态发生变化时才再次刷新主页
-        if ((running !== this.driverProtectionManager.isProcessRunningSync()) ||
-            (currentStatus.color !== status.color)) {
+        if (running !== this.driverProtectionManager.isProcessRunningSync()) {
           this.refreshHomeStatus();
         }
       }).catch(() => {});
     }
   }
 
-  // 轻量同步刷新主页状态（不触发异步 IPC）
   private refreshHomeStatus(): void {
     const status = this.getDeviceStatusSync();
     const protectedDays = Math.max(1, Math.floor((Date.now() - this.appStartTime) / (1000 * 60 * 60 * 24)));
+    const isProtected = status.color === 'var(--success)';
 
-    const homeStatusTitle = document.getElementById('home-status-title');
-    const homeStatusSubtitle = document.getElementById('home-status-subtitle');
-    if (homeStatusTitle) {
-      if (this.isMsStore) {
-        homeStatusTitle.textContent = this.t('scannerReady');
-      } else if (status.color === 'var(--success)') {
-        homeStatusTitle.textContent = `${this.t('protectedComputer')} ${protectedDays} ${this.t('days')}`;
-      } else {
-        homeStatusTitle.textContent = status.title;
-      }
-    }
-    if (homeStatusSubtitle) {
-      homeStatusSubtitle.textContent = status.subtitle;
-    }
+    const homeTitle = document.getElementById('homeTitle');
+    const homeSub = document.getElementById('homeSub');
+    const homeStatusDot = document.getElementById('homeStatusDot');
+    const homeStatusText = document.getElementById('homeStatusText');
+    const homeIllustration = document.getElementById('homeIllustration') as HTMLImageElement | null;
 
-    const heroCard = document.getElementById('hero-card');
-    if (heroCard) {
-      heroCard.classList.remove('status-safe', 'status-warning', 'status-danger');
-      if (status.color === 'var(--success)') {
-        heroCard.classList.add('status-safe');
-      } else if (status.color === 'var(--error)') {
-        heroCard.classList.add('status-danger');
-      } else {
-        heroCard.classList.add('status-warning');
-      }
+    if (homeTitle) {
+      homeTitle.textContent = this.isMsStore
+        ? this.t('scannerReady')
+        : (isProtected ? `${this.t('protectedComputer')} ${protectedDays} ${this.t('days')}` : status.title);
     }
+    if (homeSub) homeSub.textContent = status.subtitle;
+    if (homeStatusText) {
+      homeStatusText.textContent = isProtected ? this.t('realtimeProtectionOn') : this.t('realtimeProtectionOff');
+    }
+    if (homeStatusDot) {
+      homeStatusDot.style.background = isProtected ? 'var(--success)' : 'var(--danger)';
+    }
+    if (homeIllustration) {
+      homeIllustration.src = isProtected
+        ? '/illustrations/illustration.svg'
+        : '/illustrations/illustration-alert.svg';
+    }
+    // 同步更新统计
+    const threatsBlocked = document.getElementById('stat-threats-blocked');
+    if (threatsBlocked) threatsBlocked.textContent = (this.driverInterceptCount + this.basicProtectionInterceptCount).toLocaleString();
+    const filesScanned = document.getElementById('stat-files-scanned');
+    if (filesScanned) filesScanned.textContent = this.driverProcessCheckCount.toLocaleString();
+    const daysProtected = document.getElementById('stat-days-protected');
+    if (daysProtected) daysProtected.textContent = String(protectedDays);
   }
 
   // 更新实时防护面板开关状态
@@ -8065,9 +8110,9 @@ class App {
     let domains: string[] = [];
     try {
       [processes, paths, domains] = await Promise.all([
-        invoke('get_whitelist_processes_command'),
-        invoke('get_whitelist_paths_command'),
-        invoke('get_whitelist_domains_command'),
+        invoke<string[]>('get_whitelist_processes_command'),
+        invoke<string[]>('get_whitelist_paths_command'),
+        invoke<string[]>('get_whitelist_domains_command'),
       ]);
     } catch (e) {
       console.error('[Whitelist] Failed to load data:', e);
@@ -8195,8 +8240,8 @@ class App {
     const refreshProcessList = async () => {
       try {
         [processes, paths] = await Promise.all([
-          invoke('get_whitelist_processes_command'),
-          invoke('get_whitelist_paths_command'),
+          invoke<string[]>('get_whitelist_processes_command'),
+          invoke<string[]>('get_whitelist_paths_command'),
         ]);
       } catch (_) {}
       const container = document.getElementById('whitelist-list-container');
@@ -8587,56 +8632,125 @@ class App {
         <div class="action-grid">
           <div class="action-card" id="start-quick-scan">
             <div class="action-icon">
-              ${Icons.zap}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
             </div>
             <div class="action-content">
               <div class="action-title">${this.t('quickScan')}</div>
               <div class="action-desc">${this.t('quickScanDesc')}</div>
             </div>
             <div class="action-arrow">
-              ${Icons.arrowRight}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
             </div>
           </div>
 
           <div class="action-card" id="start-full-scan">
             <div class="action-icon">
-              ${Icons.shield}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
             </div>
             <div class="action-content">
               <div class="action-title">${this.t('fullScan')}</div>
               <div class="action-desc">${this.t('fullScanDesc')}</div>
             </div>
             <div class="action-arrow">
-              ${Icons.arrowRight}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
             </div>
           </div>
 
           <div class="action-card" id="start-custom-scan">
             <div class="action-icon">
-              ${Icons.folder}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
             </div>
             <div class="action-content">
               <div class="action-title">${this.t('customScan')}</div>
               <div class="action-desc">${this.t('customScanDesc')}</div>
             </div>
             <div class="action-arrow">
-              ${Icons.arrowRight}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
             </div>
           </div>
         </div>
+      </section>
+    `;
+  }
 
-        <div class="card" style="margin-top: 20px;">
-          <div class="card-header">
-            <span class="card-title">${this.t('lastScan')}</span>
+  // 新 UI 防护页（Protection）
+  private renderProtectionSection(): string {
+    const rtDriver = this.driverProtectionManager.isEnabled();
+    const rtBasic = this.basicProtectionManager.isEnabled();
+    const rtScript = this.scriptProtectionManager.isEnabled();
+    const rtNetwork = this.networkProtectionManager.isEnabled();
+    return `
+      <section class="page-section" id="section-protection">
+        <div class="page-header">
+          <div class="page-title">${this.t('realtimeProtection')}</div>
+          <div class="page-subtitle">${this.t('realtimeProtectionTip')}</div>
+        </div>
+        <img class="page-illustration" src="/illustrations/illustration-protection.svg" alt="Protection">
+        <div class="protection-list">
+          <div class="protection-item">
+            <div class="protection-info">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>
+              <div>
+                <h3>${this.t('driverProtection')}</h3>
+                <p>${this.t('driverProtectionDesc')}</p>
+              </div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="driverProtectionToggle" ${rtDriver ? 'checked' : ''}>
+              <span class="toggle-slider"></span>
+            </label>
           </div>
-          <div style="color: var(--text-secondary); font-size: 13px;">
-            <div style="margin-bottom: 8px;">
-              <span style="color: var(--success); font-weight: 500;">✓</span> 
-              ${this.t('scanCompleted')}
+          <div class="protection-item">
+            <div class="protection-info">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              <div>
+                <h3>${this.t('basicProtection')}</h3>
+                <p>${this.t('basicProtectionDesc')}</p>
+              </div>
             </div>
-            <div style="color: var(--text-tertiary); font-size: 12px;">
-              ${this.lastScanInfo ? `${this.lastScanInfo.time} | ${this.lastScanInfo.files} files | ${this.lastScanInfo.duration}s` : '暂无扫描记录'}
+            <label class="toggle">
+              <input type="checkbox" id="basicProtectionToggle" ${rtBasic ? 'checked' : ''}>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="protection-item">
+            <div class="protection-info">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+              <div>
+                <h3>${this.t('scriptProtection')}</h3>
+                <p>${this.t('scriptProtectionDesc')}</p>
+              </div>
             </div>
+            <label class="toggle">
+              <input type="checkbox" id="scriptProtectionToggle" ${rtScript ? 'checked' : ''}>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="protection-item">
+            <div class="protection-info">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+              <div>
+                <h3>${this.t('networkProtection')}</h3>
+                <p>${this.t('networkProtectionDesc')}</p>
+              </div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="networkProtectionToggle" ${rtNetwork ? 'checked' : ''}>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="protection-item">
+            <div class="protection-info">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+              <div>
+                <h3>${this.t('identityProtection')}</h3>
+                <p>${this.t('identityProtectionDesc')}</p>
+              </div>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="identityProtectionToggle" checked>
+              <span class="toggle-slider"></span>
+            </label>
           </div>
         </div>
       </section>
@@ -9879,56 +9993,9 @@ class App {
     console.log('[Scanner] Loaded sensitivity:', this.scanSensitivity);
   }
 
-  // 应用或清除一滑到底设置
+  // 应用或清除一滑到底设置（新 UI 页面模式下各页面始终独立滚动，此设置保留为兼容空实现）
   applyContinuousScrollSetting(): void {
-    if (this.disableContinuousScroll) {
-      this.disableScrollSnap();
-    } else {
-      this.enableScrollSnap();
-    }
-  }
-
-  // 禁用一滑到底：各页面独立滚动
-  private disableScrollSnap(): void {
-    const container = document.querySelector('.scroll-container') as HTMLElement;
-    if (!container) return;
-
-    // 让当前页面独立滚动
-    const activeSection = document.getElementById(`section-${this.currentPage}`) as HTMLElement;
-    
-    container.style.overflow = 'hidden';
-    container.style.scrollSnapType = 'none';
-    container.style.height = '100%';
-
-    // 所有 section 固定为视口高度，当前页面可滚动
-    document.querySelectorAll('.page-section').forEach(section => {
-      const el = section as HTMLElement;
-      el.style.minHeight = '';
-      el.style.maxHeight = 'calc(100vh - 48px)';
-      el.style.overflowY = el.id === `section-${this.currentPage}` ? 'auto' : 'hidden';
-    });
-
-    // 当前页面如果存在，确保它能滚动
-    if (activeSection) {
-      activeSection.style.overflowY = 'auto';
-    }
-  }
-
-  // 启用一滑到底：恢复默认滚动
-  private enableScrollSnap(): void {
-    const container = document.querySelector('.scroll-container') as HTMLElement;
-    if (!container) return;
-
-    container.style.overflow = '';
-    container.style.scrollSnapType = '';
-    container.style.height = '';
-
-    document.querySelectorAll('.page-section').forEach(section => {
-      const el = section as HTMLElement;
-      el.style.minHeight = '';
-      el.style.maxHeight = '';
-      el.style.overflowY = '';
-    });
+    // 页面模式下所有页面独立滚动，无需额外处理
   }
 
   // 设置禁用一滑到底（由开关触发）
@@ -9944,6 +10011,168 @@ class App {
   }
 
   private renderSettingsSection(): string {
+    return `
+      <section class="page-section" id="section-settings">
+        <div class="page-header">
+          <div class="page-title">${this.t('settings')}</div>
+          <div class="page-subtitle">Configure XIGUASecurity preferences</div>
+        </div>
+        <div class="settings-group">
+          <h3>General</h3>
+          <div class="setting-item">
+            <div class="setting-info">
+              <span>Start with Windows</span>
+              <span class="setting-desc">Automatically launch on system startup</span>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="auto-start-checkbox" ${this.autoStartEnabled ? 'checked' : ''}>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="setting-item">
+            <div class="setting-info">
+              <span>Minimize to Tray</span>
+              <span class="setting-desc">Keep running in system tray when closed</span>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="setting-item">
+            <div class="setting-info">
+              <span>Automatic Updates</span>
+              <span class="setting-desc">Download and install updates automatically</span>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+        <div class="settings-group">
+          <h3>Scan</h3>
+          <div class="setting-item">
+            <div class="setting-info">
+              <span>Scan Archives</span>
+              <span class="setting-desc">Include compressed archives in scans</span>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="archive-scan-toggle" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="setting-item">
+            <div class="setting-info">
+              <span>Heuristic Analysis</span>
+              <span class="setting-desc">Use behavioral detection for unknown threats</span>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+        <div class="settings-group">
+          <h3>About</h3>
+          <div class="about-card">
+            <div class="about-logo">
+              <img src="icons/icon.png" alt="XIGUASecurity">
+            </div>
+            <div class="about-info">
+              <h3>XIGUASecurity</h3>
+              <p>Version <span id="about-version">1.0.0</span></p>
+              <p class="about-desc">Modern Antivirus Protection</p>
+            </div>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  // 高级设置（新 UI 未包含的扩展设置，保留旧样式）
+  private renderAdvancedSettingsSection(): string {
+    return `
+      <section class="page-section" id="section-advanced-settings">
+        <div class="page-header">
+          <div class="page-title">${this.t('settings')}</div>
+          <div class="page-subtitle">Configure XIGUASecurity preferences</div>
+        </div>
+        <div class="settings-group">
+          <h3>General</h3>
+          <div class="setting-item">
+            <div class="setting-info">
+              <span>Start with Windows</span>
+              <span class="setting-desc">Automatically launch on system startup</span>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="auto-start-checkbox" ${this.autoStartEnabled ? 'checked' : ''}>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="setting-item">
+            <div class="setting-info">
+              <span>Minimize to Tray</span>
+              <span class="setting-desc">Keep running in system tray when closed</span>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="setting-item">
+            <div class="setting-info">
+              <span>Automatic Updates</span>
+              <span class="setting-desc">Download and install updates automatically</span>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+        <div class="settings-group">
+          <h3>Scan</h3>
+          <div class="setting-item">
+            <div class="setting-info">
+              <span>Scan Archives</span>
+              <span class="setting-desc">Include compressed archives in scans</span>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="archive-scan-toggle" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="setting-item">
+            <div class="setting-info">
+              <span>Heuristic Analysis</span>
+              <span class="setting-desc">Use behavioral detection for unknown threats</span>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+        <div class="settings-group">
+          <h3>About</h3>
+          <div class="about-card">
+            <div class="about-logo">
+              <img src="icons/icon.png" alt="XIGUASecurity">
+            </div>
+            <div class="about-info">
+              <h3>XIGUASecurity</h3>
+              <p>Version <span id="about-version">1.0.0</span></p>
+              <p class="about-desc">Modern Antivirus Protection</p>
+            </div>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  // 高级设置（新 UI 未包含的扩展设置，保留旧样式）
+  private renderAdvancedSettingsSection(): string {
     const themes = [
       { id: 'blue', name: this.t('themeBlue') },
       { id: 'purple', name: this.t('themePurple') },
@@ -9962,7 +10191,7 @@ class App {
     const currentLang = this.localizationManager.getLanguage();
 
     return `
-      <section class="page-section" id="section-settings">
+      <section class="page-section" id="section-advanced-settings">
         <div class="page-header">
           <div class="page-title">${this.t('settingsTitle')}</div>
           <div class="page-subtitle">${this.t('settingsSubtitle')}</div>
@@ -9982,6 +10211,15 @@ class App {
                 <div class="setting-desc">${this.t('driverProtectionDesc')}</div>
               </div>
               <input type="checkbox" class="setting-checkbox" id="driver-protection-checkbox" ${this.driverProtectionManager.isEnabled() ? 'checked' : ''}>
+            </div>
+
+            <!-- 增强端点防护（专业端点防护 MelixEDR） -->
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-title">增强端点防护</div>
+                <div class="setting-desc">基于专业人员的端点防护，带来更强的防护效果，但可能需要自行进行决策。启用后通过驱动级端点监控拦截高级威胁。</div>
+              </div>
+              <input type="checkbox" class="setting-checkbox" id="endpoint-protection-checkbox" ${this.endpointProtectionManager.isEnabled() ? 'checked' : ''}>
             </div>
             `}
 
@@ -10539,127 +10777,42 @@ class App {
     };
 
     return `
-      <section class="page-section page" id="section-quarantine" style="overflow-y: auto; max-height: calc(100vh - 80px);">
+      <section class="page-section" id="section-quarantine">
         <div class="page-header">
           <div class="page-title">${this.t('quarantineTitle')}</div>
           <div class="page-subtitle">${this.t('quarantineSubtitle')}</div>
         </div>
 
-        <div class="card" style="margin-bottom: 20px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; padding: 20px;">
-            <div style="display: flex; gap: 30px;">
-              <div style="text-align: center;">
-                <div style="font-size: 32px; font-weight: 600; color: var(--danger);">${this.quarantineStats.count}</div>
-                <div style="font-size: 12px; color: var(--text-secondary); margin-top: 5px;">${this.t('quarantinedFiles')}</div>
-              </div>
-              <div style="text-align: center;">
-                <div style="font-size: 32px; font-weight: 600; color: var(--text-primary);">${formatSize(this.quarantineStats.totalSize)}</div>
-                <div style="font-size: 12px; color: var(--text-secondary); margin-top: 5px;">${this.t('spaceUsed')}</div>
-              </div>
-            </div>
-            <button class="btn btn-secondary" id="refresh-quarantine-btn">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: middle; margin-right: 5px;">
-                <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
-                <path d="M3 3v5h5"/>
-                <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/>
-                <path d="M16 16h5v5"/>
-              </svg>
-              ${this.t('refresh')}
-            </button>
-          </div>
-        </div>
-
         ${this.quarantinedFiles.length === 0 ? `
-          <div class="card" style="text-align: center; padding: 60px 20px;">
-            <div style="width: 64px; height: 64px; margin: 0 auto 20px; color: var(--success);">
-              ${Icons.shieldCheck}
-            </div>
-            <div style="font-size: 18px; font-weight: 500; margin-bottom: 10px;">${this.t('quarantineEmpty')}</div>
-            <div style="font-size: 14px; color: var(--text-secondary);">${this.t('noQuarantinedFiles')}</div>
+          <div class="quarantine-empty">
+            <img class="page-illustration" src="/illustrations/illustration-quarantine.svg" alt="No threats">
+            <h3>${this.t('quarantineEmpty')}</h3>
+            <p>${this.t('noQuarantinedFiles')}</p>
           </div>
         ` : `
-          <div class="card">
-            <div style="padding: 15px 20px; border-bottom: 1px solid var(--border); font-weight: 500;">
-              ${this.t('quarantineFileList')}
-            </div>
-            <div style="max-height: 500px; overflow-y: auto;">
-              ${this.quarantinedFiles.map(file => `
-                <div class="quarantine-item" style="padding: 15px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
-                  <div style="flex: 1; min-width: 0;">
-                    <div style="font-weight: 500; margin-bottom: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${file.file_name}</div>
-                    <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${this.t('originalLocation')}: ${file.original_path}</div>
-                    <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 3px;">${this.t('threatType')}: <span style="color: var(--danger);">${file.threat_name}</span></div>
-                    <div style="font-size: 12px; color: var(--text-secondary);">${this.t('quarantineTime')}: ${file.quarantine_date} | ${this.t('fileSize')}: ${formatSize(file.file_size)}</div>
-                  </div>
-                  <div style="display: flex; gap: 8px; margin-left: 15px;">
-                    <button class="btn btn-secondary btn-sm quarantine-restore-btn" data-id="${file.id}" title="恢复文件">
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
-                        <path d="M3 3v5h5"/>
-                      </svg>
-                    </button>
-                    <button class="btn btn-danger btn-sm quarantine-delete-btn" data-id="${file.id}" title="永久删除">
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M3 6h18"/>
-                        <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>
-                        <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
-                      </svg>
-                    </button>
-                  </div>
+          <div class="card quarantine-list-card">
+            ${this.quarantinedFiles.map(file => `
+              <div class="quarantine-item" style="padding: 14px 4px; border-bottom: 1px solid var(--border-light); display: flex; justify-content: space-between; align-items: center;">
+                <div style="flex: 1; min-width: 0;">
+                  <div style="font-weight: 600; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${file.file_name}</div>
+                  <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${this.t('originalLocation')}: ${file.original_path}</div>
+                  <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 3px;">${this.t('threatType')}: <span style="color: var(--danger);">${file.threat_name}</span></div>
+                  <div style="font-size: 12px; color: var(--text-secondary);">${this.t('quarantineTime')}: ${file.quarantine_date} | ${this.t('fileSize')}: ${formatSize(file.file_size)}</div>
                 </div>
-              `).join('')}
-            </div>
+                <div style="display: flex; gap: 8px; margin-left: 15px; flex-shrink: 0;">
+                  <button class="btn btn-secondary btn-sm quarantine-restore-btn" data-id="${file.id}" title="恢复文件">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                  </button>
+                  <button class="btn btn-danger btn-sm quarantine-delete-btn" data-id="${file.id}" title="删除文件">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                  </button>
+                </div>
+              </div>
+            `).join('')}
           </div>
         `}
       </section>
     `;
-  }
-
-  // ==================== EDR 程序监控页面 ====================
-  private edrProcessList: any[] = [];
-  private selectedEdrProcess: any = null;
-  private edrLoading: boolean = false;
-  private edrLoaded: boolean = false;
-  private edrSearchKeyword: string = '';
-  private edrAutoRefreshTimer: number | null = null;
-
-  private async loadEdrProcessList() {
-    if (this.edrLoading) return;
-    this.edrLoading = true;
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      const processes = await invoke<any[]>('get_edr_process_list');
-      // 按风险排序：高风险 > 中风险 > 低风险
-      const riskOrder: Record<string, number> = { high: 0, medium: 1, low: 2 };
-      this.edrProcessList = (processes || []).sort((a, b) =>
-        (riskOrder[a.risk_level] ?? 2) - (riskOrder[b.risk_level] ?? 2)
-      );
-      this.edrLoaded = true;
-      console.log('[EDR] Loaded', this.edrProcessList.length, 'processes');
-      // 局部更新而非整页渲染
-      this.updateEdrProcessListDOM();
-    } catch (e) {
-      console.error('[EDR] Failed to load process list:', e);
-    } finally {
-      this.edrLoading = false;
-    }
-  }
-
-  // 启动 EDR 定期更新进程列表
-  private startEdrAutoRefresh() {
-    this.stopEdrAutoRefresh();
-    this.edrAutoRefreshTimer = window.setInterval(() => {
-      if (!this.selectedEdrProcess) {
-        this.loadEdrProcessList();
-      }
-    }, 3000);
-  }
-
-  private stopEdrAutoRefresh() {
-    if (this.edrAutoRefreshTimer !== null) {
-      clearInterval(this.edrAutoRefreshTimer);
-      this.edrAutoRefreshTimer = null;
-    }
   }
 
   private renderEdrSection(): string {
@@ -11513,6 +11666,12 @@ class App {
         if (result.success) {
           this.addLog('INFO', `已隔离威胁: ${threat.path}`);
           removeRelatedNotif = true;
+        } else if (result.reason === 'access_denied') {
+          // 文件被活动进程占用：后端已自动弹出"发现活动内存威胁"处置窗口，
+          // 保持待处理状态，不弹错误框
+          this.addLog('INFO', `文件被占用，已弹出活动威胁清除窗口: ${threat.path}`);
+          threat.status = 'pending';
+          return;
         } else {
           alert(`隔离失败${result.error ? ':\n' + result.error : ''}`);
           threat.status = 'pending';
@@ -11730,101 +11889,32 @@ class App {
       return map[cat] || cat;
     };
 
-    const getActionLabel = (action: string) => {
-      const map: Record<string, string> = {
-        detected: this.t('logActionDetected'),
-        blocked: this.t('logActionBlocked'),
-        cleaned: this.t('logActionCleaned'),
-        quarantined: this.t('logActionQuarantined'),
-        deleted: this.t('logActionDeleted'),
-        allowed: this.t('logActionAllowed'),
-        scanned: this.t('logActionScanned'),
-        updated: this.t('logActionUpdated'),
-        started: this.t('logActionStarted'),
-        stopped: this.t('logActionStopped'),
-        info: this.t('logActionInfo')
-      };
-      return map[action] || action;
-    };
-
-    const getResultClass = (result: string) => {
-      switch (result) {
-        case 'success': return 'color: var(--success);';
-        case 'failed': return 'color: var(--danger);';
-        case 'partial': return 'color: var(--warning);';
-        default: return 'color: var(--text-secondary);';
-      }
-    };
-
     return `
-      <section class="page-section page" id="section-security-log" style="overflow-y: auto; max-height: calc(100vh - 80px);">
+      <section class="page-section" id="section-security-log">
         <div class="page-header">
           <div class="page-title">${this.t('securityLog')}</div>
           <div class="page-subtitle">${this.t('securityLogSubtitle')}</div>
         </div>
-
-        <!-- 日志列表 -->
-        <div class="card">
-          <div style="padding: 15px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px;">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--primary);">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-              <polyline points="14 2 14 8 20 8"/>
-              <line x1="16" y1="13" x2="8" y2="13"/>
-              <line x1="16" y1="17" x2="8" y2="17"/>
-              <polyline points="10 9 9 9 8 9"/>
-            </svg>
-            <span style="font-weight: 500;">${this.t('logList')}</span>
-          </div>
-          
+        <div class="logs-toolbar">
+          <button class="btn btn-secondary" id="clear_logs_btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            ${this.t('clearAll')}
+          </button>
+          <button class="btn btn-secondary" id="export_logs_btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Export
+          </button>
+        </div>
+        <div class="logs-container">
           ${this.securityLogs.length === 0 ? `
-            <div style="text-align: center; padding: 60px 20px;">
-              <div style="width: 48px; height: 48px; margin: 0 auto 15px; color: var(--text-secondary);">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                  <polyline points="14 2 14 8 20 8"/>
-                  <line x1="16" y1="13" x2="8" y2="13"/>
-                  <line x1="16" y1="17" x2="8" y2="17"/>
-                  <polyline points="10 9 9 9 8 9"/>
-                </svg>
-              </div>
-              <div style="font-size: 14px; color: var(--text-secondary);">${this.t('noLogs')}</div>
+            <div class="logs-empty">${this.t('noLogs')}</div>
+          ` : this.securityLogs.slice(0, 300).map(log => `
+            <div class="log-entry">
+              <span class="log-time">${log.timestamp}</span>
+              <span class="log-type ${log.result === 'blocked' || log.result === 'danger' ? 'log-danger' : (log.result === 'allowed' || log.result === 'success' ? 'log-success' : 'log-info')}">${getCategoryLabel(log.category)}</span>
+              <span class="log-msg">${log.summary}</span>
             </div>
-          ` : `
-            <div style="max-height: 500px; overflow-y: auto;">
-              <table style="width: 100%; border-collapse: collapse;">
-                <thead>
-                  <tr style="background: var(--bg-secondary);">
-                    <th style="padding: 12px 15px; text-align: left; font-size: 12px; font-weight: 600; color: var(--text-secondary); border-bottom: 1px solid var(--border); white-space: nowrap;">${this.t('time')}</th>
-                    <th style="padding: 12px 15px; text-align: left; font-size: 12px; font-weight: 600; color: var(--text-secondary); border-bottom: 1px solid var(--border); white-space: nowrap;">${this.t('category')}</th>
-                    <th style="padding: 12px 15px; text-align: left; font-size: 12px; font-weight: 600; color: var(--text-secondary); border-bottom: 1px solid var(--border); white-space: nowrap;">${this.t('function')}</th>
-                    <th style="padding: 12px 15px; text-align: left; font-size: 12px; font-weight: 600; color: var(--text-secondary); border-bottom: 1px solid var(--border);">${this.t('summary')}</th>
-                    <th style="padding: 12px 15px; text-align: center; font-size: 12px; font-weight: 600; color: var(--text-secondary); border-bottom: 1px solid var(--border); white-space: nowrap;">${this.t('result')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${this.securityLogs.map(log => `
-                    <tr style="border-bottom: 1px solid var(--border);" class="security-log-row" data-id="${log.id}">
-                      <td style="padding: 12px 15px; font-size: 13px; color: var(--text-secondary); white-space: nowrap;">${log.timestamp}</td>
-                      <td style="padding: 12px 15px; font-size: 13px; white-space: nowrap;">
-                        <span style="padding: 2px 8px; border-radius: 4px; font-size: 12px; background: var(--bg-secondary); color: var(--text-secondary);">
-                          ${getCategoryLabel(log.category)}
-                        </span>
-                      </td>
-                      <td style="padding: 12px 15px; font-size: 13px; color: var(--text-primary); white-space: nowrap;">${log.function}</td>
-                      <td style="padding: 12px 15px; font-size: 13px; color: var(--text-primary);">
-                        <div>${log.summary}</div>
-                        ${log.file_path ? `<div style="font-size: 11px; color: var(--text-secondary); margin-top: 3px;">${log.file_path}</div>` : ''}
-                        ${log.threat_name ? `<div style="font-size: 11px; color: var(--danger); margin-top: 3px;">${this.t('threat')}: ${log.threat_name}</div>` : ''}
-                      </td>
-                      <td style="padding: 12px 15px; font-size: 13px; text-align: center; white-space: nowrap;">
-                        <span style="${getResultClass(log.result)}">${getActionLabel(log.action)}</span>
-                      </td>
-                    </tr>
-                  `).join('')}
-                </tbody>
-              </table>
-            </div>
-          `}
+          `).join('')}
         </div>
       </section>
     `;
@@ -11858,6 +11948,16 @@ class App {
         menuDropdown.classList.remove('open');
         this.showEngineOverview();
       });
+      // 工具箱（新 UI 未包含的功能，保留旧样式）
+      document.getElementById('menu-toolbox')?.addEventListener('click', () => {
+        menuDropdown.classList.remove('open');
+        this.switchToPage('process');
+      });
+      // 高级设置（新 UI 未包含的功能，保留旧样式）
+      document.getElementById('menu-advanced-settings')?.addEventListener('click', () => {
+        menuDropdown.classList.remove('open');
+        this.switchToPage('advanced_settings');
+      });
       // 演示模式
       document.getElementById('menu-demo-mode')?.addEventListener('click', () => {
         menuDropdown.classList.remove('open');
@@ -11877,13 +11977,11 @@ class App {
       invoke('close_window');
     });
 
-    // 通知铃铛按钮 - 滚动到通知中心
+    // 通知铃铛按钮 - 切换到通知中心
     const notificationBtn = document.getElementById('notification-btn');
     if (notificationBtn) {
       notificationBtn.addEventListener('click', () => {
-        this.currentPage = 'notifications';
-        this.render();
-        setTimeout(() => this.scrollToSection('notifications'), 100);
+        this.switchToPage('notifications');
       });
     }
 
@@ -11896,37 +11994,8 @@ class App {
             this.currentScanFileIndex = 0;
             this.scannedFilesCount = 0;
           }
-          
-          // 如果是隔离区或安全日志，需要特殊处理
-          if (page === 'quarantine' || page === 'security_log') {
-            this.currentPage = page;
-            this.render();
-          } else if (this.currentPage === 'quarantine' || this.currentPage === 'security_log' || this.currentPage === 'chat') {
-            // 从隔离区/安全日志/聊天返回其他页面
-            this.currentPage = page;
-            this.render();
-            if (page !== 'home') {
-              setTimeout(() => this.scrollToSection(page), 100);
-            }
-          } else {
-            this.currentPage = page;
-            // 设置手动滚动标志，防止 IntersectionObserver 覆盖
-            this.isManualScrolling = true;
-            this.scrollToSection(page);
-            // 更新侧边栏高亮状态
-            document.querySelectorAll('.sidebar-item').forEach(item => {
-              const itemPage = item.getAttribute('data-page');
-              if (itemPage === page) {
-                item.classList.add('active');
-              } else {
-                item.classList.remove('active');
-              }
-            });
-            // 1秒后清除手动滚动标志
-            setTimeout(() => {
-              this.isManualScrolling = false;
-            }, 1000);
-          }
+          // 页面切换（新 UI：主页面直接切换 .active，独立页面重新渲染）
+          this.switchToPage(page);
           // 页面切换后更新滚动模式
           setTimeout(() => this.applyContinuousScrollSetting(), 200);
         } else {
@@ -12021,12 +12090,7 @@ class App {
               title: '选择要扫描的目录'
             }));
             if (!selected || typeof selected !== 'string') return;
-            this.currentPage = 'scan';
-            this.isManualScrolling = true;
-            this.scrollToSection('scan');
-            setTimeout(() => {
-              this.isManualScrolling = false;
-            }, 1000);
+            this.switchToPage('scan');
             setTimeout(() => this.startCustomScan(selected), 300);
           } catch (error) {
             console.error('Failed to select directory:', error);
@@ -12035,12 +12099,7 @@ class App {
           return;
         }
 
-        this.currentPage = 'scan';
-        this.isManualScrolling = true;
-        this.scrollToSection('scan');
-        setTimeout(() => {
-          this.isManualScrolling = false;
-        }, 1000);
+        this.switchToPage('scan');
         setTimeout(() => {
           if (scanType === 'quick') {
             this.startScan();
@@ -12091,19 +12150,19 @@ class App {
       await this.handleDetectedThreats();
     });
 
-    // 侧边栏折叠按钮 - 只切换类名避免全量刷新
+    // 侧边栏折叠按钮 - 只切换类名避免全量刷新（新 UI：expanded 类控制展开）
     document.getElementById('sidebar-collapse-btn')?.addEventListener('click', () => {
       this.sidebarCollapsed = !this.sidebarCollapsed;
       localStorage.setItem('sidebar_collapsed', String(this.sidebarCollapsed));
       const sidebar = document.querySelector('.sidebar');
       if (sidebar) {
-        sidebar.classList.toggle('collapsed', this.sidebarCollapsed);
+        sidebar.classList.toggle('expanded', !this.sidebarCollapsed);
       }
       const btn = document.getElementById('sidebar-collapse-btn');
       if (btn) {
         const arrow = btn.querySelector('svg');
         if (arrow) {
-          arrow.style.transform = this.sidebarCollapsed ? 'rotate(180deg)' : '';
+          arrow.style.transform = this.sidebarCollapsed ? '' : 'rotate(180deg)';
         }
         btn.title = this.sidebarCollapsed ? this.t('expandSidebar') : this.t('collapseSidebar');
         const label = btn.querySelector('.sidebar-label');
@@ -12178,15 +12237,9 @@ class App {
       card.addEventListener('click', (e) => {
         const feature = (e.currentTarget as HTMLElement).dataset.feature;
         if (feature === 'scan') {
-          this.currentPage = 'scan';
-          this.isManualScrolling = true;
-          this.scrollToSection('scan');
-          setTimeout(() => {
-            this.isManualScrolling = false;
-          }, 1000);
+          this.switchToPage('scan');
         } else if (feature === 'quarantine') {
-          this.currentPage = 'quarantine';
-          this.render();
+          this.switchToPage('quarantine');
         } else if (feature === 'optimize' || feature === 'privacy') {
           this.addLog('INFO', `「${feature === 'optimize' ? this.t('featureSystemOptimize') : this.t('featurePrivacy')}」功能即将上线`);
         }
@@ -12241,6 +12294,40 @@ class App {
           cb.disabled = !checkbox.checked;
         }
       });
+    });
+
+    // 增强端点防护开关事件
+    document.getElementById('endpoint-protection-checkbox')?.addEventListener('change', async (e) => {
+      const checkbox = e.target as HTMLInputElement;
+
+      // 关闭操作必须经过安全桌面确认（防止恶意程序静默关闭防护）
+      if (!checkbox.checked) {
+        const confirmed = await this.requestSecureConfirm(
+          '关闭增强端点防护',
+          '您确定要关闭增强端点防护吗？关闭后专业级端点监控将停止，高级威胁可能无法被及时发现。',
+          'disable_endpoint_protection'
+        );
+        if (!confirmed) {
+          checkbox.checked = true; // 回滚开关状态
+          return;
+        }
+      }
+
+      try {
+        await this.endpointProtectionManager.setEnabled(checkbox.checked);
+
+        if (checkbox.checked) {
+          this.addLog('INFO', '增强端点防护已开启 (MelixEDR)');
+        } else {
+          this.addLog('WARNING', '增强端点防护已关闭');
+        }
+      } catch (err) {
+        console.error('[EndpointProtection] Failed to toggle:', err);
+        checkbox.checked = !checkbox.checked;
+      }
+
+      // 局部更新UI
+      this.updateProtectionStatus();
     });
 
     // 基础防护开关事件
@@ -13441,7 +13528,7 @@ class App {
   }
 
   private initSettingGroupToggles() {
-    document.querySelectorAll('.setting-group').forEach(group => {
+    document.querySelectorAll('#section-settings .setting-group').forEach(group => {
       const header = group.querySelector('.setting-group-header');
       if (!header) return;
 
@@ -13481,126 +13568,40 @@ class App {
       if (versionDisplay) {
         versionDisplay.textContent = this.t('version') + ': ' + version;
       }
+      const watermarkVersion = document.getElementById('watermark-version');
+      if (watermarkVersion) {
+        watermarkVersion.textContent = 'v' + version;
+      }
     } catch (error) {
       console.error('Failed to load version:', error);
     }
   }
 
-  private scrollToSection(page: Page) {
-    const section = document.getElementById(`section-${page}`);
-    const scrollContainer = document.querySelector('.scroll-container');
-    if (section && scrollContainer) {
-      const containerRect = scrollContainer.getBoundingClientRect();
-      const sectionRect = section.getBoundingClientRect();
-      const relativeTop = sectionRect.top - containerRect.top + scrollContainer.scrollTop;
-      scrollContainer.scrollTo({ top: relativeTop, behavior: 'smooth' });
-    }
-  }
-
-  private observeSections() {
-    const sidebarItems = document.querySelectorAll('.sidebar-item');
-    const scrollContainer = document.querySelector('.scroll-container') as HTMLElement;
-    
-    if (!scrollContainer) return;
-
-    const updateSidebar = (sectionId: string) => {
-      if (this.sidebarUpdateTimer) {
-        clearTimeout(this.sidebarUpdateTimer);
-      }
-      
-      this.sidebarUpdateTimer = window.setTimeout(() => {
-        this.currentPage = sectionId as Page;
-        
-        // 页面切换后更新滚动模式
-        this.applyContinuousScrollSetting();
-        
-        sidebarItems.forEach(item => {
-          const itemPage = item.getAttribute('data-page');
-          if (itemPage === sectionId) {
-            item.classList.add('active');
-          } else {
-            item.classList.remove('active');
-          }
-        });
-        
-        if (sectionId === 'process') {
-          this.startProcessUpdate();
-        } else {
-          this.stopProcessUpdate();
-        }
-      }, 150) as unknown as number;
-    };
-
-    // 使用滚动事件监听
-    const handleScroll = () => {
-      // 如果是手动滚动，不处理自动更新
-      if (this.isManualScrolling) {
-        return;
-      }
-      
-      // 如果 EDR 详情页面打开，禁用自动滚动切换
-      if (this.selectedEdrProcess) {
-        return;
-      }
-      
-      const sections = ['home', 'scan', 'notifications', 'process', 'edr', 'settings'];
-      const containerRect = scrollContainer.getBoundingClientRect();
-      const containerCenter = containerRect.top + containerRect.height / 2;
-      
-      let closestSection: string | null = null;
-      let minDistance = Infinity;
-      
-      sections.forEach(sectionId => {
-        const section = document.getElementById(`section-${sectionId}`);
-        if (section) {
-          const sectionRect = section.getBoundingClientRect();
-          const sectionCenter = sectionRect.top + sectionRect.height / 2;
-          const distance = Math.abs(sectionCenter - containerCenter);
-          
-          // 只考虑在视口内的 section
-          if (sectionRect.top < containerRect.bottom && sectionRect.bottom > containerRect.top) {
-            if (distance < minDistance) {
-              minDistance = distance;
-              closestSection = sectionId;
-            }
-          }
-        }
+  // 页面切换（新 UI 页面模式）：主页面已在 DOM 中直接切换 .active，独立页面重新渲染
+  private switchToPage(page: Page) {
+    const target = document.getElementById(`page-${page}`);
+    if (target) {
+      // 更新页面激活状态
+      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+      target.classList.add('active');
+      this.currentPage = page;
+      // 更新侧边栏高亮状态
+      document.querySelectorAll('.sidebar-item').forEach(item => {
+        item.classList.toggle('active', item.getAttribute('data-page') === page);
       });
-      
-      if (closestSection && closestSection !== this.currentPage) {
-        // 迟滞：当前 section 是否仍有超过30%在视口内
-        const currentSection = document.getElementById(`section-${this.currentPage}`);
-        if (currentSection) {
-          const cr = currentSection.getBoundingClientRect();
-          const viewTop = containerRect.top;
-          const viewBot = containerRect.bottom;
-          const visibleTop = Math.max(cr.top, viewTop);
-          const visibleBot = Math.min(cr.bottom, viewBot);
-          const visibleH = Math.max(0, visibleBot - visibleTop);
-          const visibleRatio = cr.height > 0 ? visibleH / cr.height : 0;
-          // 当前 section 仍在视野中且候选优势不明显，不切换
-          if (visibleRatio > 0.3 && minDistance > 60) {
-            return;
-          }
-        }
-        console.log('[Scroll] Closest section:', closestSection);
-        updateSidebar(closestSection);
+      // 工具箱页面启用/停止进程列表刷新
+      if (page === 'process') {
+        this.startProcessUpdate();
+      } else {
+        this.stopProcessUpdate();
       }
-    };
-
-    // 防抖处理
-    let scrollTimeout: number | null = null;
-    const debouncedScroll = () => {
-      if (scrollTimeout) {
-        clearTimeout(scrollTimeout);
-      }
-      scrollTimeout = window.setTimeout(handleScroll, 100) as unknown as number;
-    };
-
-    scrollContainer.addEventListener('scroll', debouncedScroll, { passive: true });
-    
-    // 初始检测一次
-    handleScroll();
+      // 页面切换后滚动到顶部
+      target.scrollTop = 0;
+    } else {
+      // 独立渲染页面（隔离区/安全日志/工具箱/聊天等）需要重新渲染
+      this.currentPage = page;
+      this.render();
+    }
   }
 
   // 绑定 EDR 页面事件（用于局部刷新）
@@ -13663,7 +13664,7 @@ class App {
           const process = await invoke<any>('get_edr_process_detail', { pid: parseInt(pid) });
           this.selectedEdrProcess = process;
           this.safeRefreshEdrSection();
-          this.scrollToSection('edr');
+          this.switchToPage('edr');
           this.disableOuterScroll();
         } catch (error) {
           console.error('[EDR] Failed to load process detail:', error);
@@ -13675,7 +13676,7 @@ class App {
     document.getElementById('edr-back-btn')?.addEventListener('click', () => {
       this.selectedEdrProcess = null;
       this.safeRefreshEdrSection();
-      this.scrollToSection('edr');
+      this.switchToPage('edr');
       this.enableOuterScroll();
     });
   }
@@ -13793,7 +13794,7 @@ class App {
           const process = await invoke<any>('get_edr_process_detail', { pid: parseInt(pid) });
           this.selectedEdrProcess = process;
           this.safeRefreshEdrSection();
-          this.scrollToSection('edr');
+          this.switchToPage('edr');
           this.disableOuterScroll();
         } catch (error) {
           console.error('[EDR] Failed to load process detail:', error);
@@ -13961,6 +13962,45 @@ class App {
       });
     } catch (e) {
       console.error('Failed to add scan start timeline event:', e);
+    }
+    
+    // ★快速扫描开局：先扫描内存活动模块（运行中的进程镜像）★
+    // 通过 AVGuard（提权 R3 进程）遍历进程表，获取全部进程（含管理员进程）的
+    // 镜像路径，逐个执行本地引擎扫描，命中威胁标记为「内存活动威胁」。
+    if (customPaths.length === 0 && !fullScan) {
+      this.updateScanUI(this.t('memScanPhase') || '正在扫描内存活动模块...');
+      this.addScanLog('INFO', '[MemScan] 开始扫描内存活动模块（运行中进程镜像）...');
+      try {
+        const memOutcome = await invoke('scan_running_processes_command') as any;
+        if (memOutcome) {
+          const memThreats: any[] = (memOutcome.threats || []).filter((t: any) => t && t.is_memory_threat === true && t.result === 'MALICIOUS');
+          this.addScanLog('INFO', `[MemScan] source=${memOutcome.source}, total=${memOutcome.total_processes}, scanned=${memOutcome.scanned}, threats=${memThreats.length}`);
+          for (const t of memThreats) {
+            if (!this.isScanning) break;
+            this.scanThreats++;
+            this.totalThreatsFound++;
+            this.detectedThreats.push({
+              path: t.image_path,
+              probability: t.probability,
+              virus_family: t.virus_family,
+              family_category: t.family_category || '内存活动威胁',
+              is_infector: false,
+              fromCloud: false,
+            });
+            const displayName = `${t.process_name || ''} (PID ${t.pid})`;
+            this.addScanThreat(t.virus_family || 'Memory Threat', displayName, t.probability, '内存活动威胁');
+            this.addScanLog('WARNING', `[MemScan] 内存活动威胁: ${displayName} -> ${t.image_path} [${t.virus_family || 'Malware'}]`);
+          }
+          if (memThreats.length > 0) {
+            this.updateThreatCountUI();
+          }
+        }
+      } catch (e) {
+        this.addScanLog('WARNING', `[MemScan] 内存模块扫描失败，继续文件扫描: ${e}`);
+      }
+      // 恢复文件遍历阶段
+      this.isTraversing = true;
+      this.updateScanUI('正在遍历文件目录...');
     }
     
     this.addScanLog('INFO', 'Collecting files to scan...');
@@ -15107,7 +15147,6 @@ class App {
     this.updateTaskbarProgress(null).catch(e => console.error('Failed to clear taskbar progress:', e));
     this.currentPage = 'home';
     this.render();
-    setTimeout(() => this.scrollToSection('home'), 100);
   }
 
   private async handleDetectedThreats() {
@@ -15208,6 +15247,11 @@ class App {
         if (result.success) {
           successCount++;
           this.addLog('INFO', this.t('quarantined') + ': ' + threat.path + ' -> ' + result.id);
+        } else if (result.reason === 'access_denied') {
+          // 文件被活动进程占用（病毒正在运行）：后端已自动弹出"发现活动内存威胁"
+          // 处置窗口，交由用户选择"开机时清除 / 不重启而清除"
+          failCount++;
+          this.addLog('INFO', this.t('quarantineAccessDenied') + ': ' + threat.path);
         } else {
           failCount++;
           this.addLog('ERROR', this.t('quarantineFailed') + ': ' + threat.path);
@@ -15732,9 +15776,9 @@ class App {
     { target: '#hero-card', text: '欢迎使用 XIGUASecurity 10x！这里是安全概览，显示当前电脑的整体防护状态。', position: 'bottom' },
     { target: '.realtime-panel', text: '实时防护面板集中管理驱动防护、文件防护、基础防护等核心能力。', position: 'left' },
     { target: '.feature-cards', text: '功能卡片可以快速进入病毒扫描、隔离区、系统优化和隐私保护。', position: 'left' },
-    { target: '#section-scan', text: '病毒扫描提供快速、全盘和自定义扫描，满足不同场景的安全需求。', position: 'bottom' },
-    { target: '#section-notifications', text: '通知中心汇总所有安全事件，包括威胁、拦截、扫描和隔离记录。', position: 'bottom' },
-    { target: '#section-settings', text: '设置中心可以调整主题、扫描敏感度、白名单和防护开关。', position: 'bottom' },
+    { target: '#section-scan', text: '病毒扫描提供快速、全盘和自定义扫描，满足不同场景的安全需求。', position: 'bottom', navigate: 'scan' as Page },
+    { target: '#section-notifications', text: '通知中心汇总所有安全事件，包括威胁、拦截、扫描和隔离记录。', position: 'bottom', navigate: 'notifications' as Page },
+    { target: '#section-settings', text: '设置中心可以调整主题、扫描敏感度、白名单和防护开关。', position: 'bottom', navigate: 'settings' as Page },
     { target: '#section-quarantine', text: '隔离区存放所有被隔离的威胁文件，可以在这里恢复或彻底删除。', position: 'bottom', navigate: 'quarantine' as Page },
     { target: '.edr-reports-page-title', text: 'EDR 报告时间线记录所有拦截和终止事件的详细信息，方便追溯。', position: 'bottom', navigate: 'toolbox_edr_reports' as Page },
     { target: '#hero-card', text: '以上是 XIGUASecurity 10x 的核心功能。现在开始，享受全面的安全防护吧！', position: 'center' },
@@ -15790,13 +15834,13 @@ class App {
     const step = this.demoSteps[this.demoStepIndex];
     console.log('[Demo] Step %d: target=%s navigate=%s', this.demoStepIndex, step.target, step.navigate || 'none');
 
-    // 切换页面
+    // 切换页面（新 UI 页面模式）
     if (step.navigate) {
-      this.currentPage = step.navigate;
+      this.switchToPage(step.navigate);
     } else {
       this.currentPage = 'home';
+      this.render();
     }
-    this.render();
 
     // 用 requestAnimationFrame 确保布局就绪
     requestAnimationFrame(() => {

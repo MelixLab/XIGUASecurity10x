@@ -1,0 +1,60 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicedoc/tauri/main/tooling/cli/schema.json",
+  "productName": "XIGUASecurity",
+  "version": "1.0.0",
+  "identifier": "com.xiguasecurity.app",
+  "build": {
+    "frontendDist": "../src",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "node e:/XIGUASecurity/server.js",
+    "beforeBuildCommand": ""
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "XIGUASecurity",
+        "width": 1024,
+        "height": 680,
+        "minWidth": 860,
+        "minHeight": 580,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": false,
+        "transparent": true,
+        "center": true
+      },
+      {
+        "label": "intercept-alert",
+        "title": "实时防护拦截",
+        "width": 360,
+        "height": 500,
+        "decorations": false,
+        "transparent": true,
+        "shadow": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "visible": false,
+        "url": "intercept-alert.html"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "Driver": "Driver",
+      "engines/melix": "engines/melix"
+    }
+  }
+}

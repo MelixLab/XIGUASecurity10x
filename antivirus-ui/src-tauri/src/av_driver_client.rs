@@ -99,6 +99,9 @@ const AV_PIPE_MSG_RANSOM_DECISION: u32    = 0x2041;
 const AV_PIPE_MSG_ENDPOINT_NOTIFY: u32    = 0x2050;
 const AV_PIPE_MSG_ENDPOINT_DECISION: u32  = 0x2051;
 
+const AV_PIPE_MSG_INJECTGUARD_NOTIFY: u32   = 0x2070;
+const AV_PIPE_MSG_INJECTGUARD_DECISION: u32 = 0x2071;
+
 const AV_PIPE_MSG_SHUTDOWN_REQUEST: u32   = 0x3000;
 const AV_PIPE_MSG_ERROR: u32             = 0xFFFF;
 
@@ -117,6 +120,18 @@ pub const XGS_DECISION_RESTORE: u32    = 3;
 /// EndPoint 决策码
 pub const XGS_EP_DECISION_ALLOW: u32 = 1;
 pub const XGS_EP_DECISION_KILL: u32  = 2;
+
+/// InjectGuard 决策码
+pub const IG_DECISION_ALLOW: u32 = 1;
+pub const IG_DECISION_BLOCK: u32 = 2;
+
+/// InjectGuard 事件类型
+pub const IG_EVENT_REMOTE_THREAD: u32    = 1;
+pub const IG_EVENT_CROSS_MEM_WRITE: u32   = 2;
+pub const IG_EVENT_CROSS_MEM_ALLOC: u32   = 3;
+pub const IG_EVENT_SECTION_MAP: u32        = 4;
+pub const IG_EVENT_PROCESS_OPEN: u32      = 5;
+pub const IG_EVENT_INJECTION_CHAIN: u32   = 6;
 
 // ==================== 通知数据结构 (解析后的 Rust 结构体) ====================
 
@@ -194,6 +209,22 @@ pub struct EndPointNotifyData {
     pub image_path: String,
 }
 
+/// InjectGuard 注入检测通知
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct InjectGuardNotifyData {
+    pub sequence_id: u32,
+    pub event_type: u32,
+    pub source_pid: u32,
+    pub target_pid: u32,
+    pub thread_id: u32,
+    pub start_address: u64,
+    pub access_mask: u32,
+    pub chain_step_count: u32,
+    pub chain_steps: Vec<u32>,
+    pub source_process_name: String,
+    pub target_process_name: String,
+}
+
 /// 所有通知类型的统一枚举
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind")]
@@ -203,6 +234,7 @@ pub enum AvNotification {
     Injection(InjectionNotifyData),
     Ransom(RansomNotifyData),
     EndPoint(EndPointNotifyData),
+    InjectGuard(InjectGuardNotifyData),
     Error { code: u32, message: String },
 }
 
@@ -221,6 +253,8 @@ pub enum AvDecision {
     Ransom { notification_id: u64, decision: u32 },
     /// EndPoint 决策: notification_id, decision_code
     EndPoint { notification_id: u64, decision: u32 },
+    /// InjectGuard 决策: sequence_id, decision_code
+    InjectGuard { sequence_id: u32, decision: u32 },
 }
 
 // ==================== 字节读写辅助函数 ====================
@@ -681,6 +715,65 @@ fn serialize_endpoint_decision(notification_id: u64, decision: u32) -> Vec<u8> {
     buf
 }
 
+/// InjectGuard 常量 (对应 AVProtocol.h)
+const IG_NAME_LEN: usize = 260;
+const IG_MAX_CHAIN_STEPS: usize = 8;
+
+/// 解析 InjectGuard 注入检测通知
+///
+/// 布局 (#pragma pack(1)):
+///   u32 SequenceId, u32 EventType, u32 SourcePid, u32 TargetPid,
+///   u32 ThreadId, u64 StartAddress, u32 AccessMask,
+///   u32 ChainStepCount, u32[8] ChainSteps,
+///   WCHAR[260] SourceProcessName, WCHAR[260] TargetProcessName
+fn parse_injectguard_notify(data: &[u8]) -> InjectGuardNotifyData {
+    let mut offset = 0;
+
+    let sequence_id = read_u32_le(data, offset); offset += 4;
+    let event_type = read_u32_le(data, offset); offset += 4;
+    let source_pid = read_u32_le(data, offset); offset += 4;
+    let target_pid = read_u32_le(data, offset); offset += 4;
+    let thread_id = read_u32_le(data, offset); offset += 4;
+    let start_address = read_u64_le(data, offset); offset += 8;
+    let access_mask = read_u32_le(data, offset); offset += 4;
+    let chain_step_count = read_u32_le(data, offset); offset += 4;
+
+    let mut chain_steps = Vec::new();
+    for _ in 0..IG_MAX_CHAIN_STEPS {
+        if offset + 4 <= data.len() {
+            chain_steps.push(read_u32_le(data, offset));
+        }
+        offset += 4;
+    }
+
+    let source_process_name = read_wide_string_fixed(data, offset, IG_NAME_LEN);
+    offset += IG_NAME_LEN * 2;
+    let target_process_name = read_wide_string_fixed(data, offset, IG_NAME_LEN);
+
+    InjectGuardNotifyData {
+        sequence_id,
+        event_type,
+        source_pid,
+        target_pid,
+        thread_id,
+        start_address,
+        access_mask,
+        chain_step_count,
+        chain_steps,
+        source_process_name,
+        target_process_name,
+    }
+}
+
+/// 序列化 InjectGuard 决策
+fn serialize_injectguard_decision(sequence_id: u32, decision: u32) -> Vec<u8> {
+    let size = 4 + 4;
+    let mut buf = vec![0u8; size];
+    write_u32_le(&mut buf, 0, sequence_id);
+    write_u32_le(&mut buf, 4, decision);
+    buf
+}
+
 // ==================== 鉴权 ====================
 
 /// 执行 HMAC-SHA256 鉴权握手
@@ -990,6 +1083,10 @@ fn message_loop(
                 let notify = parse_endpoint_notify(&data);
                 AvNotification::EndPoint(notify)
             }
+            AV_PIPE_MSG_INJECTGUARD_NOTIFY => {
+                let notify = parse_injectguard_notify(&data);
+                AvNotification::InjectGuard(notify)
+            }
             AV_PIPE_MSG_ERROR => {
                 // 错误消息
                 let code = if data.len() >= 4 { read_u32_le(&data, 0) } else { 0 };
@@ -1039,6 +1136,10 @@ fn send_decision_to_pipe(pipe: HANDLE, decision: &AvDecision) -> Result<(), Stri
         AvDecision::EndPoint { notification_id, decision } => {
             let data = serialize_endpoint_decision(*notification_id, *decision);
             send_pipe_message(pipe, AV_PIPE_MSG_ENDPOINT_DECISION, &data)
+        }
+        AvDecision::InjectGuard { sequence_id, decision } => {
+            let data = serialize_injectguard_decision(*sequence_id, *decision);
+            send_pipe_message(pipe, AV_PIPE_MSG_INJECTGUARD_DECISION, &data)
         }
     }
 }
