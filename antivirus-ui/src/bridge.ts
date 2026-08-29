@@ -489,7 +489,6 @@ function initHomeStats() {
 
   // 从本地存储恢复计数
   const blocked = parseInt(localStorage.getItem('xigua_threats_blocked') || '0', 10);
-  const scanned = parseInt(localStorage.getItem('xigua_files_scanned') || '0', 10);
 
   const refresh = () => {
     updateHomeProtectionStatus();
@@ -2408,7 +2407,7 @@ function inferThreatCategory(virusFamily?: string, familyCategory?: string): str
   return undefined;
 }
 
-function addScanThreatEntry(virusFamily: string, filePath: string, probability: number, familyCategory?: string) {
+function addScanThreatEntry(virusFamily: string, filePath: string, probability?: number, familyCategory?: string) {
   scanState.threats++;
   const empty = $('#scanThreatsEmpty');
   if (empty) empty.style.display = 'none';
