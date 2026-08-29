@@ -411,3 +411,25 @@ pub async fn get_quarantine_stats() -> Result<serde_json::Value, String> {
         "total_size": total_size,
     }))
 }
+
+/// 将扫描检测到的多个文件批量加入隔离区（扫描完成后的"处理"按钮使用）
+#[tauri::command]
+pub async fn quarantine_scan_files(paths: Vec<String>) -> Result<serde_json::Value, String> {
+    let manager = QuarantineManager::new()?;
+    let mut quarantined = 0u32;
+    let mut failed = 0u32;
+    for p in &paths {
+        match manager.quarantine_file(p, "扫描检测到的威胁", "high") {
+            Ok(_) => quarantined += 1,
+            Err(e) => {
+                eprintln!("[Quarantine] 隔离失败 {}: {}", p, e);
+                failed += 1;
+            }
+        }
+    }
+    Ok(serde_json::json!({
+        "success": true,
+        "quarantined": quarantined,
+        "failed": failed,
+    }))
+}

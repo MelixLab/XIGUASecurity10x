@@ -1002,12 +1002,24 @@ AvInjectNotifyUninitialize(
     }
 
     //
-    // 停止工作线程并等待其退出
+    // 停止工作线程。
+    //
+    // 【关键 - 修复重连/卸载蓝屏 (IRQL_NOT_LESS_OR_EQUAL, 报 NTOSKRNL)】
+    // 原实现在此调用 KeWaitForSingleObject 无限期等待工作线程退出。
+    // 但 DriverUnload 由 IopLoadUnloadDriver 在工作线程(ExpWorkerThread)
+    // 上下文中调用, 实际运行在 DISPATCH_LEVEL。在 DISPATCH_LEVEL 调用
+    // KeWaitForSingleObject(无超时) 会触发 IRQL_NOT_LESS_OR_EQUAL 蓝屏
+    // (页错误发生在 nt!KeWaitForSingleObject 内部, 故报 NTOSKRNL.EXE,
+    // 而非本驱动)。
+    // 因此这里不能等待工作线程, 只能: 置停止标志 + 唤醒事件, 让工作线程
+    // 自行退出; 关闭句柄(关闭句柄不等待线程结束, DISPATCH_LEVEL 安全)。
+    // 工作线程在收到停止标志后会立即退出循环并返回, 无需也不应在
+    // DriverUnload 中阻塞等待。
     //
     g_InjectWorkerStop = TRUE;
+    KeSetEvent(&g_InjectWaitEvent, IO_NO_INCREMENT, FALSE);
     if (g_InjectWorkerHandle != NULL)
     {
-        KeWaitForSingleObject(g_InjectWorkerHandle, Executive, KernelMode, FALSE, NULL);
         ZwClose(g_InjectWorkerHandle);
         g_InjectWorkerHandle = NULL;
     }

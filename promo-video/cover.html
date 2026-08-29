@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>西瓜杀毒 XIGUASecurity - B站封面</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    background: #e8eaed;
+    padding: 40px;
+  }
+
+  /* B站封面比例 16:10 */
+  .cover {
+    width: 1600px;
+    height: 1000px;
+    border-radius: 20px;
+    background: linear-gradient(150deg, #f6f8fa 0%, #eef1f4 100%);
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.15);
+    display: flex;
+    align-items: center;
+  }
+
+  /* 左侧文字区 */
+  .left {
+    flex: 1;
+    padding: 0 70px 0 90px;
+    position: relative;
+    z-index: 2;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 40px;
+  }
+  .brand img {
+    width: 56px; height: 56px;
+    object-fit: contain;
+  }
+  .brand span {
+    font-size: 26px;
+    font-weight: 700;
+    color: #1d1d1f;
+    letter-spacing: 1px;
+  }
+
+  /* 大字标题 */
+  .big-word {
+    font-size: 88px;
+    font-weight: 900;
+    color: #1d1d1f;
+    line-height: 1.15;
+    letter-spacing: 2px;
+  }
+  .big-word .accent {
+    color: #00BFA5;
+  }
+
+  .desc {
+    margin-top: 28px;
+    font-size: 26px;
+    color: #6b7280;
+    line-height: 1.6;
+    font-weight: 500;
+  }
+
+  /* 标签 */
+  .tags {
+    margin-top: 40px;
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .tag {
+    padding: 12px 28px;
+    border-radius: 999px;
+    font-size: 22px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .tag.hl {
+    background: #00BFA5;
+    color: #fff;
+    box-shadow: 0 6px 24px rgba(0,191,165,0.35);
+  }
+  .tag.nm {
+    background: #ffffff;
+    color: #1d1d1f;
+    border: 1px solid #e5e5ea;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.05);
+  }
+
+  /* 右侧主页截图卡片 */
+  .right {
+    width: 46%;
+    height: 100%;
+    position: relative;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding-right: 90px;
+  }
+  .shot-wrap {
+    position: relative;
+    width: 100%;
+    border-radius: 20px;
+    overflow: hidden;
+    box-shadow: 0 24px 60px rgba(0,0,0,0.16);
+    border: 6px solid #ffffff;
+  }
+  .shot-wrap img {
+    width: 100%;
+    height: auto;
+    display: block;
+  }
+
+  /* 开源徽章 - 角落 */
+  .badge {
+    position: absolute;
+    top: 40px;
+    right: 40px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: #1d1d1f;
+    color: #7CF5DC;
+    font-size: 20px;
+    font-weight: 600;
+    padding: 10px 20px;
+    border-radius: 999px;
+    z-index: 3;
+  }
+  .badge svg {
+    width: 20px; height: 20px;
+    fill: #7CF5DC;
+  }
+</style>
+</head>
+<body>
+  <div class="cover">
+    <!-- 开源徽章 -->
+    <div class="badge">
+      <svg viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.438 9.8 8.205 11.387.6.113.82-.26.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61-.546-1.385-1.335-1.755-1.335-1.755-1.09-.745.083-.73.083-.73 1.205.085 1.84 1.237 1.84 1.237 1.07 1.835 2.807 1.305 3.492.997.108-.776.42-1.305.763-1.605-2.665-.305-5.467-1.334-5.467-5.93 0-1.31.468-2.38 1.235-3.22-.124-.303-.535-1.523.117-3.176 0 0 1.008-.322 3.3 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.29-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.873.118 3.176.77.84 1.235 1.91 1.235 3.22 0 4.61-2.807 5.624-5.48 5.922.43.372.824 1.102.824 2.222 0 1.606-.015 2.898-.015 3.293 0 .32.216.694.825.576C20.565 21.797 24 17.3 24 12c0-6.63-5.37-12-12-12z"/></svg>
+      OPEN SOURCE
+    </div>
+
+    <!-- 左侧文字 -->
+    <div class="left">
+      <div class="brand">
+        <img src="public/logo.png" alt="logo" />
+        <span>西瓜杀毒 XIGUASecurity</span>
+      </div>
+
+      <div class="big-word">
+        开源<span class="accent">免费</span>
+        <br/>无广告
+      </div>
+
+      <div class="desc">
+        你的下一个杀毒软件，何必是大厂
+        <br/>自研 AI 引擎 · 内核级防护
+      </div>
+
+      <div class="tags">
+        <div class="tag hl">开源免费</div>
+        <div class="tag nm">无广告</div>
+        <div class="tag nm">AI 驱动</div>
+      </div>
+    </div>
+
+    <!-- 右侧主页截图 -->
+    <div class="right">
+      <div class="shot-wrap">
+        <img src="public/home.png" alt="主页" />
+      </div>
+    </div>
+  </div>
+</body>
+</html>

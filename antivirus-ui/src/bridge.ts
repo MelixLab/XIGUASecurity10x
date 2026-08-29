@@ -81,7 +81,8 @@ type LangKey = 'zh-CN' | 'en' | 'zh-TW';
 const I18N: Record<LangKey, Record<string, string>> = {
   'zh-CN': {
     'nav.home': '概览', 'nav.scan': '病毒扫描', 'nav.protection': '实时防护', 'nav.quarantine': '隔离区', 'nav.logs': '安全日志', 'nav.settings': '设置',
-    'home.title': '设备已受到保护', 'home.sub': '所有防护功能均已在此设备上启用', 'home.statusOn': '实时防护已开启 · 病毒库已是最新', 'home.statusOff': '实时防护已关闭',
+    'home.title': '设备已受到保护', 'home.sub': '所有防护功能均已在此设备上启用', 'home.statusOn': '实时防护已开启 · 病毒库已是最新', 'home.statusOff': '实时防护未完全开启，建议检查防护设置',
+    'home.titlePartial': '设备已受到保护', 'home.subPartial': '核心防护已开启，部分可选功能未完全开启', 'home.subPartialList': '核心防护已开启，以下功能未开启：', 'home.statusPartial': '核心防护已开启 · 部分可选功能未开启',
     'home.actionNeeded': '需要执行操作', 'home.actionNeededSub': '您可能需要开启部分防护',
     'home.protectionOff': '防护已关闭', 'home.protectionOffSub': '驱动防护已禁用，您的系统存在风险',
     'home.suggestionTitle': '需要执行操作', 'home.suggestionFooter': '点击前往防护页面启用所有防护',
@@ -90,6 +91,7 @@ const I18N: Record<LangKey, Record<string, string>> = {
     'home.prot.file': '文件防护', 'home.prot.scriptScan': '脚本扫描', 'home.prot.cloudHash': '云端哈希',
     'home.prot.cloudQuery': '云查询',
     'home.quickScan': '快速扫描', 'home.threatsBlocked': '已拦截威胁', 'home.filesScanned': '已扫描文件', 'home.daysProtected': '已保护天数',
+    'home.threatStopped': '威胁防护已停止', 'home.threatStoppedSub': '实时防护已关闭，您的系统存在风险', 'home.actionStart': '立即启动防护', 'home.actionEnablePartial': '启用部分防护',
     'scan.title': '病毒扫描', 'scan.sub': '选择扫描类型以检查您的系统', 'scan.quick': '快速扫描', 'scan.quickDesc': '扫描关键系统区域，约需 1-2 分钟',
     'scan.full': '全盘扫描', 'scan.fullDesc': '深度扫描所有文件，约需 15-30 分钟', 'scan.custom': '自定义扫描', 'scan.customDesc': '选择特定文件夹进行扫描',
     'scan.scanning': '正在扫描...', 'scan.preparing': '准备扫描...', 'scan.stop': '停止', 'scan.threats': '威胁', 'scan.scanned': '已扫描',
@@ -116,6 +118,7 @@ const I18N: Record<LangKey, Record<string, string>> = {
     'settings.title': '设置', 'settings.sub': '配置 XIGUASecurity 偏好',
     'settings.general': '通用', 'settings.protection': '防护', 'settings.scan': '扫描', 'settings.whitelistGroup': '白名单', 'settings.rules': '病毒库', 'settings.preferences': '偏好',
     'settings.whitelistManage': '管理',
+    'settings.themeMode': '主题模式', 'settings.themeModeDesc': '浅色 / 深色 / 经典外观', 'settings.windowStyle': '窗口样式', 'settings.windowStyleDesc': '无 / 亚克力 / 云母 / 云母变体',
     'settings.startWithWin': '开机自启', 'settings.startWithWinDesc': '系统启动时自动运行',
     'settings.fileProtection': '文件防护', 'settings.fileProtectionDesc': '保护文件免受篡改和勒索',
     'settings.scriptScan': '脚本扫描', 'settings.scriptScanDesc': '实时检测恶意脚本',
@@ -127,6 +130,7 @@ const I18N: Record<LangKey, Record<string, string>> = {
     'settings.theme': '主题色', 'settings.themeDesc': '选择主题颜色', 'settings.language': '语言', 'settings.languageDesc': '界面显示语言',
     'settings.customBg': '自定义背景', 'settings.customBgDesc': '为应用设置自定义背景图片', 'settings.customBgBtn': '选择图片',
     'settings.about': '关于', 'settings.version': '版本', 'settings.aboutDesc': '一款自研的杀毒软件，提供病毒扫描、实时防护与云端查杀能力',
+    'settings.currentVersion': '当前软件版本', 'settings.checkUpdate': '软件检查更新', 'settings.checkUpdateDesc': '检查是否有可用更新', 'settings.checkUpdateBtn': '检查更新',
     'settings.sponsor': '赞助', 'settings.feedback': '反馈问题',
     'settings.endpointProtection': '增强端点防护', 'settings.endpointProtectionDesc': '基于驱动级端点监控拦截高级威胁，带来更强的防护效果',
     'settings.ransomware': '勒索软件防护', 'settings.ransomwareDesc': '实时检测并回滚勒索软件攻击',
@@ -150,7 +154,8 @@ const I18N: Record<LangKey, Record<string, string>> = {
   },
   en: {
     'nav.home': 'Home', 'nav.scan': 'Scan', 'nav.protection': 'Protection', 'nav.quarantine': 'Quarantine', 'nav.logs': 'Logs', 'nav.settings': 'Settings',
-    'home.title': 'Protected', 'home.sub': 'All protection features are active on this device', 'home.statusOn': 'Real-time protection on · Definitions up to date', 'home.statusOff': 'Real-time protection off',
+    'home.title': 'Protected', 'home.sub': 'All protection features are active on this device', 'home.statusOn': 'Real-time protection on · Definitions up to date', 'home.statusOff': 'Real-time protection is not fully enabled',
+    'home.titlePartial': 'Protected', 'home.subPartial': 'Core protection is active · Some optional features are off', 'home.subPartialList': 'Core protection active, these are off: ', 'home.statusPartial': 'Core protection active · Some optional features off',
     'home.actionNeeded': 'Action Required', 'home.actionNeededSub': 'You may need to enable some protection',
     'home.protectionOff': 'Protection Off', 'home.protectionOffSub': 'Driver protection is disabled, your system is at risk',
     'home.suggestionTitle': 'Action Required', 'home.suggestionFooter': 'Go to Protection page to enable all',
@@ -159,6 +164,7 @@ const I18N: Record<LangKey, Record<string, string>> = {
     'home.prot.file': 'File Protection', 'home.prot.scriptScan': 'Script Scan', 'home.prot.cloudHash': 'Cloud Hash',
     'home.prot.cloudQuery': 'Cloud Query',
     'home.quickScan': 'Quick Scan', 'home.threatsBlocked': 'Threats Blocked', 'home.filesScanned': 'Files Scanned', 'home.daysProtected': 'Days Protected',
+    'home.threatStopped': 'Threat Protection Stopped', 'home.threatStoppedSub': 'Real-time protection is off, your system is at risk', 'home.actionStart': 'Start Protection', 'home.actionEnablePartial': 'Enable Partial Protection',
     'scan.title': 'Virus Scan', 'scan.sub': 'Select a scan type to check your system', 'scan.quick': 'Quick Scan', 'scan.quickDesc': 'Scan critical system areas, takes 1-2 minutes',
     'scan.full': 'Full Scan', 'scan.fullDesc': 'Deep scan all files, takes 15-30 minutes', 'scan.custom': 'Custom Scan', 'scan.customDesc': 'Select specific folders to scan',
     'scan.scanning': 'Scanning...', 'scan.preparing': 'Preparing to scan...', 'scan.stop': 'Stop', 'scan.threats': 'Threats', 'scan.scanned': 'Scanned',
@@ -185,6 +191,7 @@ const I18N: Record<LangKey, Record<string, string>> = {
     'settings.title': 'Settings', 'settings.sub': 'Configure XIGUASecurity preferences',
     'settings.general': 'General', 'settings.protection': 'Protection', 'settings.scan': 'Scan', 'settings.whitelistGroup': 'Whitelist', 'settings.rules': 'Rules', 'settings.preferences': 'Preferences',
     'settings.whitelistManage': 'Manage',
+    'settings.themeMode': 'Theme Mode', 'settings.themeModeDesc': 'Colorful / Dark / Classic', 'settings.windowStyle': 'Window Style', 'settings.windowStyleDesc': 'None / Acrylic / Mica / Mica Alt',
     'settings.startWithWin': 'Start with Windows', 'settings.startWithWinDesc': 'Automatically launch on system startup',
     'settings.fileProtection': 'File Protection', 'settings.fileProtectionDesc': 'Protect files from tampering and ransomware',
     'settings.scriptScan': 'Script Scanning', 'settings.scriptScanDesc': 'Detect malicious scripts in real-time',
@@ -196,6 +203,7 @@ const I18N: Record<LangKey, Record<string, string>> = {
     'settings.theme': 'Theme Color', 'settings.themeDesc': 'Choose the accent theme color', 'settings.language': 'Language', 'settings.languageDesc': 'Interface display language',
     'settings.customBg': 'Custom Background', 'settings.customBgDesc': 'Set a custom background image for the app', 'settings.customBgBtn': 'Choose Image',
     'settings.about': 'About', 'settings.version': 'Version', 'settings.aboutDesc': 'A self-developed antivirus providing scan, real-time protection and cloud detection',
+    'settings.currentVersion': 'Current Version', 'settings.checkUpdate': 'Check for Updates', 'settings.checkUpdateDesc': 'Check for the latest version of the software', 'settings.checkUpdateBtn': 'Check Update',
     'settings.sponsor': 'Sponsor', 'settings.feedback': 'Feedback',
     'settings.endpointProtection': 'Enhanced Endpoint Protection', 'settings.endpointProtectionDesc': 'Advanced kernel-level endpoint monitoring against sophisticated threats',
     'settings.ransomware': 'Ransomware Protection', 'settings.ransomwareDesc': 'Detect and roll back ransomware attacks in real-time',
@@ -219,7 +227,8 @@ const I18N: Record<LangKey, Record<string, string>> = {
   },
   'zh-TW': {
     'nav.home': '概覽', 'nav.scan': '病毒掃描', 'nav.protection': '實時防護', 'nav.quarantine': '隔離區', 'nav.logs': '安全日誌', 'nav.settings': '設置',
-    'home.title': '設備已受到保護', 'home.sub': '所有防護功能均已在此設備上啟用', 'home.statusOn': '實時防護已開啟 · 病毒庫已是最新', 'home.statusOff': '實時防護已關閉',
+    'home.title': '設備已受到保護', 'home.sub': '所有防護功能均已在此設備上啟用', 'home.statusOn': '實時防護已開啟 · 病毒庫已是最新', 'home.statusOff': '實時防護未完全開啟，建議檢查防護設定',
+    'home.titlePartial': '設備已受到保護', 'home.subPartial': '核心防護已開啟，部分可選功能未完全開啟', 'home.subPartialList': '核心防護已開啟，以下功能未開啟：', 'home.statusPartial': '核心防護已開啟 · 部分可選功能未開啟',
     'home.actionNeeded': '需要執行操作', 'home.actionNeededSub': '您可能需要開啟部分防護',
     'home.protectionOff': '防護已關閉', 'home.protectionOffSub': '驅動防護已禁用，您的系統存在風險',
     'home.suggestionTitle': '需要執行操作', 'home.suggestionFooter': '點擊前往防護頁面啟用所有防護',
@@ -228,6 +237,7 @@ const I18N: Record<LangKey, Record<string, string>> = {
     'home.prot.file': '檔案防護', 'home.prot.scriptScan': '腳本掃描', 'home.prot.cloudHash': '雲端哈希',
     'home.prot.cloudQuery': '雲查詢',
     'home.quickScan': '快速掃描', 'home.threatsBlocked': '已攔截威脅', 'home.filesScanned': '已掃描檔案', 'home.daysProtected': '已保護天數',
+    'home.threatStopped': '威脅防護已停止', 'home.threatStoppedSub': '即時防護已關閉，您的系統存在風險', 'home.actionStart': '立即啟動防護', 'home.actionEnablePartial': '啟用部分防護',
     'scan.title': '病毒掃描', 'scan.sub': '選擇掃描類型以檢查您的系統', 'scan.quick': '快速掃描', 'scan.quickDesc': '掃描關鍵系統區域，約需 1-2 分鐘',
     'scan.full': '全盤掃描', 'scan.fullDesc': '深度掃描所有檔案，約需 15-30 分鐘', 'scan.custom': '自訂掃描', 'scan.customDesc': '選擇特定資料夾進行掃描',
     'scan.scanning': '正在掃描...', 'scan.preparing': '準備掃描...', 'scan.stop': '停止', 'scan.threats': '威脅', 'scan.scanned': '已掃描',
@@ -254,6 +264,7 @@ const I18N: Record<LangKey, Record<string, string>> = {
     'settings.title': '設置', 'settings.sub': '配置 XIGUASecurity 偏好',
     'settings.general': '通用', 'settings.protection': '防護', 'settings.scan': '掃描', 'settings.whitelistGroup': '白名單', 'settings.rules': '病毒庫', 'settings.preferences': '偏好',
     'settings.whitelistManage': '管理',
+    'settings.themeMode': '主題模式', 'settings.themeModeDesc': '淺色 / 深色 / 經典外觀', 'settings.windowStyle': '視窗樣式', 'settings.windowStyleDesc': '無 / 亞克力 / 雲母 / 雲母變體',
     'settings.startWithWin': '開機自啟', 'settings.startWithWinDesc': '系統啟動時自動執行',
     'settings.fileProtection': '檔案防護', 'settings.fileProtectionDesc': '保護檔案免受篡改和勒索',
     'settings.scriptScan': '腳本掃描', 'settings.scriptScanDesc': '實時檢測惡意腳本',
@@ -265,6 +276,7 @@ const I18N: Record<LangKey, Record<string, string>> = {
     'settings.theme': '主題色', 'settings.themeDesc': '選擇主題顏色', 'settings.language': '語言', 'settings.languageDesc': '介面顯示語言',
     'settings.customBg': '自訂背景', 'settings.customBgDesc': '為應用設定自訂背景圖片', 'settings.customBgBtn': '選擇圖片',
     'settings.about': '關於', 'settings.version': '版本', 'settings.aboutDesc': '一款自研的殺毒軟體，提供病毒掃描、即時防護與雲端查殺能力',
+    'settings.currentVersion': '目前軟體版本', 'settings.checkUpdate': '軟體檢查更新', 'settings.checkUpdateDesc': '檢查是否有可用更新', 'settings.checkUpdateBtn': '檢查更新',
     'settings.sponsor': '贊助', 'settings.feedback': '反饋問題',
     'settings.endpointProtection': '增強端點防護', 'settings.endpointProtectionDesc': '基於驅動級端點監控攔截高級威脅，帶來更強的防護效果',
     'settings.ransomware': '勒索軟體防護', 'settings.ransomwareDesc': '即時偵測並回滾勒索軟體攻擊',
@@ -389,6 +401,79 @@ function initMenu() {
   });
 }
 
+// 更新主页防护状态文案与操作按钮：
+//  - 核心防护（驱动/端点）未开启 → "威胁防护已停止"，按钮"立即启动防护"（跳防护页）
+//  - 核心防护已开启且可选功能（文件/网络/云端哈希）全开 → "设备已受到保护"，按钮"快速扫描"（跳扫描页）
+//  - 核心防护已开启但部分可选功能未开 → "已受保护，部分可选功能未开启"，按钮"启用部分防护"（跳防护页）
+// 用"用户配置"判断端点（get_endpoint_protection_enabled），而非后台进程残留，
+// 并加防抖避免状态查询抖动导致的标题闪烁。
+let _homeStatusDebounce: number | null = null;
+function updateHomeProtectionStatus() {
+  Promise.allSettled([
+    invoke<boolean>('get_driver_protection'),
+    invoke<boolean>('get_endpoint_protection_enabled'),
+    invoke<any>('get_network_protection_state'),
+    invoke<boolean>('get_endpoint_protection_status'),
+  ]).then((results) => {
+    const driver = results[0].status === 'fulfilled' ? results[0].value : false;
+    // 端点防护：只按用户配置（get_endpoint_protection_enabled）判断，不使用后台进程残留状态，
+    // 避免用户未开启端点但服务残留导致误判为"已开启"。
+    const endpointEnabled = results[1].status === 'fulfilled' ? results[1].value : false;
+    // "设备已受到保护"的前提：驱动防护 或 端点防护 二选一（缺一不可）。
+    // 仅开启基础防护/文件防护不算完整保护（仍属实时防护的一部分，但无驱动/端点的完整拦截能力）。
+    const coreOn = driver || endpointEnabled;
+    // 可选防护（非必要项）检查，收集未开启项（文件防护属核心，不列入可选）
+    const netState = results[2].status === 'fulfilled' ? results[2].value : null;
+    const networkOn = netState && typeof netState.enabled === 'boolean' ? netState.enabled : true;
+    const checks = [
+      { key: 'network', enabled: networkOn },
+      { key: 'cloudHash', enabled: isCloudHashEnabled() },
+      { key: 'scriptScan', enabled: localStorage.getItem('script_scan_enabled') !== 'false' },
+      { key: 'web', enabled: localStorage.getItem('web_protection_enabled') !== 'false' },
+    ];
+    const offList = checks.filter(c => !c.enabled);
+    const optionalOn = offList.length === 0;
+    const apply = () => {
+      const titleEl = $('#homeTitle');
+      const subEl = $('#homeSub');
+      const statusEl = $('#homeStatusText');
+      const btnText = $('#homeScanBtnText');
+      const btn = $('#homeActionBtn');
+      const illus = $('#homeIllustration') as HTMLImageElement | null;
+      if (!coreOn) {
+        // 防护未开启
+        if (titleEl) titleEl.textContent = t('home.threatStopped');
+        if (subEl) subEl.textContent = t('home.threatStoppedSub');
+        if (statusEl) statusEl.textContent = t('home.statusOff');
+        if (btnText) btnText.textContent = t('home.actionStart');
+        if (btn) btn.setAttribute('data-page', 'protection');
+        if (illus) illus.src = 'illustration-action-needed.svg';
+      } else if (optionalOn) {
+        // 防护全部开启
+        if (titleEl) titleEl.textContent = t('home.title');
+        if (subEl) subEl.textContent = t('home.sub');
+        if (statusEl) statusEl.textContent = t('home.statusOn');
+        if (btnText) btnText.textContent = t('home.quickScan');
+        if (btn) btn.setAttribute('data-page', 'scan');
+        if (illus) illus.src = 'illustration.svg';
+      } else {
+        // 核心防护开启，但部分可选功能未开启：小字列出具体未开启项
+        if (titleEl) titleEl.textContent = t('home.titlePartial');
+        if (subEl) {
+          const names = offList.map(c => t('home.prot.' + c.key) || c.key).join('、');
+          subEl.textContent = t('home.subPartialList') + names;
+        }
+        if (statusEl) statusEl.textContent = t('home.statusPartial');
+        if (btnText) btnText.textContent = t('home.actionEnablePartial');
+        if (btn) btn.setAttribute('data-page', 'protection');
+        if (illus) illus.src = 'illustration.svg';
+      }
+    };
+    if (_homeStatusDebounce !== null) window.clearTimeout(_homeStatusDebounce);
+    _homeStatusDebounce = window.setTimeout(apply, 400);
+  }).catch(() => {});
+}
+
 // ========== 主页真实统计 ==========
 function initHomeStats() {
   // 兼容旧应用的 installDate key（旧 main.ts 使用），无则初始化
@@ -407,13 +492,21 @@ function initHomeStats() {
   const scanned = parseInt(localStorage.getItem('xigua_files_scanned') || '0', 10);
 
   const refresh = () => {
+    updateHomeProtectionStatus();
+    // 已扫描文件：优先使用本地累计值（每次扫描完成后累加），驱动统计仅在本地无数据时补充，
+    // 避免"驱动未连接 → process_check_count=0 → 主页一直显示 0"。
+    let scannedNow = parseInt(localStorage.getItem('xigua_files_scanned') || '0', 10);
     invoke('get_driver_stats').then((stats: any) => {
-      if (stats && stats.process_check_count !== undefined) {
-        localStorage.setItem('xigua_files_scanned', String(Math.max(scanned, stats.process_check_count)));
-        const sEl = $('#stat-scanned');
-        if (sEl) sEl.textContent = Number(stats.process_check_count).toLocaleString();
+      if (stats && stats.process_check_count !== undefined && Number(stats.process_check_count) > scannedNow) {
+        scannedNow = Number(stats.process_check_count);
+        localStorage.setItem('xigua_files_scanned', String(scannedNow));
       }
-    }).catch(() => {});
+      const sEl = $('#stat-scanned');
+      if (sEl) sEl.textContent = scannedNow.toLocaleString();
+    }).catch(() => {
+      const sEl = $('#stat-scanned');
+      if (sEl) sEl.textContent = scannedNow.toLocaleString();
+    });
     const bEl = $('#stat-threats');
     if (bEl) bEl.textContent = blocked.toLocaleString();
   };
@@ -450,15 +543,30 @@ function bindEndpointProtectionToggle(toggle: HTMLInputElement | null) {
           syncEndpointToggles(false);
         });
       };
-      invoke<boolean>('get_driver_protection').then((driverOn) => {
-        if (driverOn) {
-          invoke('set_driver_protection', { enabled: false })
-            .then(() => waitDriverStopped(startEndpoint))
-            .catch(() => startEndpoint());
+      const doStart = () => {
+        invoke<boolean>('get_driver_protection').then((driverOn) => {
+          if (driverOn) {
+            invoke('set_driver_protection', { enabled: false })
+              .then(() => waitDriverStopped(startEndpoint))
+              .catch(() => startEndpoint());
+          } else {
+            startEndpoint();
+          }
+        }).catch(() => startEndpoint());
+      };
+      // 弹确认窗口：面向专业人员，询问用户是否确定启用
+      showChoiceDialog(
+        '增强端点防护面向专业人员，非专业人员建议不要启用此防护。\n确定要启用此防护吗？',
+        [{ text: '确定启用', primary: true }, { text: '取消' }]
+      ).then((choice) => {
+        if (choice === 0) {
+          doStart();
         } else {
-          startEndpoint();
+          // 用户取消：回滚开关
+          toggle.checked = false;
+          syncEndpointToggles(false);
         }
-      }).catch(() => startEndpoint());
+      });
     } else {
       invoke('stop_endpoint_protection').then(() => {
         invoke('set_endpoint_protection_enabled', { enabled: false }).catch(() => {});
@@ -479,6 +587,15 @@ function waitDriverStopped(cb: () => void, tries = 30) {
   invoke<boolean>('get_driver_protection').then((on) => {
     if (!on) { cb(); return; }
     setTimeout(() => waitDriverStopped(cb, tries - 1), 500);
+  }).catch(() => cb());
+}
+
+// 等待端点防护完全停止（轮询 get_endpoint_protection_status 直到 false 或超时）
+function waitEndpointStopped(cb: () => void, tries = 30) {
+  if (tries <= 0) { cb(); return; }
+  invoke<boolean>('get_endpoint_protection_status').then((on) => {
+    if (!on) { cb(); return; }
+    setTimeout(() => waitEndpointStopped(cb, tries - 1), 500);
   }).catch(() => cb());
 }
 
@@ -514,53 +631,28 @@ function initEndpointProtection() {
 
 // ========== 防护页状态同步 ==========
 function initProtectionPage() {
-  // 驱动防护开关：真实命令 get/set_driver_protection；
-  // 开启时弹出选择窗口询问"继续开启驱动防护"还是"改用更强的增强端点防护"。
+  // 驱动防护开关：驱动防护与端点防护互斥，只能开一个。
+  // 开启驱动防护时，自动关闭端点防护并等它完全停止后再开启驱动防护。
   const driverToggle = document.getElementById('driverProtectionToggle') as HTMLInputElement | null;
   if (driverToggle) {
     invoke<boolean>('get_driver_protection').then((on) => { driverToggle.checked = !!on; }).catch(() => {});
     driverToggle.addEventListener('change', async () => {
       if (driverToggle.checked) {
-        // 用户只是"试图开启"驱动防护：先回滚开关，弹出选择窗口，
-        // 只有用户明确选择"继续开启驱动防护"后才真正执行开启。
-        driverToggle.checked = false;
-        const choice = await showChoiceDialog(
-          '建议开启「增强端点防护」，防护能力会更强。请问要开启哪一种防护？',
-          [{ text: '增强端点防护', primary: true }, { text: '继续开启驱动防护' }]
-        );
-        if (choice === 0) {
-          // 用户选择改用增强端点防护：保持驱动防护关闭，改为开启端点防护
-          invoke('set_driver_protection', { enabled: false }).catch(() => {});
-          const doStartEndpoint = () => {
-            invoke('start_endpoint_protection').then(() => {
-              invoke('set_endpoint_protection_enabled', { enabled: true }).catch(() => {});
-              syncEndpointToggles(true);
-              showToast('已切换到增强端点防护');
-            }).catch((e: any) => {
-              console.error('[Bridge] start_endpoint_protection from driver switch failed:', e);
-              showToast('启动增强端点防护失败，请检查权限');
-            });
-          };
-          // 先检测端点防护是否已在运行：已开启则不重复启动
-          invoke<boolean>('get_endpoint_protection_status').then((running) => {
-            if (running) {
-              invoke('set_endpoint_protection_enabled', { enabled: true }).catch(() => {});
-              syncEndpointToggles(true);
-              showToast('增强端点防护已在运行');
-            } else {
-              doStartEndpoint();
-            }
-          }).catch(() => doStartEndpoint());
-          return;
-        }
-        if (choice === 1) {
-          // 用户明确选择"继续开启驱动防护"：此时才真正执行开启
-          driverToggle.checked = true;
-          invoke('set_driver_protection', { enabled: true }).catch(() => {
+        const startDriver = () => {
+          invoke('set_driver_protection', { enabled: true }).catch((e: any) => {
+            console.error('[DriverProtection] start failed:', e);
             driverToggle.checked = false;
           });
-        }
-        // choice === 2（点击遮罩关闭）或异常：保持关闭，不执行
+        };
+        // 若端点防护在运行：先关闭它并等待完全停止，再开启驱动防护
+        invoke<boolean>('get_endpoint_protection_status').then((running) => {
+          if (running) {
+            invoke('set_endpoint_protection_enabled', { enabled: false }).catch(() => {});
+            invoke('stop_endpoint_protection').then(() => waitEndpointStopped(startDriver)).catch(() => startDriver());
+          } else {
+            startDriver();
+          }
+        }).catch(() => startDriver());
       } else {
         invoke('set_driver_protection', { enabled: false }).catch(() => {
           driverToggle.checked = true;
@@ -569,12 +661,12 @@ function initProtectionPage() {
     });
   }
 
-  // 实时防护（基础防护）：localStorage 状态（与旧应用一致，默认开启）
+  // 实时防护（基础防护）：启动/停止 R3 进程监控
   const realtimeToggle = document.getElementById('realtimeProtectionToggle') as HTMLInputElement | null;
   if (realtimeToggle) {
     realtimeToggle.checked = localStorage.getItem('basic_protection_enabled') !== 'false';
     realtimeToggle.addEventListener('change', () => {
-      localStorage.setItem('basic_protection_enabled', String(realtimeToggle.checked));
+      setBasicProtectionEnabled(realtimeToggle.checked);
     });
   }
 
@@ -650,6 +742,293 @@ function initProtectionPage() {
 
   // 监听 Melix 拦截询问事件（PromptRequest）与拦截通知（BlockNotification）
   setupMelixEventListeners();
+}
+
+// ========== 实时文件防护（迁移自旧版 FileProtectionManager） ==========
+// 旧版在启动时通过 initFileProtection() 启用文件监听并监听 file-protection-event，
+// 新 UI 迁移时遗漏了这部分，导致创建危险文件不再拦截/弹窗。此处补全。
+let _fpEnabled = false;
+let _fpUnlisten: (() => void) | null = null;
+
+async function initRealtimeFileProtection() {
+  // 1. 若用户配置开启文件防护，启动后端文件监听（否则监听不会启动 → 不拦截）
+  const fileOn = localStorage.getItem('file_protection_enabled') !== 'false';
+  _fpEnabled = fileOn;
+  if (fileOn) {
+    try {
+      await invoke('set_file_protection_enabled', { enabled: true, scope: localStorage.getItem('file_protection_scope') || 'all' });
+      console.log('[FileProtection] started (init)');
+    } catch (e) {
+      console.error('[FileProtection] failed to start:', e);
+    }
+  }
+
+  // 2. 监听后端文件防护事件
+  if (_fpUnlisten) return;
+  try {
+    // 先排空积压事件，避免启动瞬间旧事件涌入
+    invoke('get_file_protection_events', { limit: 256 }).catch(() => {});
+    _fpUnlisten = await listen<any>('file-protection-event', (event) => {
+      if (!_fpEnabled) return;
+      const payload = event.payload || {};
+      const path = payload.path || '';
+      const threatName = payload.threat_name || '';
+      if (!path) return;
+      if (threatName) {
+        // 后端已判定威胁（如银狐木马）：直接隔离 + 弹窗
+        handleRealtimeThreat(path, threatName);
+        return;
+      }
+      // 普通文件：交给扫描流程（复用扫描引擎判断）
+      handleRealtimeFileEvent(path);
+    });
+  } catch (e) {
+    console.error('[FileProtection] listen failed:', e);
+  }
+}
+
+// 文件防护：扫描单个文件（PE/脚本等监控扩展名），命中则隔离 + 弹窗
+async function handleRealtimeFileEvent(filePath: string) {
+  const lower = filePath.toLowerCase();
+  const monitored = lower.endsWith('.exe') || lower.endsWith('.scr') || lower.endsWith('.com')
+    || lower.endsWith('.pif') || lower.endsWith('.msi') || lower.endsWith('.msp')
+    || lower.endsWith('.js') || lower.endsWith('.jse') || lower.endsWith('.vbs')
+    || lower.endsWith('.vbe') || lower.endsWith('.bat') || lower.endsWith('.cmd')
+    || lower.endsWith('.sh') || lower.endsWith('.ps1') || lower.endsWith('.hta') || lower.endsWith('.cpl');
+  if (!monitored) return;
+  try {
+    const res: any = await invoke('scan_file_basic', { filePath });
+    if (res && res.isThreat) {
+      handleRealtimeThreat(filePath, res.threatName || 'Trojan.Generic');
+    }
+  } catch (e) {
+    console.error('[FileProtection] scan failed:', filePath, e);
+  }
+}
+
+// 文件防护：威胁处理（隔离 + 弹窗）
+async function handleRealtimeThreat(filePath: string, threatName: string) {
+  let accessDenied = false;
+  try {
+    const qr: any = await invoke('quarantine_threat_file', { filePath, threatName, threatLevel: 'High' });
+    if (qr && qr.reason === 'access_denied') {
+      // 文件被活动进程占用，后端已自动弹"活动内存威胁"窗口
+      accessDenied = true;
+    }
+  } catch (e) {
+    console.warn('[FileProtection] quarantine threw:', filePath, e);
+  }
+  if (accessDenied) return;
+  try {
+    await invoke('show_file_protection_alert', { filePath, virusFamily: threatName });
+  } catch (e) {
+    console.error('[FileProtection] show alert failed:', filePath, e);
+  }
+}
+
+// ========== 基础防护（R3 进程监控，完整移植自旧版 BasicProtectionManager） ==========
+let _bpEnabled = false;
+let _bpMonitoring = false;
+let _bpUnlisten: (() => void) | null = null;
+let _bpPidInterval: number | null = null;
+const _bpScannedPids = new Set<number>();
+const _bpScanningPaths = new Set<string>();
+const _bpCleanPaths = new Map<string, number>();
+const _bpLockedFiles = new Set<string>();
+const _bpCleanTTL = 10000;
+let _bpWhitelist: string[] = ['predict_onnx.exe'];
+
+async function initBasicProtection() {
+  _bpEnabled = localStorage.getItem('basic_protection_enabled') !== 'false';
+  if (_bpEnabled) {
+    await startBasicMonitoring();
+  }
+}
+
+function isBasicMonitoringOn() {
+  return _bpEnabled && _bpMonitoring;
+}
+
+function setBasicProtectionEnabled(enabled: boolean) {
+  localStorage.setItem('basic_protection_enabled', String(enabled));
+  _bpEnabled = enabled;
+  if (enabled) { startBasicMonitoring(); } else { stopBasicMonitoring(); }
+  updateHomeProtectionStatus();
+}
+
+async function startBasicMonitoring() {
+  if (_bpMonitoring) return;
+  _bpMonitoring = true;
+  try {
+    await invoke('start_process_watcher');
+  } catch (e) { console.error('[BasicProtection] start watcher failed:', e); }
+  try {
+    _bpWhitelist = await invoke('get_whitelist_processes_command') || [];
+  } catch { _bpWhitelist = ['predict_onnx.exe']; }
+  try {
+    _bpUnlisten = await listen<any>('process-started', (event) => {
+      const payload = event.payload || {};
+      handleBasicNewProcess({ pid: payload.pid, name: payload.name || '', path: payload.path || null });
+    });
+  } catch (e) { console.error('[BasicProtection] listen process-started failed:', e); }
+  _bpPidInterval = window.setInterval(() => {
+    try {
+      invoke('get_running_pids').then((pids: any) => {
+        const set = new Set(Array.isArray(pids) ? pids : []);
+        for (const pid of _bpScannedPids) { if (!set.has(pid)) _bpScannedPids.delete(pid); }
+      }).catch(() => {});
+    } catch { /* noop */ }
+  }, 30000);
+  console.log('[BasicProtection] monitoring started');
+}
+
+function stopBasicMonitoring() {
+  if (!_bpMonitoring) return;
+  _bpMonitoring = false;
+  try { invoke('stop_process_watcher').catch(() => {}); } catch {}
+  if (_bpUnlisten) { try { _bpUnlisten(); } catch {} _bpUnlisten = null; }
+  if (_bpPidInterval) { clearInterval(_bpPidInterval); _bpPidInterval = null; }
+  _bpScannedPids.clear();
+  _bpCleanPaths.clear();
+}
+
+function isSystemOrTrustedProcess(p: { path: string; name: string }): boolean {
+  const lower = (p.path || '').toLowerCase().replace(/^[a-z]:/, '');
+  if (lower.includes('xiguasecurity')) return true;
+  const systemDirs = ['\\windows\\system32', '\\windows\\syswow64', '\\windows\\immersivecontrolpanel', '\\windows\\sysnative', '\\programdata\\microsoft\\', '\\windows defender\\', '\\windows\\explorer.exe'];
+  return systemDirs.some(d => lower.startsWith(d));
+}
+
+async function handleBasicNewProcess(event: { pid: number; name: string; path: string | null }) {
+  if (!isBasicMonitoringOn()) return;
+  if (_bpScannedPids.has(event.pid)) return;
+  _bpScannedPids.add(event.pid);
+  if (!event.path) return;
+  const lowerPath = event.path.toLowerCase();
+  const now = Date.now();
+  if (_bpLockedFiles.has(lowerPath)) {
+    await terminateBasicProcess(event.pid, event.name);
+    notifyBasicThreat(event.path, '已锁定的威胁文件');
+    return;
+  }
+  if (isSystemOrTrustedProcess({ path: event.path, name: event.name })) return;
+  const lastClean = _bpCleanPaths.get(lowerPath);
+  if (lastClean && (now - lastClean) < _bpCleanTTL) return;
+  const nameLower = event.name.toLowerCase();
+  if (_bpWhitelist.some(wp => nameLower === wp.toLowerCase())) { _bpCleanPaths.set(lowerPath, now); return; }
+  if (_bpScanningPaths.has(lowerPath)) return;
+  _bpScanningPaths.add(lowerPath);
+  try {
+    await scanBasicProcess({ pid: event.pid, path: event.path, name: event.name });
+  } finally {
+    _bpScanningPaths.delete(lowerPath);
+  }
+}
+
+async function scanBasicProcess(process: { pid: number; path: string; name: string }) {
+  if (!isBasicMonitoringOn()) return;
+  const nameLower = process.name.toLowerCase();
+  if (_bpWhitelist.some(wp => nameLower === wp.toLowerCase())) { _bpCleanPaths.set(process.path.toLowerCase(), Date.now()); return; }
+  try {
+    if (_bpLockedFiles.has(process.path.toLowerCase())) {
+      await terminateBasicProcess(process.pid, process.name);
+      notifyBasicThreat(process.path, '已锁定的威胁文件');
+      return;
+    }
+    // 脚本文件：走脚本引擎
+    if (isScriptFile(process.path)) {
+      if (localStorage.getItem('script_scan_enabled') !== 'false') {
+        try {
+          const scriptRes: any = await invoke('scan_script_file_command', { filePath: process.path });
+          if (scriptRes && scriptRes.is_malicious) {
+            const tn = scriptRes.virus_family || 'Trojan.Win32.BAT.Generic';
+            _bpCleanPaths.delete(process.path.toLowerCase());
+            _bpLockedFiles.add(process.path.toLowerCase());
+            await terminateBasicProcess(process.pid, process.name);
+            notifyBasicThreat(process.path, tn);
+            return;
+          }
+        } catch (e) { console.error('[BasicProtection] script scan error:', process.path, e); }
+      }
+      _bpCleanPaths.set(process.path.toLowerCase(), Date.now());
+      return;
+    }
+    // 云端哈希优先
+    if (isCloudHashEnabled()) {
+      try {
+        const hashes: (string | null)[] = await invoke('calculate_file_hashes_command', { filePaths: [process.path] });
+        const hash = hashes?.[0];
+        if (hash) {
+          const cloudRes: any = await invoke('cloud_hash_check_command', {
+            serverUrl: 'https://cloudapi.xiguastudio.top',
+            apiKey: 'scan_dcc33b100b8a485fb099a5dce4c4f486',
+            request: { hash },
+          });
+          if (cloudRes) {
+            if (cloudRes.result === 'white') { _bpCleanPaths.set(process.path.toLowerCase(), Date.now()); return; }
+            if (cloudRes.result === 'black') {
+              const tn = cloudRes.family || 'CloudHash';
+              _bpCleanPaths.delete(process.path.toLowerCase());
+              _bpLockedFiles.add(process.path.toLowerCase());
+              await terminateBasicProcess(process.pid, process.name);
+              notifyBasicThreat(process.path, tn);
+              return;
+            }
+          }
+        }
+      } catch (e) { console.error('[BasicProtection] cloud hash failed:', process.name, e); }
+    }
+    // 本地引擎
+    const result: any = await Promise.race([
+      invoke('scan_file_basic', { filePath: process.path, pid: process.pid, puaEnabled: localStorage.getItem('pua_protection_enabled') === 'true' }),
+      new Promise<any>((_, reject) => setTimeout(() => reject(new Error('scan timeout')), 5000)),
+    ]);
+    if (result && result.result === 'SUSPICIOUS') return;
+    if (result && result.isThreat && result.threatName) {
+      if (result.result === 'PUA') return;
+      _bpCleanPaths.delete(process.path.toLowerCase());
+      _bpLockedFiles.add(process.path.toLowerCase());
+      await terminateBasicProcess(process.pid, process.name);
+      notifyBasicThreat(process.path, result.threatName);
+    } else {
+      _bpCleanPaths.set(process.path.toLowerCase(), Date.now());
+    }
+  } catch (e) {
+    console.error('[BasicProtection] scan process failed:', process.name, e);
+  }
+}
+
+async function terminateBasicProcess(pid: number, processName: string) {
+  let killed = false;
+  try {
+    const driverOn = await invoke<boolean>('get_driver_protection').catch(() => false);
+    if (driverOn) {
+      try { await invoke('kill_process_via_driver', { pid }); killed = true; } catch {}
+    }
+  } catch { /* noop */ }
+  if (!killed) {
+    try { await invoke('terminate_process', { pid }); killed = true; } catch { /* try by name */ }
+  }
+  if (!killed) {
+    try { await invoke('kill_process_by_name_command', { processName: processName.replace(/\.exe$/i, '') }); } catch { /* noop */ }
+  }
+}
+
+function notifyBasicThreat(path: string, threatName: string) {
+  try {
+    const processName = path.split('\\').pop() || path.split('/').pop() || 'unknown.exe';
+    // 与旧版一致：弹拦截窗口（show_intercept_window），而非 toast
+    invoke('show_intercept_window', {
+      processName,
+      commandLine: path,
+      time: new Date().toLocaleString(),
+      interceptType: 'basic',
+    }).catch((e: any) => console.error('[BasicProtection] show intercept window failed:', e));
+    invoke('add_security_log', {
+      category: 'Driver', action: 'Blocked', summary: `基础防护拦截: ${threatName}`,
+      filePath: path, threatName, result: '已拦截', level: 'High',
+    }).catch(() => {});
+  } catch { /* noop */ }
 }
 
 // ========== Melix 拦截窗口（经 AVGuard 桥接的事件推送） ==========
@@ -1015,7 +1394,9 @@ function initSettingsPage() {
     fileToggle.checked = localStorage.getItem('file_protection_enabled') !== 'false';
     fileToggle.addEventListener('change', () => {
       localStorage.setItem('file_protection_enabled', String(fileToggle.checked));
+      _fpEnabled = fileToggle.checked;
       invoke('set_file_protection_enabled', { enabled: fileToggle.checked, scope: 'all' }).catch(() => {});
+      updateHomeProtectionStatus();
     });
   }
 
@@ -1120,16 +1501,34 @@ function initSettingsPage() {
     }
   });
 
-  // 版本号（若仍存在关于版本展示则填充）
-  const versionEl = $('#about-version');
+  // 当前软件版本（填充）
+  const versionEl = $('#current-version');
   if (versionEl) {
     const fillVersion = (v: string) => { if (v) versionEl.textContent = v; };
     if (window.__TAURI__ && window.__TAURI__.app && window.__TAURI__.app.getVersion) {
       window.__TAURI__.app.getVersion().then(fillVersion).catch(() => {});
     } else {
-      invoke('get_app_version').then((v: unknown) => fillVersion(String(v))).catch(() => {});
+      invoke('get_version_command').then((v: unknown) => fillVersion(String(v))).catch(() => {
+        invoke('get_app_version').then((v: unknown) => fillVersion(String(v))).catch(() => {});
+      });
     }
   }
+
+  // 软件检查更新（手动触发）
+  $('#about-update-btn')?.addEventListener('click', async () => {
+    try {
+      const result = await invoke<string>('check_update_command');
+      const updateInfo = JSON.parse(result) as UpdateInfo;
+      if (updateInfo && updateInfo.has_update) {
+        showUpdateNotification(updateInfo);
+      } else {
+        showToast('当前已是最新版本');
+      }
+    } catch (e) {
+      console.error('[Settings] Check update failed:', e);
+      showToast('检查更新失败：' + String(e));
+    }
+  });
 
   // 赞助（独立设置项）
   $('#about-sponsor-btn')?.addEventListener('click', () => {
@@ -1879,6 +2278,22 @@ function applyTheme(theme: string) {
   root.style.setProperty('--accent-primary', main);
 }
 
+// 应用主题模式（深浅色）：classic / colorful / dark
+function applyThemeMode(mode: string) {
+  document.documentElement.setAttribute('data-theme-mode', mode);
+}
+
+// 应用窗口材质（backdrop）：none / acrylic / mica / micaAlt
+function applyWindowBackdrop(backdrop: string) {
+  const root = document.documentElement;
+  root.setAttribute('data-backdrop', backdrop);
+  root.setAttribute('data-acrylic', (backdrop !== 'none').toString());
+  const themeMode = localStorage.getItem('themeMode') || 'colorful';
+  invoke('set_window_backdrop', { backdrop, themeMode }).catch((e: any) => {
+    console.error('[Backdrop] Failed:', e);
+  });
+}
+
 function hexToRgba(hex: string, alpha: number): string {
   const h = hex.replace('#', '');
   const r = parseInt(h.substring(0, 2), 16);
@@ -2004,12 +2419,12 @@ function addScanThreatEntry(virusFamily: string, filePath: string, probability: 
     // 优先使用后端分类，否则根据病毒家族智能推断中文分类
     const cat = familyCategory || inferThreatCategory(virusFamily);
     const badge = cat ? `<span class="threat-category-badge">${escapeHtml(cat)}</span>` : '';
+    entry.setAttribute('data-path', filePath);
     entry.innerHTML = `
       <input type="checkbox" class="threat-checkbox" checked>
       ${badge}
       <span class="threat-name">${escapeHtml(virusFamily || 'Malware')}</span>
-      <span class="threat-path-simple" title="${escapeHtml(filePath)}">${escapeHtml(filePath)}</span>
-      <span class="scan-threat-prob">${(probability * 100).toFixed(1)}%</span>`;
+      <span class="threat-path-simple" title="${escapeHtml(filePath)}">${escapeHtml(filePath)}</span>`;
     area.prepend(entry);
     while (area.children.length > 30) area.removeChild(area.lastChild!);
   }
@@ -2275,12 +2690,22 @@ async function startRealScan(mode: string) {
     window.clearInterval(refreshTimer);
 
     if (scanState.stop) {
+      // 累计本次扫描文件数，刷新主页"已扫描文件"
+      const prev = parseInt(localStorage.getItem('xigua_files_scanned') || '0', 10);
+      localStorage.setItem('xigua_files_scanned', String(prev + scanState.index));
       showScanResultView(`扫描已停止：已扫描 ${scanState.index.toLocaleString()} 个文件，发现 ${scanState.threats} 个威胁`);
+      initHomeStats(); // 刷新主页"已扫描文件"
       return;
     }
     localStorage.setItem('xigua_threats_blocked', String(scanState.threats));
+    // 累计本次扫描文件数，刷新主页"已扫描文件"
+    {
+      const prev = parseInt(localStorage.getItem('xigua_files_scanned') || '0', 10);
+      localStorage.setItem('xigua_files_scanned', String(prev + scanState.index));
+    }
     const elapsed = Math.floor((Date.now() - scanState.startTime) / 1000);
     showScanResultView(`扫描完成：发现 ${scanState.threats} 个威胁，扫描 ${scanState.index.toLocaleString()} 个文件，用时 ${elapsed} 秒`);
+    initHomeStats(); // 刷新主页"已扫描文件"
 
     // 记录扫描完成事件
     try {
@@ -2322,8 +2747,30 @@ function initRealScan() {
     e.stopImmediatePropagation();
     showScanView('mode');
   }, true);
-  $('#scanHandleThreatsBtn')?.addEventListener('click', (e) => {
+  $('#scanHandleThreatsBtn')?.addEventListener('click', async (e) => {
     e.stopImmediatePropagation();
+    // 收集所有勾选的威胁条目路径
+    const selected: string[] = [];
+    $$('#scanThreatsArea .scan-threat-entry').forEach(el => {
+      const cb = el.querySelector<HTMLInputElement>('.threat-checkbox');
+      if (cb && cb.checked) {
+        const path = el.getAttribute('data-path');
+        if (path) selected.push(path);
+      }
+    });
+    if (selected.length === 0) {
+      showToast('未选中任何威胁项');
+      return;
+    }
+    try {
+      const res: any = await invoke('quarantine_scan_files', { paths: selected });
+      const quarantined = res?.quarantined ?? 0;
+      showToast(`已隔离 ${quarantined} 个威胁项`);
+      renderQuarantine();
+    } catch (err) {
+      console.error('[Scan] quarantine failed:', err);
+      showToast('处理失败：' + String(err));
+    }
     showScanView('mode');
   }, true);
 }
@@ -2339,9 +2786,10 @@ function initPageDataHooks() {
     });
   });
 
-  // 主页快捷扫描按钮
-  $('.home-scan-btn')?.addEventListener('click', () => {
-    navigateTo('scan');
+  // 主页操作按钮：跳转目标跟随 data-page（防护未开启/部分开启→防护页，正常→扫描页）
+  $('.home-scan-btn')?.addEventListener('click', (e) => {
+    const btn = e.currentTarget as HTMLElement;
+    navigateTo(btn.dataset.page || 'scan');
   });
 }
 
@@ -2486,6 +2934,22 @@ function initCustomSelects() {
         options.querySelectorAll('[data-selected]').forEach(o => o.removeAttribute('data-selected'));
         opt.setAttribute('data-selected', '');
       }
+    } else if (target === 'theme-mode-select') {
+      const saved = localStorage.getItem('themeMode') || 'colorful';
+      const opt = options.querySelector<HTMLElement>(`[data-value="${saved}"]`);
+      if (opt) {
+        valueEl.textContent = opt.textContent;
+        options.querySelectorAll('[data-selected]').forEach(o => o.removeAttribute('data-selected'));
+        opt.setAttribute('data-selected', '');
+      }
+    } else if (target === 'window-backdrop-select') {
+      const saved = localStorage.getItem('windowBackdrop') || 'none';
+      const opt = options.querySelector<HTMLElement>(`[data-value="${saved}"]`);
+      if (opt) {
+        valueEl.textContent = opt.textContent;
+        options.querySelectorAll('[data-selected]').forEach(o => o.removeAttribute('data-selected'));
+        opt.setAttribute('data-selected', '');
+      }
     } else if (target === 'language-select') {
       const saved = localStorage.getItem('language') || 'zh-CN';
       const opt = options.querySelector<HTMLElement>(`[data-value="${saved}"]`);
@@ -2517,6 +2981,12 @@ function initCustomSelects() {
         if (target === 'theme-select') {
           localStorage.setItem('theme', value);
           applyTheme(value);
+        } else if (target === 'theme-mode-select') {
+          localStorage.setItem('themeMode', value);
+          applyThemeMode(value);
+        } else if (target === 'window-backdrop-select') {
+          localStorage.setItem('windowBackdrop', value);
+          applyWindowBackdrop(value);
         } else if (target === 'language-select') {
           localStorage.setItem('language', value);
           invoke('set_language', { lang: value }).catch(() => {});
@@ -2887,6 +3357,10 @@ function init() {
   applyI18n();
   const savedTheme = localStorage.getItem('theme') || 'blue';
   applyTheme(savedTheme);
+  // 主题模式（深浅色）；窗口材质已隐藏/弃用，启动时固定为 none，避免亚克力/云母 bug
+  applyThemeMode(localStorage.getItem('themeMode') || 'colorful');
+  localStorage.setItem('windowBackdrop', 'none');
+  applyWindowBackdrop('none');
   const savedBg = localStorage.getItem('custom_bg_path');
   if (savedBg) applyCustomBg(savedBg);
 
@@ -2897,6 +3371,8 @@ function init() {
   initProtectionPage();
   initSettingsPage();
   initEndpointProtection();
+  initRealtimeFileProtection();
+  initBasicProtection();
   initLogsToolbar();
   initRealScan();
   initPageDataHooks();

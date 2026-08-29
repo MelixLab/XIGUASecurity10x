@@ -2644,35 +2644,6 @@ Cleanup:
 }
 
 //=============================================================================
-// StopDriverIfRunning - 若驱动在运行则先停止 (卸载旧驱动)
-//=============================================================================
-static void
-StopDriverIfRunning(
-    _In_ SC_HANDLE hSvc
-)
-{
-    SERVICE_STATUS_PROCESS ssp;
-    DWORD bytesNeeded;
-
-    if (QueryServiceStatusEx(hSvc, SC_STATUS_PROCESS_INFO,
-                             (LPBYTE)&ssp, sizeof(ssp), &bytesNeeded))
-    {
-        if (ssp.dwCurrentState != SERVICE_STOPPED && ssp.dwCurrentState != SERVICE_STOP_PENDING)
-        {
-            SERVICE_STATUS svcStatus;
-            if (ControlService(hSvc, SERVICE_CONTROL_STOP, &svcStatus))
-            {
-                printf("[AVDriverMgr] Stopped old driver instance\n");
-            }
-            else
-            {
-                printf("[AVDriverMgr] ControlService(STOP) failed (error: %lu)\n", GetLastError());
-            }
-        }
-    }
-}
-
-//=============================================================================
 // StartDriver - 启动驱动服务
 //
 // 先停止旧实例(若有), 再启动当前驱动文件, 确保加载的是最新版本
@@ -2692,23 +2663,52 @@ StartDriver(VOID)
     }
 
     hSvc = OpenServiceW(hSCM, L"AVDriver",
-                        SERVICE_STOP | SERVICE_START | SERVICE_QUERY_STATUS);
+                        SERVICE_START | SERVICE_QUERY_STATUS);
     if (hSvc == NULL)
     {
         printf("[AVDriverMgr] OpenService failed (error: %lu)\n", GetLastError());
         goto Cleanup;
     }
 
-    // 若驱动已在运行, 先停止以卸载旧版本
-    StopDriverIfRunning(hSvc);
+    //
+    // 【关键 - 驱动设计为不可卸载, 重连时复用已加载驱动】
+    // 原实现在此无条件调用 StopDriverIfRunning 停止旧驱动再重启, 每次
+    // Agent 重连都会先卸载再重新加载驱动。本驱动设计之初即不允许卸载
+    // (卸载即触发 DriverUnload, 属于主动防御), 因此这里必须改为:
+    //   1) 驱动已在运行 -> 直接复用, 不停止、不卸载。
+    //   2) 驱动未运行/已停止 -> 才 StartServiceW 启动。
+    // 这样 Agent 每次重启都会复用已加载的驱动实例, 不再触发卸载。
+    //
+    {
+        SERVICE_STATUS_PROCESS ssp;
+        DWORD bytesNeeded = 0;
+        BOOL alreadyRunning = FALSE;
 
-    // 启动驱动
+        if (QueryServiceStatusEx(hSvc, SC_STATUS_PROCESS_INFO,
+                                 (LPBYTE)&ssp, sizeof(ssp), &bytesNeeded))
+        {
+            if (ssp.dwCurrentState != SERVICE_STOPPED &&
+                ssp.dwCurrentState != SERVICE_STOP_PENDING)
+            {
+                alreadyRunning = TRUE;
+            }
+        }
+
+        if (alreadyRunning)
+        {
+            printf("[AVDriverMgr] Driver already running, reusing loaded instance\n");
+            result = TRUE;
+            goto Cleanup;
+        }
+    }
+
+    // 启动驱动 (仅当驱动未运行时)
     if (!StartServiceW(hSvc, 0, NULL))
     {
         DWORD err = GetLastError();
         if (err == ERROR_SERVICE_ALREADY_RUNNING)
         {
-            printf("[AVDriverMgr] Driver already running\n");
+            printf("[AVDriverMgr] Driver already running (race), reusing\n");
             result = TRUE;
         }
         else
@@ -3097,21 +3097,46 @@ StartXgsDriver(VOID)
     }
 
     hSvc = OpenServiceW(hSCM, L"XGSRansomFilter",
-                        SERVICE_STOP | SERVICE_START | SERVICE_QUERY_STATUS);
+                        SERVICE_START | SERVICE_QUERY_STATUS);
     if (hSvc == NULL)
     {
         printf("[XGSMgr] OpenService failed (error: %lu)\n", GetLastError());
         goto Cleanup;
     }
 
-    StopDriverIfRunning(hSvc);
+    //
+    // 【与 AVDriver 一致】XGS 驱动同样设计为不可卸载, Agent 重连时复用
+    // 已加载实例, 不停止、不卸载。仅在驱动未运行时才 StartServiceW 启动。
+    //
+    {
+        SERVICE_STATUS_PROCESS ssp;
+        DWORD bytesNeeded = 0;
+        BOOL alreadyRunning = FALSE;
+
+        if (QueryServiceStatusEx(hSvc, SC_STATUS_PROCESS_INFO,
+                                 (LPBYTE)&ssp, sizeof(ssp), &bytesNeeded))
+        {
+            if (ssp.dwCurrentState != SERVICE_STOPPED &&
+                ssp.dwCurrentState != SERVICE_STOP_PENDING)
+            {
+                alreadyRunning = TRUE;
+            }
+        }
+
+        if (alreadyRunning)
+        {
+            printf("[XGSMgr] Driver already running, reusing loaded instance\n");
+            result = TRUE;
+            goto Cleanup;
+        }
+    }
 
     if (!StartServiceW(hSvc, 0, NULL))
     {
         DWORD err = GetLastError();
         if (err == ERROR_SERVICE_ALREADY_RUNNING)
         {
-            printf("[XGSMgr] Driver already running\n");
+            printf("[XGSMgr] Driver already running (race), reusing\n");
             result = TRUE;
         }
         else

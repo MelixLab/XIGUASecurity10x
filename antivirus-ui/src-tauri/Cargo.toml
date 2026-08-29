@@ -1,6 +1,6 @@
 [package]
 name = "XIGUASecurity"
-version = "10.2.34"
+version = "10.2.35"
 description = "A modern antivirus security application"
 authors = ["you"]
 edition = "2021"

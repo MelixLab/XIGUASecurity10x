@@ -547,6 +547,9 @@
 
     // ========== Home Protection Status ==========
     function initHomeProtectionStatus() {
+        // 主页防护状态已由 src/bridge.ts 的 updateHomeProtectionStatus 全权负责
+        // （含按钮文案/跳转、插画切换），此处直接禁用，避免两套逻辑互相覆盖导致闪烁。
+        return;
         const img = $('#homeIllustration');
         const title = $('#homeTitle');
         const sub = $('#homeSub');

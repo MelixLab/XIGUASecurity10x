@@ -129,30 +129,12 @@
                         <h1 class="home-title" id="homeTitle" data-i18n="home.title">Protected</h1>
                         <p class="home-sub" id="homeSub" data-i18n="home.sub">All protection features are active on this device</p>
                         <div class="home-status-line" id="homeStatusLine">
-                            <span class="status-dot" id="homeStatusDot"></span>
                             <span id="homeStatusText" data-i18n="home.statusOn">Real-time protection on &nbsp;·&nbsp; Definitions up to date</span>
                         </div>
-                        <button class="btn btn-primary home-scan-btn" data-page="scan">
+                        <button class="btn btn-primary home-scan-btn" id="homeActionBtn" data-page="scan">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-                            <span data-i18n="home.quickScan">Quick Scan</span>
+                            <span id="homeScanBtnText" data-i18n="home.quickScan">Quick Scan</span>
                         </button>
-                        <!-- 建议卡片（浮动覆盖） -->
-                        <div class="home-suggestion" id="homeSuggestion" style="display:none">
-                            <div class="suggestion-card" id="suggestionCard">
-                                <div class="suggestion-header">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                                    <span data-i18n="home.suggestionTitle">需要执行操作</span>
-                                    <button class="suggestion-dismiss" id="suggestionDismiss" title="忽略">
-                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                                    </button>
-                                </div>
-                                <div class="suggestion-body" id="suggestionBody"></div>
-                                <div class="suggestion-footer">
-                                    <span data-i18n="home.suggestionFooter">点击前往防护页面启用所有防护</span>
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
-                                </div>
-                            </div>
-                        </div>
                     </div>
                     <div class="home-stats">
                         <div class="home-stat">
@@ -636,6 +618,41 @@
                         </div>
                         <div class="setting-item">
                             <div class="setting-info">
+                                <span data-i18n="settings.themeMode">主题模式</span>
+                                <span class="setting-desc" data-i18n="settings.themeModeDesc">浅色 / 深色 / 经典外观</span>
+                            </div>
+                            <div class="custom-select" data-target="theme-mode-select">
+                                <div class="custom-select-trigger">
+                                    <span class="custom-select-value" id="theme-mode-select-value">彩色</span>
+                                    <svg class="custom-select-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                                </div>
+                                <div class="custom-select-options" id="theme-mode-select-options">
+                                    <div class="custom-select-option" data-value="colorful" data-selected>彩色</div>
+                                    <div class="custom-select-option" data-value="dark">深色</div>
+                                    <div class="custom-select-option" data-value="classic">经典</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="setting-item" style="display:none;">
+                            <div class="setting-info">
+                                <span data-i18n="settings.windowStyle">窗口样式</span>
+                                <span class="setting-desc" data-i18n="settings.windowStyleDesc">无 / 亚克力 / 云母 / 云母变体</span>
+                            </div>
+                            <div class="custom-select" data-target="window-backdrop-select">
+                                <div class="custom-select-trigger">
+                                    <span class="custom-select-value" id="window-backdrop-select-value">无</span>
+                                    <svg class="custom-select-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                                </div>
+                                <div class="custom-select-options" id="window-backdrop-select-options">
+                                    <div class="custom-select-option" data-value="none" data-selected>无</div>
+                                    <div class="custom-select-option" data-value="acrylic">亚克力</div>
+                                    <div class="custom-select-option" data-value="mica">云母</div>
+                                    <div class="custom-select-option" data-value="micaAlt">云母变体</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="setting-item">
+                            <div class="setting-info">
                                 <span data-i18n="settings.language">Language</span>
                                 <span class="setting-desc" data-i18n="settings.languageDesc">Interface display language</span>
                             </div>
@@ -661,6 +678,19 @@
                     </div>
                     <div class="settings-group">
                         <h3 data-i18n="settings.about">About</h3>
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <span data-i18n="settings.currentVersion">Current Version</span>
+                                <span class="setting-desc" id="current-version">-</span>
+                            </div>
+                        </div>
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <span data-i18n="settings.checkUpdate">Check for Updates</span>
+                                <span class="setting-desc" data-i18n="settings.checkUpdateDesc">Check for the latest version of the software</span>
+                            </div>
+                            <button class="btn btn-secondary" id="about-update-btn" data-i18n="settings.checkUpdateBtn">Check Update</button>
+                        </div>
                         <div class="setting-item">
                             <div class="setting-info">
                                 <span data-i18n="settings.sponsor">Sponsor</span>

@@ -124,8 +124,8 @@ body {
 }
 
 .titlebar-title {
-    font-size: 13px;
-    font-weight: 600;
+    font-size: 12px;
+    font-weight: 500;
     letter-spacing: -0.2px;
     color: var(--text-primary);
 }
@@ -1860,6 +1860,119 @@ body {
     background: var(--border-color);
     border-radius: 10px;
 }
+
+/* ========== Theme Modes (深浅色) ========== */
+[data-theme-mode="dark"] {
+    --bg-window: #1e1e1e;
+    --bg-nav: #252526;
+    --bg-panel: #2d2d30;
+    --bg-card: #2d2d30;
+    --bg-input: #333337;
+    --bg-hover: rgba(255, 255, 255, 0.08);
+    --border-color: #3e3e42;
+    --text-primary: #e4e4e4;
+    --text-secondary: #a0a0a0;
+    --text-muted: #7a7a7a;
+    --shadow-lg: 0 4px 24px rgba(0, 0, 0, 0.6);
+    color-scheme: dark;
+}
+[data-theme-mode="dark"] body,
+[data-theme-mode="dark"] #app {
+    background-color: var(--bg-window);
+}
+[data-theme-mode="dark"] .titlebar,
+[data-theme-mode="dark"] .sidebar {
+    background-color: var(--bg-nav);
+}
+[data-theme-mode="dark"] #loading_overlay {
+    background: var(--bg-window);
+}
+[data-theme-mode="dark"] .custom-select-options {
+    background: var(--bg-panel);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+[data-theme-mode="classic"] {
+    --bg-window: #fafafa;
+    --bg-nav: #ffffff;
+    --bg-panel: #ffffff;
+    --bg-card: #ffffff;
+    --border-color: #e2e2e2;
+    color-scheme: light;
+}
+
+/* ========== 亚克力 / 云母效果 ========== */
+/* 说明：透明 WebView 下 DWM 亚克力/云母模糊经常失效，导致"直接变透明"。
+   这里改用 CSS 毛玻璃（半透明底色 + backdrop-filter 模糊）来呈现，
+   既保留主题色、不会看穿窗口，又有毛玻璃观感。 */
+[data-acrylic="true"] body {
+    background: transparent;
+}
+[data-acrylic="true"] #app {
+    background-color: color-mix(in srgb, var(--bg-window) 72%, transparent);
+}
+[data-acrylic="true"] .titlebar,
+[data-acrylic="true"] .sidebar {
+    background-color: color-mix(in srgb, var(--bg-nav) 50%, transparent);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+}
+[data-acrylic="true"] .card,
+[data-acrylic="true"] .action-card,
+[data-acrylic="true"] .setting-item,
+[data-acrylic="true"] .logs-container,
+[data-acrylic="true"] .scan-card,
+[data-acrylic="true"] .scan-main-card,
+[data-acrylic="true"] .quarantine-item,
+[data-acrylic="true"] .about-card,
+[data-acrylic="true"] .custom-select-options {
+    background: color-mix(in srgb, var(--bg-card) 78%, transparent);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+}
+[data-acrylic="true"][data-theme-mode="dark"] #app {
+    background-color: rgba(30, 30, 30, 0.72);
+}
+[data-acrylic="true"][data-theme-mode="dark"] .card,
+[data-acrylic="true"][data-theme-mode="dark"] .action-card,
+[data-acrylic="true"][data-theme-mode="dark"] .setting-item,
+[data-acrylic="true"][data-theme-mode="dark"] .logs-container,
+[data-acrylic="true"][data-theme-mode="dark"] .scan-card,
+[data-acrylic="true"][data-theme-mode="dark"] .quarantine-item {
+    background: rgba(45, 45, 48, 0.82);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+}
+
+/* 云母：类似但更实心一点，缝隙更少 */
+[data-acrylic="true"][data-backdrop="mica"] #app,
+[data-acrylic="true"][data-backdrop="micaAlt"] #app {
+    background-color: color-mix(in srgb, var(--bg-window) 88%, transparent);
+}
+[data-acrylic="true"][data-backdrop="mica"] .card,
+[data-acrylic="true"][data-backdrop="mica"] .action-card,
+[data-acrylic="true"][data-backdrop="mica"] .setting-item,
+[data-acrylic="true"][data-backdrop="mica"] .logs-container,
+[data-acrylic="true"][data-backdrop="mica"] .scan-card,
+[data-acrylic="true"][data-backdrop="mica"] .quarantine-item,
+[data-acrylic="true"][data-backdrop="micaAlt"] .card,
+[data-acrylic="true"][data-backdrop="micaAlt"] .action-card,
+[data-acrylic="true"][data-backdrop="micaAlt"] .setting-item,
+[data-acrylic="true"][data-backdrop="micaAlt"] .logs-container,
+[data-acrylic="true"][data-backdrop="micaAlt"] .scan-card,
+[data-acrylic="true"][data-backdrop="micaAlt"] .quarantine-item {
+    background: var(--bg-card);
+    box-shadow: none;
+}
+[data-acrylic="true"][data-backdrop="mica"] .titlebar,
+[data-acrylic="true"][data-backdrop="mica"] .sidebar,
+[data-acrylic="true"][data-backdrop="micaAlt"] .titlebar,
+[data-acrylic="true"][data-backdrop="micaAlt"] .sidebar {
+    background-color: color-mix(in srgb, var(--bg-nav) 55%, transparent);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+}
+
 
 ::-webkit-scrollbar-thumb:hover {
     background: var(--text-muted);

@@ -274,7 +274,7 @@ mod announcement;
 use announcement::{fetch_latest_announcement, Announcement};
 
 mod quarantine;
-use quarantine::{QuarantineManager, quarantine_threat_file, restore_quarantined_file, delete_quarantined_file, get_quarantined_files, get_quarantine_stats};
+use quarantine::{QuarantineManager, quarantine_threat_file, restore_quarantined_file, delete_quarantined_file, get_quarantined_files, get_quarantine_stats, quarantine_scan_files};
 
 // 活动内存威胁处置模块（清除被占用文件：开机时清除 / 不重启而清除）
 mod active_threat;
@@ -4726,11 +4726,23 @@ fn stop_driver_protection_sync() {
     }
 }
 
+// 驱动防护启动幂等锁：防止重复提权（UAC）导致重复启动驱动防护
+static DRIVER_STARTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 // 在后台线程启动驱动防护（AVModel + Agent + av_driver_client）。
 // 供 set_driver_protection(true) 与"启动时强制开启驱动防护"共用，
 // 避免 setup 里依赖 State 的生命周期问题。
 #[cfg(not(feature = "ms_store"))]
 fn start_driver_protection_background(app_handle: tauri::AppHandle) {
+    // 幂等保护：驱动已连接 或 正在启动中则跳过，避免重复提权（UAC）导致重复启动驱动防护
+    if av_driver_client::is_av_driver_connected() {
+        log_to_file("[DriverProtection] already connected, skip start");
+        return;
+    }
+    if DRIVER_STARTING.compare_exchange(false, true, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst).is_err() {
+        log_to_file("[DriverProtection] already starting, skip duplicate start");
+        return;
+    }
     log_to_file("[DriverProtection] start_driver_protection_background");
     std::thread::spawn(move || {
         // 先启动 AVModel，再启动 Agent（AVModel 必须先于 Agent，否则 OB 回调剥离其权限）
@@ -4800,6 +4812,8 @@ fn start_driver_protection_background(app_handle: tauri::AppHandle) {
                 log_to_file("[DriverProtection] start_interceptor_tool panicked");
             }
         }
+        // 释放幂等锁，允许后续再次启动
+        DRIVER_STARTING.store(false, std::sync::atomic::Ordering::SeqCst);
     });
 }
 
@@ -11757,6 +11771,7 @@ pub fn run() {
             delete_quarantined_file,
             get_quarantined_files,
             get_quarantine_stats,
+            quarantine_scan_files,
             active_threat::show_active_threat_alert,
             active_threat::close_active_threat_alert_window,
             active_threat::get_pending_active_threat_data,

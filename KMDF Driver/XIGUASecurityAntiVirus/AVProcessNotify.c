@@ -1214,74 +1214,37 @@ AvpProcessNotifyCallback(
     KeReleaseSpinLock(&g_NotifyLock, oldIrql);
 
     //
-    // 加入挂起列表: 线程创建回调会记录该进程的每个新线程 TID
-    // (作为进程级挂起的补充, 防止进程级挂起遗漏新线程)
+    // 加入挂起列表: 线程创建回调会记录该进程的每个新线程 TID,
+    // 并由 PASSIVE_LEVEL 挂起工作线程 (AvpSuspendWorkerRoutine) 执行
+    // 进程级/线程级挂起。
+    //
+    // 【关键 - 修复 agent 重连蓝屏 (IRQL_NOT_LESS_OR_EQUAL, 报 NTOSKRNL)】
+    // 原实现在此【同步调用 ZwOpenProcess + ZwSuspendProcess】对进程进行挂起。
+    // 但进程创建通知回调是在系统全局进程通知锁 (PspCreateProcessNotifyRoutineLock)
+    // 内被调用的, 在此路径内调用会阻塞的 Zw* 系统调用 (ZwSuspendProcess 会
+    // 获取目标进程的 ProcessSuspendLock 并进行完整内核同步) 极不安全:
+    //   - 当 agent 被关闭后重启 (重连) 时, 新的 agent 进程启动; 由于旧的
+    //     g_LastClientActivityTicks 尚未超时, 且新 agent 位于受保护目录
+    //     (如 \Program Files\...), 回调会对新 agent 进程执行同步挂起。
+    //   - 此时在通知锁路径内调用 ZwOpenProcess/ZwSuspendProcess, 会以错误的
+    //     IRQL/锁状态进入 ntoskrnl, 触发 IRQL_NOT_LESS_OR_EQUAL (蓝屏报
+    //     NTOSKRNL.EXE, 而非本驱动)。
+    // 因此这里只负责把 PID 加入挂起列表并唤醒工作线程, 实际的挂起动作
+    // 全部移交到 PASSIVE_LEVEL 的 AvpSuspendWorkerRoutine (工作线程等待
+    // g_SuspendWorkerEvent, 超时 1ms 兜底, 会立即处理新条目), 彻底消除
+    // 在通知回调路径内调用 Zw* 的崩溃根源, 同时保持"进程出生即冻结"的
+    // 拦截效果 (仅延迟约 1ms, 主线程在回调返回后仍会被第一时间挂起)。
     //
     AvpAddToSuspendList((UINT32)(ULONG_PTR)ProcessId);
 
     //
-    // 同步进程级挂起 (在回调中直接执行, 消除竞态窗口)
-    //
-    // PsSetCreateProcessNotifyRoutineEx 回调运行在 PASSIVE_LEVEL,
-    // 可以直接调用 Zw* 系统 API。
-    //
-    // 关键: 必须在回调返回前就挂起进程!
-    // 回调返回后系统才会恢复主线程调度, 此时进程已被冻结,
-    // 主线程一行代码都执行不了, 窗口不可能出现。
-    //
-    // 异步工作线程的 ZwSuspendProcess 存在竞态窗口:
-    //   回调返回 -> 系统恢复主线程 -> 进程运行 -> 工作线程才挂起
-    // 同步挂起彻底消除这个窗口。
+    // 唤醒挂起工作线程, 使其立即处理新条目 (无需等待线程创建回调触发)
     //
     {
-        HANDLE hProcess = NULL;
-        OBJECT_ATTRIBUTES oa;
-        CLIENT_ID cid;
-        NTSTATUS suspendStatus;
-
-        InitializeObjectAttributes(&oa, NULL, 0, NULL, NULL);
-        cid.UniqueProcess = (HANDLE)(ULONG_PTR)ProcessId;
-        cid.UniqueThread = NULL;
-
-        suspendStatus = ZwOpenProcess(&hProcess, PROCESS_SUSPEND_RESUME, &oa, &cid);
-        if (NT_SUCCESS(suspendStatus) && g_pZwSuspendProcess != NULL)
-        {
-            suspendStatus = g_pZwSuspendProcess(hProcess);
-            if (NT_SUCCESS(suspendStatus))
-            {
-                //
-                // 标记已执行进程级挂起, 工作线程不会重复挂起
-                //
-                KIRQL irql2;
-                UINT32 idx;
-
-                KeAcquireSpinLock(&g_SuspendListLock, &irql2);
-                for (idx = 0; idx < AV_SUSPEND_LIST_MAX; idx++)
-                {
-                    if (g_SuspendList[idx].Active &&
-                        g_SuspendList[idx].ProcessId == (UINT32)(ULONG_PTR)ProcessId)
-                    {
-                        g_SuspendList[idx].ProcessSuspended = TRUE;
-                        break;
-                    }
-                }
-                KeReleaseSpinLock(&g_SuspendListLock, irql2);
-
-                KdPrint(("AVProcess: Synchronous suspend PID %lu (in callback)\n",
-                         (ULONG)(ULONG_PTR)ProcessId));
-            }
-            else
-            {
-                KdPrint(("AVProcess: ZwSuspendProcess(PID %lu) failed 0x%08X in callback\n",
-                         (ULONG)(ULONG_PTR)ProcessId, suspendStatus));
-            }
-            ZwClose(hProcess);
-        }
-        else
-        {
-            KdPrint(("AVProcess: ZwOpenProcess(PID %lu) failed 0x%08X in callback\n",
-                     (ULONG)(ULONG_PTR)ProcessId, suspendStatus));
-        }
+        KIRQL irql2;
+        KeAcquireSpinLock(&g_SuspendListLock, &irql2);
+        KeSetEvent(&g_SuspendWorkerEvent, IO_NO_INCREMENT, FALSE);
+        KeReleaseSpinLock(&g_SuspendListLock, irql2);
     }
 
     //
@@ -1468,14 +1431,22 @@ AvProcessNotifyUninitialize(
     }
 
     //
-    // 停止挂起工作线程并等待其退出
-    // (工作线程可能正在 PASSIVE_LEVEL 执行 Zw* 挂起, 必须等它结束)
+    // 停止挂起工作线程。
+    //
+    // 【关键 - 修复重连/卸载蓝屏 (IRQL_NOT_LESS_OR_EQUAL, 报 NTOSKRNL)】
+    // 原实现在此调用 KeWaitForSingleObject 无限期等待工作线程退出。
+    // 但 DriverUnload 由 IopLoadUnloadDriver 在工作线程(ExpWorkerThread)
+    // 上下文中调用, 实际运行在 DISPATCH_LEVEL。在 DISPATCH_LEVEL 调用
+    // KeWaitForSingleObject(无超时) 会触发 IRQL_NOT_LESS_OR_EQUAL 蓝屏
+    // (页错误发生在 nt!KeWaitForSingleObject 内部, 故报 NTOSKRNL.EXE)。
+    // 因此这里不能等待工作线程, 只能置停止标志 + 唤醒事件让工作线程自行
+    // 退出; 关闭句柄不等待线程结束, 在 DISPATCH_LEVEL 安全。
+    // 挂起工作线程在收到停止标志后会退出 while 循环并返回。
     //
     g_SuspendWorkerStop = TRUE;
     KeSetEvent(&g_SuspendWorkerEvent, IO_NO_INCREMENT, FALSE);  // 唤醒工作线程使其检查停止标志
     if (g_SuspendWorkerHandle != NULL)
     {
-        KeWaitForSingleObject(g_SuspendWorkerHandle, Executive, KernelMode, FALSE, NULL);
         ZwClose(g_SuspendWorkerHandle);
         g_SuspendWorkerHandle = NULL;
     }

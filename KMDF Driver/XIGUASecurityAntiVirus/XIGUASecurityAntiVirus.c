@@ -203,7 +203,26 @@ AvDispatchCreateClose(
     _In_ PIRP Irp
     )
 {
-    UNREFERENCED_PARAMETER(DeviceObject);
+    PDEVICE_CONTEXT devContext;
+
+    devContext = (PDEVICE_CONTEXT)DeviceObject->DeviceExtension;
+
+    if (Irp->Tail.Overlay.CurrentStackLocation->MajorFunction == IRP_MJ_CLOSE)
+    {
+        //
+        // agent 关闭句柄(退出/断开)时,清理该进程遗留的会话。
+        // 否则旧会话长期滞留,反复重连会不断累积直到 AV_MAX_SESSIONS 用尽,
+        // 且遗留的旧会话可能让后续重连逻辑对同一进程产生重复/陈旧会话状态,
+        // 干扰重连。此处按 ProcessId 清除,保证每次重连都重新建立干净会话。
+        //
+        AvSessionRemoveByProcess(
+            &devContext->SessionLock,
+            devContext->Sessions,
+            AV_MAX_SESSIONS,
+            &devContext->SessionCount,
+            PsGetCurrentProcessId()
+            );
+    }
 
     Irp->IoStatus.Status = STATUS_SUCCESS;
     Irp->IoStatus.Information = 0;
