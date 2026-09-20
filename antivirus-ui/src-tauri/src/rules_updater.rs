@@ -9,7 +9,9 @@ use tauri::Emitter;
 use lazy_static::lazy_static;
 
 lazy_static! {
-    static ref RULES_SERVER_URL: Mutex<String> = Mutex::new("http://103.118.245.82:5001".to_string());
+    static ref RULES_SERVER_URL: Mutex<String> = Mutex::new(
+        std::env::var("XIGUA_RULES_SERVER_URL").unwrap_or_default()
+    );
 }
 
 /// 设置规则库服务端地址

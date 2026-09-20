@@ -8995,8 +8995,8 @@ async fn suspicious_analyze_file(_app: tauri::AppHandle, file_path: String, _pid
         .text("run_time", "120");
 
     let upload_resp = client
-        .post(format!("{}/v3/file/upload", SANDBOX_RELAY_BASE))
-        .header("X-API-Key", SANDBOX_API_KEY)
+        .post(format!("{}/v3/file/upload", sandbox_relay_base()))
+        .header("X-API-Key", &sandbox_api_key())
         .multipart(form)
         .send()
         .await
@@ -9013,8 +9013,8 @@ async fn suspicious_analyze_file(_app: tauri::AppHandle, file_path: String, _pid
         }
 
         let report_resp = client
-            .post(format!("{}/v3/file/report", SANDBOX_RELAY_BASE))
-            .header("X-API-Key", SANDBOX_API_KEY)
+            .post(format!("{}/v3/file/report", sandbox_relay_base()))
+            .header("X-API-Key", &sandbox_api_key())
             .json(&serde_json::json!({"resource": sha256}))
             .send()
             .await;
@@ -12519,13 +12519,20 @@ fn delete_background_image() -> Result<(), String> {
 
 // ==================== 微步云沙箱 API 中转站 模块 ====================
 
-const SANDBOX_RELAY_BASE: &str = "http://103.118.245.82:9051";
-const SANDBOX_API_KEY: &str = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1";
+/// 云沙箱中转服务地址（通过环境变量 XIGUA_SANDBOX_RELAY_URL 配置）
+fn sandbox_relay_base() -> String {
+    std::env::var("XIGUA_SANDBOX_RELAY_URL").unwrap_or_default()
+}
+
+/// 云沙箱 API Key（通过环境变量 XIGUA_SANDBOX_API_KEY 配置，不写入源码）
+fn sandbox_api_key() -> String {
+    std::env::var("XIGUA_SANDBOX_API_KEY").unwrap_or_default()
+}
 
 /// 上传文件到云沙箱进行分析
 #[tauri::command]
 async fn sandbox_upload_file(file_path: String) -> Result<serde_json::Value, String> {
-    let url = format!("{}/v3/file/upload", SANDBOX_RELAY_BASE);
+    let url = format!("{}/v3/file/upload", sandbox_relay_base());
     
     // 读取文件内容
     let file_bytes = tokio::fs::read(&file_path)
@@ -12550,7 +12557,7 @@ async fn sandbox_upload_file(file_path: String) -> Result<serde_json::Value, Str
     let client = reqwest::Client::new();
     let resp = client
         .post(&url)
-        .header("X-API-Key", SANDBOX_API_KEY)
+        .header("X-API-Key", &sandbox_api_key())
         .multipart(form)
         .send()
         .await
@@ -12574,7 +12581,7 @@ async fn sandbox_upload_file(file_path: String) -> Result<serde_json::Value, Str
 /// 查询文件沙箱分析报告
 #[tauri::command]
 async fn sandbox_query_report(resource: String) -> Result<serde_json::Value, String> {
-    let url = format!("{}/v3/file/report", SANDBOX_RELAY_BASE);
+    let url = format!("{}/v3/file/report", sandbox_relay_base());
     
     eprintln!("[Sandbox] 查询报告 请求URL: {}", url);
     eprintln!("[Sandbox] 查询报告 请求resource: '{}'", resource);
@@ -12583,7 +12590,7 @@ async fn sandbox_query_report(resource: String) -> Result<serde_json::Value, Str
     let client = reqwest::Client::new();
     let resp = client
         .post(&url)
-        .header("X-API-Key", SANDBOX_API_KEY)
+        .header("X-API-Key", &sandbox_api_key())
         .json(&serde_json::json!({"resource": resource}))
         .send()
         .await
@@ -12606,12 +12613,12 @@ async fn sandbox_query_report(resource: String) -> Result<serde_json::Value, Str
 /// 查询多引擎扫描结果
 #[tauri::command]
 async fn sandbox_query_multiengines(resource: String) -> Result<serde_json::Value, String> {
-    let url = format!("{}/v3/file/report/multiengines", SANDBOX_RELAY_BASE);
+    let url = format!("{}/v3/file/report/multiengines", sandbox_relay_base());
     
     let client = reqwest::Client::new();
     let resp = client
         .post(&url)
-        .header("X-API-Key", SANDBOX_API_KEY)
+        .header("X-API-Key", &sandbox_api_key())
         .json(&serde_json::json!({"resource": resource}))
         .send()
         .await

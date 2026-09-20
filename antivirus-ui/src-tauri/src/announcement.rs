@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-const ANNOUNCEMENT_API_URL: &str = "http://103.118.245.82:4000/api/announcements/latest";
+/// 公告服务地址（默认空，通过环境变量 XIGUA_ANNOUNCEMENT_URL 配置）
+const ANNOUNCEMENT_API_URL: &str = "";
 
 /// 公告信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,10 +22,16 @@ pub async fn fetch_latest_announcement() -> Result<Option<Announcement>, String>
         .build()
         .map_err(|e| e.to_string())?;
 
-    println!("[Announcement] Fetching latest announcement from: {}", ANNOUNCEMENT_API_URL);
+    let api_url = std::env::var("XIGUA_ANNOUNCEMENT_URL")
+        .unwrap_or_else(|_| ANNOUNCEMENT_API_URL.to_string());
+    if api_url.is_empty() {
+        return Ok(None);
+    }
+
+    println!("[Announcement] Fetching latest announcement from: {}", api_url);
 
     let response = client
-        .get(ANNOUNCEMENT_API_URL)
+        .get(api_url)
         .send()
         .await
         .map_err(|e| format!("Failed to fetch announcement: {}", e))?;

@@ -6,8 +6,8 @@ use std::time::Duration;
 use reqwest;
 use serde_json;
 
-/// 日志上传服务固定地址（内置，不暴露给用户）
-const DEFAULT_SERVER_URL: &str = "http://103.118.245.82:8052";
+/// 日志上传服务地址（默认空，可通过环境变量 XIGUA_LOG_SERVER_URL 配置）
+const DEFAULT_SERVER_URL: &str = "";
 
 /// 客户端日志上传器
 /// 负责把主程序最近的日志/行为时间线批量上传到远端 Python 收集服务
@@ -31,7 +31,7 @@ impl LogUploader {
 
         Ok(Self {
             enabled: AtomicBool::new(true),
-            server_url: DEFAULT_SERVER_URL.to_string(),
+            server_url: std::env::var("XIGUA_LOG_SERVER_URL").unwrap_or_else(|_| DEFAULT_SERVER_URL.to_string()),
             device_name,
             recent_logs: Mutex::new(VecDeque::new()),
             client,
@@ -82,7 +82,7 @@ impl LogUploader {
 
     /// 把队列中的日志批量发送给服务器
     pub async fn flush_recent_logs(&self) -> Result<usize, String> {
-        if !self.is_enabled() {
+        if !self.is_enabled() || self.server_url.is_empty() {
             return Ok(0);
         }
 
@@ -117,7 +117,7 @@ impl LogUploader {
 
     /// 发送心跳，保持设备在线状态
     pub async fn send_heartbeat(&self) -> Result<(), String> {
-        if !self.is_enabled() {
+        if !self.is_enabled() || self.server_url.is_empty() {
             return Ok(());
         }
 

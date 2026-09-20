@@ -6,7 +6,7 @@
 //!
 //! 本地缓存：查询结果缓存到 SQLite/内存，命中缓存时零延迟。
 //!
-//! API 文档: http://103.118.245.82:9501/api/v1/
+//! API 文档: /api/v1/
 //! 认证方式: X-API-Key 请求头
 
 use std::collections::HashMap;
@@ -14,11 +14,15 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// AVIC API 服务地址
-const AVIC_BASE_URL: &str = "http://103.118.245.82:9501";
+/// AVIC API 服务地址（默认空，通过环境变量 XIGUA_AVIC_URL 配置）
+fn avic_base_url() -> String {
+    std::env::var("XIGUA_AVIC_URL").unwrap_or_default()
+}
 
-/// AVIC API Key（硬编码）
-const AVIC_API_KEY: &str = "AVIC-518D05C4E45800493487D1C68B9CFCB0";
+/// AVIC API Key（通过环境变量 XIGUA_AVIC_API_KEY 配置，不写入源码）
+fn avic_api_key() -> String {
+    std::env::var("XIGUA_AVIC_API_KEY").unwrap_or_default()
+}
 
 /// 缓存条目有效期（24 小时）
 const CACHE_TTL: Duration = Duration::from_secs(86400);
@@ -32,9 +36,9 @@ struct CacheEntry {
     inserted: Instant,
 }
 
-/// 检查 AVIC 是否已配置（始终为 true，Key 已硬编码）
+/// 检查 AVIC 是否已配置（服务地址与密钥由环境变量提供）
 pub fn is_configured() -> bool {
-    true
+    !avic_base_url().is_empty() && !avic_api_key().is_empty()
 }
 
 /// 计算文件的 SHA256 哈希
@@ -91,7 +95,7 @@ pub fn query_hash(hash: &str) -> Option<(String, String)> {
     }
 
     // 2. 查询 AVIC API
-    let url = format!("{}/api/v1/query", AVIC_BASE_URL);
+    let url = format!("{}/api/v1/query", avic_base_url());
     let body = serde_json::json!({ "hash": hash }).to_string();
 
     // 构建带超时的 agent：默认 ureq 无超时，服务器不可达时会长时间阻塞
@@ -103,7 +107,7 @@ pub fn query_hash(hash: &str) -> Option<(String, String)> {
         .build();
 
     match agent.post(&url)
-        .set("X-API-Key", AVIC_API_KEY)
+        .set("X-API-Key", &avic_api_key())
         .set("Content-Type", "application/json")
         .send_string(&body)
     {
@@ -217,7 +221,7 @@ pub fn submit_threat(file_path: &str, threat_name: &str, family: &str, source: &
             "tags": tags,
         });
 
-        let url = format!("{}/api/v1/submit", AVIC_BASE_URL);
+        let url = format!("{}/api/v1/submit", avic_base_url());
         let body_str = body.to_string();
         // 带超时的 agent，避免服务器不可达时后台线程永久阻塞
         let agent = ureq::AgentBuilder::new()
@@ -226,7 +230,7 @@ pub fn submit_threat(file_path: &str, threat_name: &str, family: &str, source: &
             .timeout_write(Duration::from_secs(5))
             .build();
         match agent.post(&url)
-            .set("X-API-Key", AVIC_API_KEY)
+            .set("X-API-Key", &avic_api_key())
             .set("Content-Type", "application/json")
             .send_string(&body_str)
         {
@@ -265,10 +269,10 @@ pub fn submit_threat(file_path: &str, threat_name: &str, family: &str, source: &
 
 /// 测试 AVIC 连接（检查 API 状态）
 pub fn test_connection() -> Result<String, String> {
-    let url = format!("{}/api/v1/status", AVIC_BASE_URL);
+    let url = format!("{}/api/v1/status", avic_base_url());
 
     let resp = ureq::get(&url)
-        .set("X-API-Key", AVIC_API_KEY)
+        .set("X-API-Key", &avic_api_key())
         .call()
         .map_err(|e| format!("请求失败: {}", e))?;
 

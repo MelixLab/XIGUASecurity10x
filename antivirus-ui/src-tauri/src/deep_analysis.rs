@@ -9,6 +9,16 @@ use std::path::Path;
 use std::time::Duration;
 use tauri::Emitter;
 
+/// 云沙箱中转服务地址（通过环境变量 XIGUA_SANDBOX_RELAY_URL 配置，不写入源码）
+fn sandbox_relay_url() -> String {
+    std::env::var("XIGUA_SANDBOX_RELAY_URL").unwrap_or_default()
+}
+
+/// 云沙箱 API Key（通过环境变量 XIGUA_SANDBOX_API_KEY 配置）
+fn sandbox_api_key() -> String {
+    std::env::var("XIGUA_SANDBOX_API_KEY").unwrap_or_default()
+}
+
 // ── 冒充的常见软件名称列表 ──
 const IMPERSONATED_SOFTWARE: &[&str] = &[
     // ── 办公/协作 ──
@@ -207,8 +217,8 @@ pub async fn run_deep_analysis<R: tauri::Runtime>(
     let report = {
         // 第一次查询
         let q = client
-            .post("http://103.118.245.82:9051/v3/file/report")
-            .header("X-API-Key", "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1")
+            .post(format!("{}/v3/file/report", sandbox_relay_url()))
+            .header("X-API-Key", &sandbox_api_key())
             .json(&serde_json::json!({"resource": sha256}))
             .send()
             .await;
@@ -375,8 +385,8 @@ async fn upload_and_poll<R: tauri::Runtime>(
         .text("run_time", "120");
 
     let upload_resp = client
-        .post("http://103.118.245.82:9051/v3/file/upload")
-        .header("X-API-Key", "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1")
+        .post(format!("{}/v3/file/upload", sandbox_relay_url()))
+        .header("X-API-Key", &sandbox_api_key())
         .multipart(form)
         .send()
         .await
@@ -399,8 +409,8 @@ async fn upload_and_poll<R: tauri::Runtime>(
         emit_progress(app, pct.min(90), format!("沙箱分析中... ({}/{})", i + 1, 60).as_str()).await;
 
         let q = client
-            .post("http://103.118.245.82:9051/v3/file/report")
-            .header("X-API-Key", "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1")
+            .post(format!("{}/v3/file/report", sandbox_relay_url()))
+            .header("X-API-Key", &sandbox_api_key())
             .json(&serde_json::json!({"resource": sha256}))
             .send()
             .await;

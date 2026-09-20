@@ -810,7 +810,7 @@ class BasicProtectionManager {
           const urls = this.cloudPrimaryFailed
             ? [fallbackUrl]
             : [localStorage.getItem('cloud_hash_url') || 'https://cloudapi.xiguastudio.top'];
-          const apiKey = localStorage.getItem('cloud_hash_key') || 'scan_dcc33b100b8a485fb099a5dce4c4f486';
+          const apiKey = localStorage.getItem('cloud_hash_key') || '';
 
           const hashes: (string | null)[] = await invoke('calculate_file_hashes_command', { filePaths: [process.path] });
           const hash = hashes?.[0];
@@ -1311,7 +1311,7 @@ class FileProtectionManager {
         if (hash) {
           const cloudUrl = localStorage.getItem('cloud_hash_url') || 'https://cloudapi.xiguastudio.top';
           const urls = this.cloudPrimaryFailed ? [cloudUrl] : [cloudUrl];
-          const apiKey = localStorage.getItem('cloud_hash_key') || 'scan_dcc33b100b8a485fb099a5dce4c4f486';
+          const apiKey = localStorage.getItem('cloud_hash_key') || '';
 
           for (const url of urls) {
             try {
@@ -1871,7 +1871,7 @@ class EdrModeManager {
 class CloudHashManager {
   private enabled: boolean = false;
   private serverUrl: string = 'https://cloudapi.xiguastudio.top';
-  private apiKey: string = 'scan_dcc33b100b8a485fb099a5dce4c4f486';
+  private apiKey: string = localStorage.getItem('cloud_hash_key') || '';
   private storageKey: string = 'cloud_hash_enabled_v2';
 
   constructor() {

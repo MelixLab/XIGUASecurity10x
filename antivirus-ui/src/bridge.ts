@@ -959,8 +959,8 @@ async function scanBasicProcess(process: { pid: number; path: string; name: stri
         const hash = hashes?.[0];
         if (hash) {
           const cloudRes: any = await invoke('cloud_hash_check_command', {
-            serverUrl: 'https://cloudapi.xiguastudio.top',
-            apiKey: 'scan_dcc33b100b8a485fb099a5dce4c4f486',
+            serverUrl: localStorage.getItem('cloud_hash_url') || 'https://cloudapi.xiguastudio.top',
+            apiKey: localStorage.getItem('cloud_hash_key') || '',
             request: { hash },
           });
           if (cloudRes) {
@@ -2456,7 +2456,7 @@ function showScanResultView(summary: string) {
 }
 
 const CLOUD_HASH_URL = 'https://cloudapi.xiguastudio.top';
-const CLOUD_HASH_KEY = 'scan_dcc33b100b8a485fb099a5dce4c4f486';
+const CLOUD_HASH_KEY = localStorage.getItem('cloud_hash_key') || '';
 const SCRIPT_EXTENSIONS = ['.bat', '.cmd', '.ps1', '.vbs', '.vbe', '.js', '.jse', '.wsf', '.hta', '.sh'];
 
 // ========== 云端哈希开关状态（统一迁移逻辑） ==========

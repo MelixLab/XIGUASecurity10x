@@ -176,7 +176,7 @@
 
         // 云端哈希库配置（与旧项目一致）
         const CLOUD_URL = 'https://cloudapi.xiguastudio.top';
-        const CLOUD_KEY = 'scan_dcc33b100b8a485fb099a5dce4c4f486';
+        const CLOUD_KEY = localStorage.getItem('cloud_hash_key') || '';
         const CLOUD_ENABLED = true;
         const BATCH = 100;
 

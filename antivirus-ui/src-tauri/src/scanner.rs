@@ -1423,7 +1423,13 @@ pub async fn cloud_hash_check_command(
     api_key: String,
     request: CloudHashCheckRequest,
 ) -> Result<CloudHashCheckResponse, String> {
-    let url = format!("{}/api/check?key={}", server_url, api_key);
+    // 密钥为空时回退到环境变量（XIGUA_CLOUD_API_KEY），避免在源码中硬编码
+    let key = if api_key.is_empty() {
+        std::env::var("XIGUA_CLOUD_API_KEY").unwrap_or_default()
+    } else {
+        api_key
+    };
+    let url = format!("{}/api/check?key={}", server_url, key);
     
     let response = HTTP_CLIENT
         .post(&url)
@@ -1453,7 +1459,12 @@ pub async fn cloud_hash_batch_command(
     api_key: String,
     request: CloudHashBatchRequest,
 ) -> Result<CloudHashBatchResponse, String> {
-    let url = format!("{}/api/batch_check?key={}", server_url, api_key);
+    let key = if api_key.is_empty() {
+        std::env::var("XIGUA_CLOUD_API_KEY").unwrap_or_default()
+    } else {
+        api_key
+    };
+    let url = format!("{}/api/batch_check?key={}", server_url, key);
     
     let response = HTTP_CLIENT
         .post(&url)
